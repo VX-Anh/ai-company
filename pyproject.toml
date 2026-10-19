@@ -14,6 +14,8 @@ dependencies = [
     "langgraph>=0.6",
     "langgraph-checkpoint-postgres>=2.0",
     "mcp>=1.9",
+    "langchain>=1.0",
+    "langchain-openai>=1.0",
 ]
 
 [project.optional-dependencies]
@@ -49,6 +51,8 @@ mcp-gitlab = { workspace = true }
 line-length = 100
 target-version = "py312"
 src = ["src", "mcp_servers/gitlab/src", "tests"]
+# Code trong tài liệu là phác thảo, không format.
+extend-exclude = ["document"]
 
 [tool.ruff.lint]
 select = ["E", "F", "I", "B", "UP", "SIM", "ASYNC"]
