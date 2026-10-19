@@ -1,0 +1,11 @@
+# Vai trò hệ thống: chỉ merge khi có bản ghi duyệt hợp lệ. Không gọi model.
+id: merge_bot
+department: engineering
+reports_to: tech_lead
+worker: system
+tools:
+  - server: gitlab
+    allow: [merge_mr, get_merge_request]
+    constraints:
+      repos: [group/pilot-repo]
+max_risk: L3

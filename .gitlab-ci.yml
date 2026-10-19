@@ -1,0 +1,35 @@
+stages: [lint, test]
+
+default:
+  image: ghcr.io/astral-sh/uv:python3.12-bookworm-slim
+  before_script:
+    - uv sync --frozen --all-packages
+
+variables:
+  UV_CACHE_DIR: .uv-cache
+  UV_LINK_MODE: copy
+
+cache:
+  key:
+    files: [uv.lock]
+  paths: [.uv-cache]
+
+lint:
+  stage: lint
+  script:
+    - uv run ruff check .
+    - uv run ruff format --check .
+    - uv run pyright
+
+test:
+  stage: test
+  services:
+    - name: postgres:16
+      alias: postgres
+  variables:
+    POSTGRES_DB: aico_test
+    POSTGRES_USER: aico
+    POSTGRES_PASSWORD: aico
+    AICO_TEST_DATABASE_URL: postgresql://aico:aico@postgres:5432/aico_test
+  script:
+    - uv run pytest -q

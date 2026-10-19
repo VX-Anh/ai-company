@@ -1,0 +1,15 @@
+id: tech_lead
+department: engineering
+reports_to: chief_of_staff
+worker: llm
+model: planner-model
+prompt: prompts/tech_lead.md
+tools:
+  - server: gitlab
+    allow: [read_file]
+    constraints:
+      repos: [group/pilot-repo]
+max_risk: L0
+budget:
+  per_ticket_usd: 1
+  monthly_usd: 60

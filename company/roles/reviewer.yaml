@@ -1,0 +1,15 @@
+id: reviewer
+department: engineering
+reports_to: tech_lead
+worker: llm
+model: reviewer-model
+prompt: prompts/reviewer.md
+tools:
+  - server: gitlab
+    allow: [read_file, get_merge_request]
+    constraints:
+      repos: [group/pilot-repo]
+max_risk: L0
+budget:
+  per_ticket_usd: 1
+  monthly_usd: 60

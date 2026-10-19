@@ -1,0 +1,9 @@
+company: AI Company OS
+board: [owner]                  # người duyệt L3 (merge, deploy)
+departments:
+  - id: office
+    name: Văn phòng điều hành
+    head: chief_of_staff
+  - id: engineering
+    name: Phòng Kỹ thuật
+    head: tech_lead

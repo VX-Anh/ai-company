@@ -1,0 +1,14 @@
+id: fix_ticket
+department: engineering
+graph: fix_ticket
+steps:
+  triage: chief_of_staff
+  plan: tech_lead
+  code: coder
+  review: reviewer
+  merge: merge_bot
+limits:
+  max_plan_rounds: 2
+  max_review_rounds: 3
+  max_merge_attempts: 2
+  approval_deadline_hours: 48

@@ -1,0 +1,11 @@
+# Vai trò hệ thống: polling issue mới từ GitLab. Không gọi model.
+id: intake
+department: office
+reports_to: chief_of_staff
+worker: system
+tools:
+  - server: gitlab
+    allow: [list_issues]
+    constraints:
+      repos: [group/pilot-repo]
+max_risk: L0

@@ -1,0 +1,9 @@
+id: chief_of_staff
+department: office
+worker: llm
+model: planner-model            # tên model hoặc combo khai báo trên 9router
+prompt: prompts/chief_of_staff.md
+max_risk: L0
+budget:
+  per_ticket_usd: 0.5
+  monthly_usd: 30

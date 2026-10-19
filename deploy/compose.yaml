@@ -1,0 +1,105 @@
+# Stack chạy trên máy cá nhân (WSL2 + Docker Engine). Chạy từ thư mục deploy/:
+#   cp .env.example .env   # rồi điền giá trị
+#   docker compose up -d --build
+name: ai-company
+
+x-aico-image: &aico-build
+  context: ..
+  dockerfile: deploy/docker/aico.Dockerfile
+
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: aico
+      POSTGRES_USER: aico
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?đặt POSTGRES_PASSWORD trong .env}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [core]
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aico -d aico"]
+      interval: 5s
+      retries: 20
+    restart: unless-stopped
+
+  migrate:
+    build: *aico-build
+    image: ai-company/aico:dev
+    command: ["aico", "migrate"]
+    environment:
+      AICO_DATABASE_URL: postgresql://aico:${POSTGRES_PASSWORD}@postgres:5432/aico
+    networks: [core]
+    depends_on:
+      postgres: {condition: service_healthy}
+    restart: "no"
+
+  aico:
+    image: ai-company/aico:dev
+    command: ["aico", "serve"]
+    environment:
+      AICO_DATABASE_URL: postgresql://aico:${POSTGRES_PASSWORD}@postgres:5432/aico
+      AICO_API_HOST: 0.0.0.0
+      AICO_RELAY_HOST: 0.0.0.0
+      AICO_MCP_GITLAB_URL: http://mcp-gitlab:8101/mcp
+      AICO_UPSTREAM_LLM_URL: http://9router:20128/v1
+      AICO_UPSTREAM_LLM_KEY_FILE: /run/secrets/ninerouter_key
+      AICO_API_TOKEN_FILE: /run/secrets/aico_api_token
+      AICO_INTERNAL_TOKEN_FILE: /run/secrets/aico_internal_token
+      AICO_INTAKE_PROJECTS: ${GITLAB_PROJECTS:-}
+      AICO_DEFAULT_PROJECT: ${AICO_DEFAULT_PROJECT:-}
+    secrets: [ninerouter_key, aico_api_token, aico_internal_token]
+    ports:
+      - "127.0.0.1:8000:8000"   # API và console chỉ mở cho máy này
+    # GĐ1: relay tách thành service riêng trên mạng `sandbox`; không nối aico vào mạng đó.
+    networks: [core]
+    depends_on:
+      migrate: {condition: service_completed_successfully}
+      mcp-gitlab: {condition: service_started}
+    restart: unless-stopped
+
+  mcp-gitlab:
+    build:
+      context: ..
+      dockerfile: deploy/docker/mcp-gitlab.Dockerfile
+    environment:
+      GITLAB_FAKE: ${GITLAB_FAKE:-0}
+      GITLAB_URL: ${GITLAB_URL:-}
+      GITLAB_TOKEN_FILE: /run/secrets/gitlab_token
+      GITLAB_MERGE_TOKEN_FILE: /run/secrets/gitlab_merge_token
+      GITLAB_ALLOWED_PROJECTS: ${GITLAB_PROJECTS:?đặt GITLAB_PROJECTS trong .env}
+      APPROVAL_VERIFY_URL: http://aico:8000/internal/approvals
+      APPROVAL_VERIFY_TOKEN_FILE: /run/secrets/aico_internal_token
+    secrets: [gitlab_token, gitlab_merge_token, aico_internal_token]
+    networks: [core]
+    restart: unless-stopped
+
+  9router:
+    # TODO: pin tag cụ thể sau khi chọn phiên bản; không dùng latest lâu dài.
+    image: decolua/9router:latest
+    environment:
+      DATA_DIR: /app/data
+      REQUIRE_API_KEY: "true"
+    volumes:
+      - ninerouter-data:/app/data
+    ports:
+      - "127.0.0.1:20128:20128"  # dashboard 9router chỉ mở cho máy này
+    networks: [core]
+    restart: unless-stopped
+
+networks:
+  core: {}
+  # GĐ1: sandbox OpenHands và model relay; không có đường ra Internet.
+  sandbox:
+    internal: true
+
+volumes:
+  pgdata: {}
+  ninerouter-data: {}
+
+secrets:
+  gitlab_token: {file: ./secrets/gitlab_token}
+  gitlab_merge_token: {file: ./secrets/gitlab_merge_token}
+  ninerouter_key: {file: ./secrets/ninerouter_key}
+  aico_api_token: {file: ./secrets/aico_api_token}
+  aico_internal_token: {file: ./secrets/aico_internal_token}
