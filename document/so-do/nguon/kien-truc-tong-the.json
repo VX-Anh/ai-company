@@ -1,0 +1,547 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "AI Company OS — Kiến trúc tổng thể",
+    "locale": "vi",
+    "output": "document/so-do/kien-truc-tong-the.html",
+    "quality_profile": "showcase"
+  },
+  "components": [
+    {
+      "id": "webhook",
+      "type": "external",
+      "label": "GitLab / Jira",
+      "sublabel": "polling issue mới",
+      "pos": [
+        40,
+        40
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "rest",
+      "type": "frontend",
+      "label": "REST API",
+      "sublabel": "tạo ticket, xem trạng thái",
+      "pos": [
+        280,
+        40
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "console",
+      "type": "frontend",
+      "label": "Console",
+      "sublabel": "duyệt, kill switch",
+      "pos": [
+        520,
+        40
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "scheduler",
+      "type": "messagebus",
+      "label": "Scheduler",
+      "sublabel": "heartbeat, nhận lại lease",
+      "pos": [
+        40,
+        200
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "tickets",
+      "type": "backend",
+      "label": "Ticket service",
+      "sublabel": "trạng thái, lease, audit",
+      "pos": [
+        280,
+        200
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "governance",
+      "type": "security",
+      "label": "Governance",
+      "sublabel": "duyệt, ngân sách",
+      "pos": [
+        520,
+        200
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "registry",
+      "type": "backend",
+      "label": "Registry",
+      "sublabel": "cấu hình YAML",
+      "pos": [
+        760,
+        200
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "cos",
+      "type": "backend",
+      "label": "Chief of Staff",
+      "sublabel": "định tuyến ticket",
+      "pos": [
+        280,
+        360
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "sop",
+      "type": "backend",
+      "label": "Graph theo SOP",
+      "sublabel": "kế hoạch, giao, review",
+      "pos": [
+        520,
+        360
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "checkpoint",
+      "type": "backend",
+      "label": "Checkpoint",
+      "sublabel": "AsyncPostgresSaver",
+      "pos": [
+        760,
+        360
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "postgres",
+      "type": "database",
+      "label": "Postgres",
+      "sublabel": "ticket, checkpoint, audit",
+      "pos": [
+        1000,
+        360
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "llm",
+      "type": "backend",
+      "label": "LlmAgent",
+      "sublabel": "Tech Lead, Reviewer",
+      "pos": [
+        280,
+        520
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "langfuse",
+      "type": "cloud",
+      "label": "Langfuse",
+      "sublabel": "trace theo ticket",
+      "pos": [
+        520,
+        520
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "openhands",
+      "type": "backend",
+      "label": "OpenHandsWorker",
+      "sublabel": "Coder, trong aico",
+      "pos": [
+        760,
+        520
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "litellm",
+      "type": "cloud",
+      "label": "Relay · 9router",
+      "sublabel": "budget, trace, fallback",
+      "pos": [
+        520,
+        680
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "sandbox",
+      "type": "security",
+      "label": "Sandbox container",
+      "sublabel": "tạo qua sandbox_launcher",
+      "pos": [
+        760,
+        680
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "guard",
+      "type": "security",
+      "label": "Guard + MCP client",
+      "sublabel": "kiểm quyền, ngân sách, ghi audit trước mỗi tool call",
+      "pos": [
+        280,
+        840
+      ],
+      "size": [
+        870,
+        60
+      ]
+    },
+    {
+      "id": "mcp_gitlab",
+      "type": "backend",
+      "label": "gitlab",
+      "sublabel": "branch ai/*, MR, merge_mr",
+      "pos": [
+        280,
+        1000
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "mcp_legal",
+      "type": "backend",
+      "label": "legal_search",
+      "sublabel": "văn bản pháp luật",
+      "pos": [
+        520,
+        1000
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "mcp_db",
+      "type": "backend",
+      "label": "db_readonly",
+      "sublabel": "truy vấn chỉ đọc",
+      "pos": [
+        760,
+        1000
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "vault",
+      "type": "security",
+      "label": "Secret files",
+      "sublabel": "Docker secrets",
+      "pos": [
+        280,
+        1160
+      ],
+      "size": [
+        150,
+        60
+      ]
+    },
+    {
+      "id": "qdrant",
+      "type": "database",
+      "label": "Qdrant",
+      "sublabel": "vector pháp luật",
+      "pos": [
+        520,
+        1160
+      ],
+      "size": [
+        150,
+        60
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "Kênh vào",
+      "wraps": [
+        "webhook",
+        "rest",
+        "console"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "Control plane",
+      "wraps": [
+        "scheduler",
+        "tickets",
+        "governance",
+        "registry"
+      ]
+    },
+    {
+      "kind": "region",
+      "label": "Điều phối · LangGraph",
+      "wraps": [
+        "cos",
+        "sop",
+        "checkpoint"
+      ]
+    },
+    {
+      "kind": "security-group",
+      "label": "Sandbox mỗi task",
+      "wraps": [
+        "sandbox"
+      ]
+    },
+    {
+      "kind": "security-group",
+      "label": "Tool layer · MCP",
+      "wraps": [
+        "guard",
+        "mcp_gitlab",
+        "mcp_legal",
+        "mcp_db"
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "id": "webhook-tickets",
+      "from": "webhook",
+      "to": "tickets",
+      "label": "polling, tạo ticket",
+      "variant": "emphasis"
+    },
+    {
+      "id": "rest-tickets",
+      "from": "rest",
+      "to": "tickets",
+      "label": "tạo, xem ticket"
+    },
+    {
+      "id": "console-governance",
+      "from": "console",
+      "to": "governance",
+      "label": "quyết định duyệt",
+      "variant": "security"
+    },
+    {
+      "id": "scheduler-tickets",
+      "from": "scheduler",
+      "to": "tickets",
+      "label": "heartbeat",
+      "variant": "dashed"
+    },
+    {
+      "id": "tickets-cos",
+      "from": "tickets",
+      "to": "cos",
+      "label": "chạy SOP",
+      "variant": "emphasis"
+    },
+    {
+      "id": "governance-sop",
+      "from": "governance",
+      "to": "sop",
+      "label": "resume",
+      "variant": "security"
+    },
+    {
+      "id": "registry-sop",
+      "from": "registry",
+      "to": "sop",
+      "label": "vai trò, SOP"
+    },
+    {
+      "id": "cos-sop",
+      "from": "cos",
+      "to": "sop",
+      "label": "định tuyến",
+      "variant": "emphasis"
+    },
+    {
+      "id": "sop-checkpoint",
+      "from": "sop",
+      "to": "checkpoint",
+      "label": "lưu state"
+    },
+    {
+      "id": "checkpoint-postgres",
+      "from": "checkpoint",
+      "to": "postgres",
+      "label": "ghi"
+    },
+    {
+      "id": "sop-llm",
+      "from": "sop",
+      "to": "llm",
+      "label": "giao task"
+    },
+    {
+      "id": "sop-langfuse",
+      "from": "sop",
+      "to": "langfuse",
+      "label": "trace workflow",
+      "variant": "dashed"
+    },
+    {
+      "id": "sop-openhands",
+      "from": "sop",
+      "to": "openhands",
+      "label": "giao task code",
+      "variant": "emphasis"
+    },
+    {
+      "id": "openhands-sandbox",
+      "from": "openhands",
+      "to": "sandbox",
+      "label": "qua launcher, nhận diff"
+    },
+    {
+      "id": "sandbox-litellm",
+      "from": "sandbox",
+      "to": "litellm",
+      "label": "gọi model"
+    },
+    {
+      "id": "llm-litellm",
+      "from": "llm",
+      "to": "litellm",
+      "label": "gọi model"
+    },
+    {
+      "id": "litellm-langfuse",
+      "from": "litellm",
+      "to": "langfuse",
+      "label": "trace model",
+      "variant": "dashed"
+    },
+    {
+      "id": "llm-guard",
+      "from": "llm",
+      "to": "guard",
+      "label": "tool call"
+    },
+    {
+      "id": "openhands-guard",
+      "from": "openhands",
+      "to": "guard",
+      "label": "push, mở MR",
+      "variant": "emphasis"
+    },
+    {
+      "id": "guard-gitlab",
+      "from": "guard",
+      "to": "mcp_gitlab",
+      "variant": "security"
+    },
+    {
+      "id": "guard-legal",
+      "from": "guard",
+      "to": "mcp_legal",
+      "variant": "security"
+    },
+    {
+      "id": "guard-db",
+      "from": "guard",
+      "to": "mcp_db",
+      "variant": "security"
+    },
+    {
+      "id": "vault-gitlab",
+      "from": "vault",
+      "to": "mcp_gitlab",
+      "label": "credential",
+      "variant": "security"
+    },
+    {
+      "id": "legal-qdrant",
+      "from": "mcp_legal",
+      "to": "qdrant",
+      "label": "truy vấn"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "Ranh giới bảo mật",
+      "items": [
+        "Mọi tool call ra ngoài sandbox đều qua guard",
+        "Sandbox chỉ có terminal, file editor; không credential, chỉ gọi được model relay và registry",
+        "aico push branch và mở MR thay sandbox",
+        "Guard áp quyền, ngân sách do Governance cấp; merge_mr đòi bản ghi duyệt",
+        "Chỉ sandbox_launcher giữ quyền Docker (rootless)"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Nền tảng",
+      "items": [
+        "Chạy bằng Docker Compose trong WSL2 trên máy Windows; Langfuse, Qdrant có thể đặt trên server",
+        "Langfuse nhận trace workflow từ graph và trace model từ model relay",
+        "Ticket có lease trong Postgres nên chạy tiếp được sau khi aico hoặc máy khởi động lại",
+        "Model relay trong aico giữ key 9router, cấp token tạm theo task, thực thi ngân sách theo ticket"
+      ]
+    }
+  ]
+}

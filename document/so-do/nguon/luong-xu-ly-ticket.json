@@ -1,0 +1,272 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "AI Company OS — Luồng xử lý ticket",
+    "locale": "vi",
+    "quality_profile": "showcase",
+    "output": "document/so-do/luong-xu-ly-ticket.html"
+  },
+  "lanes": [
+    {
+      "id": "intake",
+      "label": "Kênh vào"
+    },
+    {
+      "id": "human",
+      "label": "Người duyệt",
+      "variant": "exception"
+    },
+    {
+      "id": "agent",
+      "label": "Agent và aico"
+    },
+    {
+      "id": "outcome",
+      "label": "Kết thúc"
+    }
+  ],
+  "mainPath": [
+    "ticket",
+    "triage",
+    "plan",
+    "code",
+    "review",
+    "gate_merge",
+    "merge",
+    "done"
+  ],
+  "nodes": [
+    {
+      "id": "ticket",
+      "lane": "intake",
+      "col": 0,
+      "type": "external",
+      "label": "Ticket mới",
+      "sublabel": "polling GitLab / Jira"
+    },
+    {
+      "id": "triage",
+      "lane": "agent",
+      "col": 1,
+      "type": "backend",
+      "label": "Phân loại",
+      "sublabel": "Chief of Staff",
+      "tag": "phòng ban, rủi ro"
+    },
+    {
+      "id": "plan",
+      "lane": "agent",
+      "col": 2,
+      "type": "backend",
+      "label": "Lập kế hoạch",
+      "sublabel": "Tech Lead",
+      "tag": "plan_rounds"
+    },
+    {
+      "id": "code",
+      "lane": "agent",
+      "col": 3,
+      "type": "backend",
+      "label": "Sửa code, mở MR",
+      "sublabel": "sandbox + aico",
+      "tag": "push qua guard"
+    },
+    {
+      "id": "review",
+      "lane": "agent",
+      "col": 4,
+      "type": "backend",
+      "label": "Review",
+      "sublabel": "Reviewer + CI",
+      "tag": "review_rounds"
+    },
+    {
+      "id": "merge",
+      "lane": "agent",
+      "col": 5,
+      "type": "backend",
+      "label": "Merge",
+      "sublabel": "merge bot, merge_mr",
+      "tag": "merge_attempts"
+    },
+    {
+      "id": "gate_plan",
+      "lane": "human",
+      "col": 2,
+      "type": "security",
+      "label": "Duyệt kế hoạch",
+      "sublabel": "interrupt(), có hạn"
+    },
+    {
+      "id": "gate_merge",
+      "lane": "human",
+      "col": 5,
+      "type": "security",
+      "label": "Duyệt merge",
+      "sublabel": "hành động L3",
+      "tag": "bắt buộc"
+    },
+    {
+      "id": "escalate",
+      "lane": "human",
+      "col": 4,
+      "type": "security",
+      "label": "Escalate",
+      "sublabel": "người xử lý tay",
+      "icon": "failure"
+    },
+    {
+      "id": "done",
+      "lane": "outcome",
+      "col": 5,
+      "type": "backend",
+      "label": "Hoàn tất",
+      "sublabel": "đóng ticket, ghi memory",
+      "icon": "success"
+    }
+  ],
+  "edges": [
+    {
+      "id": "ticket-triage",
+      "from": "ticket",
+      "to": "triage",
+      "variant": "emphasis"
+    },
+    {
+      "id": "triage-plan",
+      "from": "triage",
+      "to": "plan",
+      "variant": "emphasis"
+    },
+    {
+      "id": "plan-low",
+      "from": "plan",
+      "to": "code",
+      "label": "rủi ro low",
+      "variant": "emphasis"
+    },
+    {
+      "id": "plan-gate",
+      "from": "plan",
+      "to": "gate_plan",
+      "label": "medium, high",
+      "variant": "security",
+      "role": "branch"
+    },
+    {
+      "id": "gate-approved",
+      "from": "gate_plan",
+      "to": "code",
+      "label": "duyệt",
+      "variant": "security"
+    },
+    {
+      "id": "gate-revise",
+      "from": "gate_plan",
+      "to": "plan",
+      "label": "cần sửa",
+      "role": "return"
+    },
+    {
+      "id": "gate-plan-escalate",
+      "from": "gate_plan",
+      "to": "escalate",
+      "label": "từ chối, quá vòng",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "id": "code-review",
+      "from": "code",
+      "to": "review",
+      "variant": "emphasis"
+    },
+    {
+      "id": "review-fail",
+      "from": "review",
+      "to": "code",
+      "label": "chưa đạt",
+      "role": "return"
+    },
+    {
+      "id": "review-escalate",
+      "from": "review",
+      "to": "escalate",
+      "label": "quá vòng",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "id": "review-pass",
+      "from": "review",
+      "to": "gate_merge",
+      "label": "đạt",
+      "variant": "emphasis"
+    },
+    {
+      "id": "merge-approved",
+      "from": "gate_merge",
+      "to": "merge",
+      "label": "duyệt",
+      "variant": "security"
+    },
+    {
+      "id": "merge-changes",
+      "from": "gate_merge",
+      "to": "code",
+      "label": "yêu cầu sửa",
+      "role": "return"
+    },
+    {
+      "id": "merge-rejected",
+      "from": "gate_merge",
+      "to": "escalate",
+      "label": "từ chối, quá hạn",
+      "role": "error",
+      "variant": "security"
+    },
+    {
+      "id": "merge-done",
+      "from": "merge",
+      "to": "done",
+      "label": "GitLab xác nhận",
+      "variant": "emphasis"
+    },
+    {
+      "id": "merge-failed",
+      "from": "merge",
+      "to": "code",
+      "label": "conflict, CI lỗi",
+      "role": "return"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "rose",
+      "title": "Hai điểm người duyệt",
+      "items": [
+        "Kế hoạch của ticket rủi ro medium, high",
+        "Merge luôn cần người duyệt (hành động L3)"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "Mọi vòng đều có trần",
+      "items": [
+        "plan_rounds, review_rounds, merge_attempts có trần trong SOP",
+        "Quá trần hoặc quá hạn duyệt thì escalate",
+        "Lỗi kỹ thuật không phục hồi thì ticket chuyển failed"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "Bền qua sự cố",
+      "items": [
+        "Mỗi điểm dừng là một checkpoint Postgres",
+        "Lease theo ticket cho replica khác nhận lại việc",
+        "Ticket chỉ done khi GitLab xác nhận đã merged"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,88 @@
+{
+  "schema_version": 1,
+  "diagram_type": "tree",
+  "meta": {
+    "title": "AI Company OS — Sơ đồ tổ chức",
+    "locale": "vi",
+    "output": "document/so-do/so-do-to-chuc.html",
+    "quality_profile": "showcase"
+  },
+  "nodes": [
+    {
+      "id": "board",
+      "label": "Board (con người)",
+      "sublabel": "duyệt L3, mục tiêu, ngân sách"
+    },
+    {
+      "id": "cos",
+      "label": "Chief of Staff",
+      "parent": "board",
+      "sublabel": "định tuyến ticket, báo cáo"
+    },
+    {
+      "id": "eng",
+      "label": "Phòng Kỹ thuật",
+      "parent": "cos",
+      "sublabel": "chạy ở v1"
+    },
+    {
+      "id": "legal",
+      "label": "Phòng Pháp lý",
+      "parent": "cos",
+      "sublabel": "Giai đoạn 3"
+    },
+    {
+      "id": "ops",
+      "label": "Phòng Vận hành",
+      "parent": "cos",
+      "sublabel": "Giai đoạn 3"
+    },
+    {
+      "id": "tech_lead",
+      "label": "Tech Lead",
+      "parent": "eng",
+      "sublabel": "lập kế hoạch, giao việc"
+    },
+    {
+      "id": "coder",
+      "label": "Coder",
+      "parent": "tech_lead",
+      "sublabel": "OpenHands"
+    },
+    {
+      "id": "reviewer",
+      "label": "Reviewer",
+      "parent": "tech_lead",
+      "sublabel": "review MR"
+    },
+    {
+      "id": "qa",
+      "label": "QA",
+      "parent": "tech_lead",
+      "sublabel": "chạy test"
+    },
+    {
+      "id": "researcher",
+      "label": "Legal Researcher",
+      "parent": "legal",
+      "sublabel": "legal_search"
+    },
+    {
+      "id": "devops",
+      "label": "DevOps",
+      "parent": "ops",
+      "sublabel": "hạ tầng chỉ đọc"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "Cách đọc",
+      "items": [
+        "Board là con người; mọi vai trò khác là agent",
+        "Đường nối là chiều giao việc",
+        "Chỉ phòng Kỹ thuật chạy ở v1; phòng khác thêm bằng file YAML"
+      ]
+    }
+  ]
+}

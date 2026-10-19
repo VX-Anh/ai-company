@@ -1,0 +1,186 @@
+{
+  "schema_version": 2,
+  "diagram_type": "workflow",
+  "meta": {
+    "title": "AI Company OS — Lộ trình triển khai",
+    "locale": "vi",
+    "quality_profile": "showcase",
+    "output": "document/so-do/lo-trinh-trien-khai.html"
+  },
+  "lanes": [
+    {
+      "id": "build",
+      "label": "Giai đoạn"
+    },
+    {
+      "id": "gate",
+      "label": "Cổng ra",
+      "variant": "exception"
+    }
+  ],
+  "mainPath": [
+    "p0",
+    "g0",
+    "p1",
+    "g1",
+    "p2",
+    "g2",
+    "p3",
+    "g3"
+  ],
+  "nodes": [
+    {
+      "id": "p0",
+      "lane": "build",
+      "col": 0,
+      "type": "backend",
+      "label": "GĐ0 · Nền móng",
+      "sublabel": "khoảng 2 tuần"
+    },
+    {
+      "id": "p1",
+      "lane": "build",
+      "col": 1,
+      "type": "backend",
+      "label": "GĐ1 · Một nhân viên",
+      "sublabel": "3–4 tuần"
+    },
+    {
+      "id": "p2",
+      "lane": "build",
+      "col": 2,
+      "type": "backend",
+      "label": "GĐ2 · Một phòng ban",
+      "sublabel": "4–6 tuần"
+    },
+    {
+      "id": "p3",
+      "lane": "build",
+      "col": 3,
+      "type": "backend",
+      "label": "GĐ3 · Mở rộng",
+      "sublabel": "liên tục"
+    },
+    {
+      "id": "g0",
+      "lane": "gate",
+      "col": 0,
+      "type": "security",
+      "label": "Ticket giả chạy hết",
+      "sublabel": "luồng trên máy local"
+    },
+    {
+      "id": "g1",
+      "lane": "gate",
+      "col": 1,
+      "type": "security",
+      "label": "Tỉ lệ MR merge",
+      "sublabel": "đạt ngưỡng đã chốt"
+    },
+    {
+      "id": "g2",
+      "lane": "gate",
+      "col": 2,
+      "type": "security",
+      "label": "Ổn định repo thật",
+      "sublabel": "chi phí trong hạn mức"
+    },
+    {
+      "id": "g3",
+      "lane": "gate",
+      "col": 3,
+      "type": "security",
+      "label": "Eval riêng mỗi phòng",
+      "sublabel": "trước khi bật"
+    }
+  ],
+  "edges": [
+    {
+      "id": "p0-g0",
+      "from": "p0",
+      "to": "g0",
+      "variant": "security"
+    },
+    {
+      "id": "g0-p1",
+      "from": "g0",
+      "to": "p1",
+      "label": "qua cổng",
+      "variant": "emphasis"
+    },
+    {
+      "id": "p1-g1",
+      "from": "p1",
+      "to": "g1",
+      "variant": "security"
+    },
+    {
+      "id": "g1-p2",
+      "from": "g1",
+      "to": "p2",
+      "label": "qua cổng",
+      "variant": "emphasis"
+    },
+    {
+      "id": "p2-g2",
+      "from": "p2",
+      "to": "g2",
+      "variant": "security"
+    },
+    {
+      "id": "g2-p3",
+      "from": "g2",
+      "to": "p3",
+      "label": "qua cổng",
+      "variant": "emphasis"
+    },
+    {
+      "id": "p3-g3",
+      "from": "p3",
+      "to": "g3",
+      "variant": "security"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "GĐ0 · Nền móng",
+      "items": [
+        "repo, CI, Compose",
+        "registry YAML, ticket store",
+        "9router, model relay, Langfuse",
+        "MCP server gitlab"
+      ]
+    },
+    {
+      "dot": "emerald",
+      "title": "GĐ1 · Một nhân viên",
+      "items": [
+        "OpenHandsWorker",
+        "Tech Lead lập kế hoạch",
+        "duyệt kế hoạch, merge",
+        "bộ eval ticket mẫu, trace theo ticket"
+      ]
+    },
+    {
+      "dot": "violet",
+      "title": "GĐ2 · Một phòng ban",
+      "items": [
+        "Reviewer, QA, Chief of Staff",
+        "vòng review, ngân sách",
+        "console tối giản",
+        "deploy UAT rồi PROD"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "GĐ3 · Mở rộng",
+      "items": [
+        "phòng Pháp lý, phòng Vận hành",
+        "scheduler heartbeat",
+        "chọn control plane",
+        "thêm MCP server"
+      ]
+    }
+  ]
+}

@@ -1,6 +1,6 @@
 # AI Company OS (`aico`)
 
-Công ty agent khai báo bằng cấu hình: phòng ban, vai trò, SOP và quyền hạn nằm trong `company/`; LangGraph chạy SOP, mọi tool đi qua guard và MCP server, mọi lời gọi model đi qua model relay tới 9router. Thiết kế đầy đủ ở `../document/`.
+Công ty agent khai báo bằng cấu hình: phòng ban, vai trò, SOP và quyền hạn nằm trong `company/`; LangGraph chạy SOP, mọi tool đi qua guard và MCP server, mọi lời gọi model đi qua model relay tới 9router. Thiết kế đầy đủ, kế hoạch và sơ đồ ở [`document/`](document/README.md).
 
 ## Trạng thái: GĐ0 · Nền móng
 
