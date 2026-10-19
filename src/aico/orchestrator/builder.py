@@ -17,7 +17,7 @@ from langgraph.types import interrupt
 
 from aico.core import ApprovalKind, Artifact, Decision, SopSpec, TicketStatus
 from aico.governance import ApprovalStore
-from aico.orchestrator.ports import Coder, Planner, Reviewer, Triage
+from aico.orchestrator.ports import BudgetExhausted, Coder, Planner, Reviewer, Triage
 from aico.orchestrator.state import TicketState
 from aico.tickets import TicketStore
 from aico.tools import ToolError, ToolGateway
@@ -89,7 +89,10 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         tid = s["ticket_id"]
         await deps.tickets.transition(tid, S.PLANNED, actor=deps.role("plan"))
         ticket = await deps.tickets.get(tid)
-        text = await deps.planner.plan(ticket, s.get("plan_feedback") or None)
+        try:
+            text = await deps.planner.plan(ticket, s.get("plan_feedback") or None)
+        except BudgetExhausted as exc:
+            return {"escalation_reason": f"lập kế hoạch hết ngân sách: {exc}"}
         return {"plan": text, "plan_rounds": s.get("plan_rounds", 0) + 1}
 
     async def approve_plan(s: TicketState) -> dict[str, Any]:
@@ -259,6 +262,8 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         return {}
 
     def route_plan(s: TicketState) -> str:
+        if s.get("escalation_reason"):
+            return "escalate"
         return "code" if s["risk"] == "low" else "approve_plan"
 
     def route_plan_approval(s: TicketState) -> str:
@@ -303,7 +308,7 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         g.add_node(name, fn)  # type: ignore[call-overload]
     g.add_edge(START, "triage")
     g.add_edge("triage", "plan")
-    g.add_conditional_edges("plan", route_plan, ["code", "approve_plan"])
+    g.add_conditional_edges("plan", route_plan, ["code", "approve_plan", "escalate"])
     g.add_conditional_edges("approve_plan", route_plan_approval, ["code", "plan", "escalate"])
     g.add_edge("code", "review")
     g.add_conditional_edges("review", route_review, ["approve_merge", "code", "escalate"])

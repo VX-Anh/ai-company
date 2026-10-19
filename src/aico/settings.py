@@ -36,6 +36,7 @@ class Settings:
     poll_seconds: float = 60
     lease_seconds: float = 60
     default_project: str | None = None
+    planner: str = "static"  # static | llm
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -57,4 +58,5 @@ class Settings:
             poll_seconds=float(env.get("AICO_POLL_SECONDS", cls.poll_seconds)),
             lease_seconds=float(env.get("AICO_LEASE_SECONDS", cls.lease_seconds)),
             default_project=env.get("AICO_DEFAULT_PROJECT"),
+            planner=env.get("AICO_PLANNER", cls.planner),
         )

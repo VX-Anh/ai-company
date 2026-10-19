@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any, Protocol
 
 from mcp.client.client import Client
 from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, TextContent
 
+from aico.core import ActionLevel
 from aico.governance import AuditEntry, AuditLog, mask_secrets
 from aico.registry import Company
 from aico.tools.guard import Guard, Verdict
@@ -27,8 +29,18 @@ class ApprovalRequired(PermissionError):
     pass
 
 
+@dataclass(frozen=True)
+class ToolSpec:
+    server: str
+    name: str
+    description: str
+    input_schema: dict[str, Any]
+
+
 class ToolClient(Protocol):
     async def call(self, server: str, tool: str, args: dict[str, Any]) -> dict[str, Any]: ...
+
+    async def list_tools(self, server: str) -> list[ToolSpec]: ...
 
 
 def _result_to_dict(result: CallToolResult) -> dict[str, Any]:
@@ -36,9 +48,7 @@ def _result_to_dict(result: CallToolResult) -> dict[str, Any]:
     if result.is_error:
         raise ToolError("; ".join(texts) or "tool trả lỗi")
     if isinstance(result.structured_content, dict):
-        data = result.structured_content
-        # MCP gói giá trị không phải object vào khóa "result".
-        return data
+        return result.structured_content
     if texts:
         try:
             parsed = json.loads(texts[0])
@@ -62,6 +72,17 @@ class McpToolClient:
             result = await client.call_tool(tool, args)
         return _result_to_dict(result)
 
+    async def list_tools(self, server: str) -> list[ToolSpec]:
+        target = self._servers.get(server)
+        if target is None:
+            raise ToolError(f"không có MCP server '{server}'")
+        async with Client(target) as client:
+            listed = await client.list_tools()
+        return [
+            ToolSpec(server, t.name, t.description or "", dict(t.input_schema))
+            for t in listed.tools
+        ]
+
 
 def _summary(result: dict[str, Any]) -> str:
     text = json.dumps(mask_secrets(result), ensure_ascii=False, default=str)
@@ -74,6 +95,21 @@ class ToolGateway:
         self._guard = guard
         self._client = client
         self._audit = audit
+
+    async def tools_for(self, role_id: str) -> list[ToolSpec]:
+        """Tool agent của vai trò được thấy: đã cấp trong YAML và dưới mức L3.
+
+        Hành động L3 (merge) không bao giờ giao cho agent; aico tự gọi sau khi người duyệt.
+        """
+        role = self._company.role(role_id)
+        specs: list[ToolSpec] = []
+        for grant in role.tools:
+            allowed = set(grant.allow)
+            for spec in await self._client.list_tools(grant.server):
+                level = self._company.policy.level_of(grant.server, spec.name)
+                if spec.name in allowed and level is not None and level.rank < ActionLevel.L3.rank:
+                    specs.append(spec)
+        return specs
 
     async def call(
         self,

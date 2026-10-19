@@ -6,7 +6,7 @@ Công ty agent khai báo bằng cấu hình: phòng ban, vai trò, SOP và quy�
 
 | Bước | Nội dung | Trạng thái |
 | --- | --- | --- |
-| 0.1 | Repo, `uv` workspace, ruff, pyright, pytest, `.gitlab-ci.yml` | Xong |
+| 0.1 | Repo, `uv` workspace, ruff, pyright, pytest; CI trên GitHub Actions (và `.gitlab-ci.yml`) | Xong |
 | 0.2 | Model dữ liệu chung (`aico.core`) | Xong |
 | 0.3 | Registry nạp và kiểm tra `company/` | Xong |
 | 0.4 | Schema Postgres (migration SQL đánh số) | Xong |
@@ -20,6 +20,7 @@ Công ty agent khai báo bằng cấu hình: phòng ban, vai trò, SOP và quy�
 | 0.11 | Model relay: token theo task, ngân sách, streaming | Xong (chưa nối 9router thật) |
 | 0.11b | Trace sang Langfuse | Mới có trace ra log; chờ chốt Langfuse chạy ở đâu |
 | 0.12 | Spike OpenHands SDK | Chưa làm (cần Docker và model) |
+| 1.6 (GĐ1) | Tech Lead thật: `LlmAgent` qua model relay, tool `read_file` qua guard; bật bằng `AICO_PLANNER=llm` | Xong (test với 9router giả) |
 
 Cổng ra GĐ0 đã được kiểm bằng test: ticket chạy hết luồng với hai lần duyệt, và khi tiến trình chết ngay sau bước push thì runner khác chạy tiếp từ checkpoint, không tạo commit hay MR trùng (`tests/test_crash_recovery.py`, chạy trên Postgres thật).
 
@@ -42,7 +43,7 @@ aico serve                    API (127.0.0.1:8000), model relay (127.0.0.1:8200)
 mcp-gitlab                    MCP server GitLab (Streamable HTTP, /mcp)
 ```
 
-Biến môi trường chính: `AICO_DATABASE_URL`, `AICO_COMPANY_DIR`, `AICO_MCP_GITLAB_URL`, `AICO_UPSTREAM_LLM_URL` (9router), `AICO_UPSTREAM_LLM_KEY_FILE`, `AICO_API_TOKEN_FILE`, `AICO_INTERNAL_TOKEN_FILE`, `AICO_INTAKE_PROJECTS`. Secret luôn đọc từ file. Xem `src/aico/settings.py` và `mcp_servers/gitlab/src/mcp_gitlab/server.py`.
+Biến môi trường chính: `AICO_PLANNER` (`static` hoặc `llm`), `AICO_DATABASE_URL`, `AICO_COMPANY_DIR`, `AICO_MCP_GITLAB_URL`, `AICO_UPSTREAM_LLM_URL` (9router), `AICO_UPSTREAM_LLM_KEY_FILE`, `AICO_API_TOKEN_FILE`, `AICO_INTERNAL_TOKEN_FILE`, `AICO_INTAKE_PROJECTS`. Secret luôn đọc từ file. Xem `src/aico/settings.py` và `mcp_servers/gitlab/src/mcp_gitlab/server.py`.
 
 ## Chạy bằng Docker Compose (sau khi có WSL2 + Docker)
 
@@ -79,6 +80,7 @@ src/aico/
   governance/       bản ghi duyệt, audit log, xác nhận duyệt merge
   tools/            guard, gateway, MCP client
   orchestrator/     graph fix_ticket, cổng agent (bản giả lập GĐ0), runner
+  agents/           LlmAgent (create_agent qua model relay), Tech Lead thật
   llm_relay/        model relay trước 9router: token task, ngân sách
   intake/           polling GitLab lấy ticket
   api/              REST API

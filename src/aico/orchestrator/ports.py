@@ -40,6 +40,10 @@ class ReviewResult:
     notes: str = ""
 
 
+class BudgetExhausted(Exception):
+    """Agent hết ngân sách giữa chừng: ticket dừng và hỏi người, không coi là lỗi."""
+
+
 class Triage(Protocol):
     async def triage(self, ticket: Ticket) -> TriageResult: ...
 

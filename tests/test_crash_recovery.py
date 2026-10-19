@@ -13,7 +13,7 @@ from aico.db import create_pool
 from aico.governance import PostgresApprovalStore
 from aico.registry import Company
 from aico.tickets.postgres import PostgresTicketStore
-from aico.tools import ToolClient
+from aico.tools import ToolClient, ToolSpec
 from harness import PROJECT, make_harness
 from mcp_gitlab.backend import FakeGitLabBackend
 
@@ -36,6 +36,9 @@ class DieAfter:
             self.armed = False
             raise ProcessDied
         return result
+
+    async def list_tools(self, server: str) -> list[ToolSpec]:
+        return await self._inner.list_tools(server)
 
 
 async def test_ticket_survives_process_death_after_push(company: Company, pg_clean: str) -> None:

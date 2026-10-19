@@ -7,15 +7,17 @@ from collections.abc import AsyncIterator
 from dataclasses import dataclass
 
 import httpx
+from fastapi import FastAPI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
+from aico.agents import LlmAgentRunner, LlmPlanner, LlmSettings
 from aico.api import ApiDeps
 from aico.db import create_pool
 from aico.governance import PostgresApprovalStore, PostgresAuditLog
 from aico.intake import GitLabIssuePoller
-from aico.llm_relay import PostgresBudgetLedger, RelayDeps, TaskTokens
+from aico.llm_relay import PostgresBudgetLedger, RelayDeps, TaskTokens, create_relay_app
 from aico.observability import LoggingTraceSink
 from aico.orchestrator import (
     Deps,
@@ -26,6 +28,7 @@ from aico.orchestrator import (
     StaticPlanner,
     build_fix_ticket,
 )
+from aico.orchestrator.ports import Planner
 from aico.registry import Company, load_company
 from aico.settings import Settings
 from aico.tickets.postgres import PostgresTicketStore
@@ -39,7 +42,7 @@ class Container:
     runner: Runner
     poller: GitLabIssuePoller | None
     api: ApiDeps
-    relay: RelayDeps
+    relay_app: FastAPI
     tickets: PostgresTicketStore
 
 
@@ -64,6 +67,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
     )
     await pool.open()
     await saver_pool.open()
+    exit_stack = contextlib.AsyncExitStack()
     try:
         tickets = PostgresTicketStore(pool)
         approvals = PostgresApprovalStore(pool)
@@ -73,14 +77,38 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             McpToolClient({"gitlab": settings.mcp_gitlab_url}),
             PostgresAuditLog(pool),
         )
+        tokens = TaskTokens()
+        relay_app = create_relay_app(
+            RelayDeps(
+                company=company,
+                tokens=tokens,
+                ledger=PostgresBudgetLedger(pool),
+                upstream=upstream,
+                trace=LoggingTraceSink(),
+            )
+        )
+        # Agent trong aico gọi relay ngay trong tiến trình; sandbox (GĐ1) gọi qua mạng.
+        relay_client = httpx.AsyncClient(
+            transport=httpx.ASGITransport(app=relay_app), base_url="http://relay", timeout=300
+        )
+        exit_stack.push_async_callback(relay_client.aclose)
         sop = company.sop("fix_ticket")
+        planner: Planner = StaticPlanner()
+        if settings.planner == "llm":
+            agents = LlmAgentRunner(
+                company,
+                gateway,
+                tokens,
+                LlmSettings(relay_url="http://relay/v1", http_client=relay_client),
+            )
+            planner = LlmPlanner(agents, role_id=sop.steps["plan"])
         deps = Deps(
             sop=sop,
             tickets=tickets,
             approvals=approvals,
             gateway=gateway,
             triage=RuleTriage(company.policy, sop.department),
-            planner=StaticPlanner(),
+            planner=planner,
             coder=ScriptedCoder(),
             reviewer=ScriptedReviewer(),
             default_project=settings.default_project or "group/pilot-repo",
@@ -107,16 +135,11 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 internal_token=settings.internal_token,
                 default_project=settings.default_project,
             ),
-            relay=RelayDeps(
-                company=company,
-                tokens=TaskTokens(),
-                ledger=PostgresBudgetLedger(pool),
-                upstream=upstream,
-                trace=LoggingTraceSink(),
-            ),
+            relay_app=relay_app,
             tickets=tickets,
         )
     finally:
+        await exit_stack.aclose()
         await upstream.aclose()
         await saver_pool.close()
         await pool.close()

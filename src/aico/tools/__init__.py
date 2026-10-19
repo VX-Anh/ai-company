@@ -5,6 +5,7 @@ from aico.tools.gateway import (
     ToolDenied,
     ToolError,
     ToolGateway,
+    ToolSpec,
 )
 from aico.tools.guard import Guard, GuardDecision, Verdict, check_branch
 
@@ -17,6 +18,7 @@ __all__ = [
     "ToolDenied",
     "ToolError",
     "ToolGateway",
+    "ToolSpec",
     "Verdict",
     "check_branch",
 ]

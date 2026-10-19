@@ -9,7 +9,7 @@ S = TicketStatus
 TRANSITIONS: dict[TicketStatus, frozenset[TicketStatus]] = {
     S.NEW: frozenset({S.TRIAGED}),
     S.TRIAGED: frozenset({S.PLANNED}),
-    S.PLANNED: frozenset({S.AWAITING_PLAN_APPROVAL, S.IN_PROGRESS}),
+    S.PLANNED: frozenset({S.AWAITING_PLAN_APPROVAL, S.IN_PROGRESS, S.ESCALATED}),
     S.AWAITING_PLAN_APPROVAL: frozenset({S.IN_PROGRESS, S.PLANNED, S.ESCALATED}),
     # Hết ngân sách giữa chừng cũng phải dừng và hỏi người.
     S.IN_PROGRESS: frozenset({S.IN_REVIEW, S.ESCALATED}),

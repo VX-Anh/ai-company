@@ -17,7 +17,6 @@ import uvicorn
 from aico.api import create_api_app
 from aico.container import build_container, setup_checkpointer
 from aico.db import migrate
-from aico.llm_relay import create_relay_app
 from aico.orchestrator import expire_overdue_approvals
 from aico.registry import RegistryError, load_company
 from aico.settings import Settings
@@ -60,7 +59,7 @@ async def _serve(settings: Settings) -> None:
         )
         relay = uvicorn.Server(
             uvicorn.Config(
-                create_relay_app(c.relay),
+                c.relay_app,
                 host=settings.relay_host,
                 port=settings.relay_port,
                 log_level="info",
