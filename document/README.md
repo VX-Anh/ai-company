@@ -55,7 +55,7 @@ document/
 | [Luồng xử lý ticket](so-do/luong-xu-ly-ticket.html) | Từ ticket mới đến merge đã xác nhận; 2 điểm người duyệt, các vòng sửa có trần, escalate | `workflow` |
 | [Lộ trình triển khai](so-do/lo-trinh-trien-khai.html) | GĐ0 → GĐ3, mỗi giai đoạn mở khi qua cổng của giai đoạn trước | `workflow` |
 
-Dựng lại một sơ đồ sau khi sửa file nguồn (chạy từ `D:\TVPL\Marshy`):
+Dựng lại một sơ đồ sau khi sửa file nguồn (chạy từ thư mục gốc của repo):
 
 ```bash
 node ~/.claude/skills/archify/bin/archify.mjs finalize <architecture|tree|workflow> \
