@@ -97,7 +97,9 @@ def build_command(
             "--skip-git-repo-check",
             "--ephemeral",
             "--sandbox",
-            "read-only" if read_only else "workspace-write",
+            # Sandbox bubblewrap của Codex không tạo được namespace trong Docker. Ghi code và
+            # review: container worker (không có secret của aico, thư mục job tạm) là lớp cô lập.
+            "read-only" if read_only else "danger-full-access",
             "-o",
             str(workdir / ".last-message"),
             "-c",
@@ -108,9 +110,6 @@ def build_command(
             # Tool của aico đã qua guard + audit: không cần Codex hỏi duyệt từng lời gọi.
             f'mcp_servers.{MCP_NAME}.default_tools_approval_mode="approve"',
         ]
-        if not read_only:
-            # Cho cài dependency và chạy build/test trong sandbox của Codex.
-            cmd += ["-c", "sandbox_workspace_write.network_access=true"]
         cmd.append(full)
         return cmd, {"AICO_TASK_TOKEN": token}
     if kind == "cursor":

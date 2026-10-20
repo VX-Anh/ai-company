@@ -282,7 +282,7 @@ def test_worker_command_write_mode(tmp_path: Path) -> None:
     claude, _ = ws.build_command(job, "claude", tmp_path)
     assert "--tools=" not in claude and "Bash" in claude[claude.index("--allowedTools") + 1]
     codex, _ = ws.build_command(job, "codex", tmp_path)
-    assert codex[codex.index("--sandbox") + 1] == "workspace-write"
+    assert codex[codex.index("--sandbox") + 1] == "danger-full-access"
     repo = tmp_path / "repo"
     repo.mkdir()
     cursor, _ = ws.build_command(job, "cursor", tmp_path, repo)
