@@ -53,6 +53,8 @@ class Settings:
     bridge_host: str = "127.0.0.1"
     bridge_port: int = 8300
     bridge_url: str = "http://127.0.0.1:8300/mcp"  # địa chỉ worker dùng để gọi tool bridge
+    # Phòng có cửa sổ hạn mức đã dùng từ mức này (%) được giao việc sau phòng còn thoải mái.
+    usage_tight_percent: float = 80
     cors_origins: tuple[str, ...] = ()  # GUI web, ví dụ http://localhost:5173
     # Mặc định cho GUI chạy ở mọi cổng trên máy này (dev server tự đổi cổng khi bị chiếm).
     cors_origin_regex: str | None = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
@@ -89,6 +91,7 @@ class Settings:
             bridge_host=env.get("AICO_BRIDGE_HOST", cls.bridge_host),
             bridge_port=int(env.get("AICO_BRIDGE_PORT", cls.bridge_port)),
             bridge_url=env.get("AICO_BRIDGE_URL", cls.bridge_url),
+            usage_tight_percent=float(env.get("AICO_USAGE_TIGHT_PERCENT", cls.usage_tight_percent)),
             cors_origins=_list("AICO_CORS_ORIGINS"),
             cors_origin_regex=env.get("AICO_CORS_ORIGIN_REGEX", cls.cors_origin_regex) or None,
         )

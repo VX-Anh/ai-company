@@ -11,6 +11,7 @@ POST /run {prompt, system_prompt?, mcp_url, mcp_token, mode: read|write, timeout
            ticket_id?, role?}
 -> {ok, result, usage, duration_seconds} hoặc {ok: false, error, limited?}
 GET /status -> trạng thái (idle | working | limited), việc đang làm, lượt chạy, token, hạn mức
+  (`usage`: % đã dùng từng cửa sổ hạn mức, đọc từ chính CLI mỗi WORKER_USAGE_TTL giây)
 """
 
 from __future__ import annotations
@@ -191,6 +192,198 @@ def detect_limit(text: str, now: datetime) -> dict[str, Any] | None:
     }
 
 
+USAGE_TTL = float(os.environ.get("WORKER_USAGE_TTL", "300"))
+_CLAUDE_WINDOW = re.compile(
+    r"^Current (session|week)(?: \(([^)]+)\))?:\s*(\d+(?:\.\d+)?)% used"
+    r"(?:\s*·\s*resets\s+(.+?))?\s*$",
+    re.M,
+)
+_CLAUDE_RESET = re.compile(
+    r"([A-Z][a-z]{2}) (\d{1,2}), (\d{1,2})(?::(\d{2}))?\s*(am|pm)(?:\s*\(([^)]+)\))?", re.I
+)
+_MONTHS = ["jan", "feb", "mar", "apr", "may", "jun", "jul", "aug", "sep", "oct", "nov", "dec"]
+
+
+def _claude_reset(text: str, now: datetime) -> str | None:
+    """ "Oct 20, 7:59pm (UTC)" -> ISO UTC. Không ghi năm: lấy năm gần nhất không quá khứ."""
+    match = _CLAUDE_RESET.search(text or "")
+    if not match:
+        return None
+    try:
+        tz = ZoneInfo(match[6]) if match[6] else UTC
+    except (ZoneInfoNotFoundError, ValueError):
+        tz = UTC
+    hour = int(match[3]) % 12 + (12 if match[5].lower() == "pm" else 0)
+    local = now.astimezone(tz)
+    try:
+        at = local.replace(
+            month=_MONTHS.index(match[1].lower()) + 1,
+            day=int(match[2]),
+            hour=hour,
+            minute=int(match[4] or 0),
+            second=0,
+            microsecond=0,
+        )
+    except ValueError:
+        return None
+    if at < local - timedelta(days=1):
+        at = at.replace(year=at.year + 1)
+    return at.astimezone(UTC).isoformat()
+
+
+def parse_claude_usage(text: str, now: datetime) -> list[dict[str, Any]]:
+    """Kết quả lệnh /usage của Claude Code -> các cửa sổ hạn mức."""
+    windows: list[dict[str, Any]] = []
+    for kind, scope, percent, reset in _CLAUDE_WINDOW.findall(text):
+        name = "session" if kind == "session" else f"week{f' ({scope})' if scope else ''}"
+        windows.append(
+            {
+                "name": name,
+                "window_minutes": 300 if kind == "session" else 10080,
+                "used_percent": float(percent),
+                "resets_at": _claude_reset(reset, now),
+            }
+        )
+    return windows
+
+
+def parse_codex_rate_limits(result: dict[str, Any]) -> tuple[list[dict[str, Any]], str | None]:
+    """Kết quả account/rateLimits/read của `codex app-server` -> (cửa sổ, gói)."""
+    limits = result.get("rateLimits") or {}
+    windows: list[dict[str, Any]] = []
+    for key in ("primary", "secondary"):
+        w = limits.get(key)
+        if not w:
+            continue
+        minutes = w.get("windowDurationMins")
+        resets = w.get("resetsAt")
+        windows.append(
+            {
+                "name": "5h" if minutes == 300 else ("week" if minutes == 10080 else key),
+                "window_minutes": minutes,
+                "used_percent": float(w.get("usedPercent") or 0),
+                "resets_at": datetime.fromtimestamp(resets, UTC).isoformat() if resets else None,
+            }
+        )
+    return windows, limits.get("planType")
+
+
+def _codex_rate_limits(timeout: float = 30) -> dict[str, Any]:
+    """Hỏi `codex app-server` qua JSON-RPC stdio. Server thoát khi stdin đóng nên giữ mở tới khi
+    có câu trả lời."""
+    proc = subprocess.Popen(
+        ["codex", "app-server"],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    timer = threading.Timer(timeout, proc.kill)
+    timer.start()
+    try:
+        assert proc.stdin is not None and proc.stdout is not None
+
+        def send(msg: dict[str, Any]) -> None:
+            assert proc.stdin is not None
+            proc.stdin.write(json.dumps({"jsonrpc": "2.0", **msg}) + "\n")
+            proc.stdin.flush()
+
+        send(
+            {
+                "id": 1,
+                "method": "initialize",
+                "params": {"clientInfo": {"name": "aico", "version": "1"}},
+            }
+        )
+        sent = False
+        for line in proc.stdout:
+            with contextlib.suppress(json.JSONDecodeError):
+                msg = json.loads(line)
+                if msg.get("id") == 1 and not sent:
+                    send({"method": "initialized"})
+                    send({"id": 2, "method": "account/rateLimits/read"})
+                    sent = True
+                elif msg.get("id") == 2:
+                    if "error" in msg:
+                        raise RuntimeError(str(msg["error"])[:200])
+                    return msg["result"]
+        raise RuntimeError("codex app-server không trả hạn mức")
+    finally:
+        timer.cancel()
+        proc.kill()
+        proc.wait()
+
+
+def read_usage(kind: str, now: datetime) -> dict[str, Any]:
+    """Hạn mức subscription lấy từ chính CLI (không tốn lượt, không gọi API ngoài client)."""
+    out: dict[str, Any] = {"checked_at": now.isoformat(), "windows": [], "plan": None}
+    try:
+        if kind == "claude":
+            proc = subprocess.run(
+                ["claude", "-p", "/usage", "--output-format", "json"],
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                timeout=60,
+                cwd=tempfile.gettempdir(),
+            )
+            text = str(json.loads(proc.stdout).get("result") or "")
+            out.update(source="claude /usage", windows=parse_claude_usage(text, now))
+        elif kind == "codex":
+            windows, plan = parse_codex_rate_limits(_codex_rate_limits())
+            out.update(
+                source="codex app-server account/rateLimits/read", windows=windows, plan=plan
+            )
+        elif kind == "cursor":
+            proc = subprocess.run(
+                ["cursor-agent", "about", "--format", "json"],
+                capture_output=True,
+                stdin=subprocess.DEVNULL,
+                text=True,
+                timeout=60,
+            )
+            about = json.loads(proc.stdout)
+            plan = next((v for k, v in about.items() if "tier" in k.lower()), None)
+            # Cursor CLI không công bố phần hạn mức đã dùng; chỉ biết gói và lỗi khi chạm hạn mức.
+            out.update(source="cursor-agent about", plan=plan, note="CLI không công bố hạn mức")
+        if not out["windows"] and kind != "cursor":
+            out["error"] = "không đọc được hạn mức từ CLI"
+    except (OSError, ValueError, RuntimeError, subprocess.SubprocessError) as exc:
+        out["error"] = f"{type(exc).__name__}: {exc}"[:300]
+    return out
+
+
+def usage_limited_until(usage: dict[str, Any] | None, now: datetime) -> str | None:
+    """Cửa sổ nào đã dùng 100% và chưa tới giờ reset -> giờ mở lại (muộn nhất)."""
+    until: str | None = None
+    for w in (usage or {}).get("windows") or []:
+        resets = w.get("resets_at")
+        if w.get("used_percent", 0) >= 100 and resets and datetime.fromisoformat(resets) > now:
+            until = max(until or resets, resets)
+    return until
+
+
+class UsageProbe:
+    """Đọc hạn mức định kỳ ở luồng nền (mặc định 5 phút; sau mỗi lần chạy thì đọc sớm hơn)."""
+
+    def __init__(self, kind: str, ttl: float = USAGE_TTL) -> None:
+        self.kind = kind
+        self.ttl = ttl
+        self.latest: dict[str, Any] | None = None
+        self._wake = threading.Event()
+
+    def poke(self) -> None:
+        self._wake.set()
+
+    def loop(self) -> None:
+        while True:
+            self.latest = read_usage(self.kind, _now())
+            self._wake.wait(self.ttl)
+            if self._wake.is_set():
+                self._wake.clear()
+                time.sleep(20)  # gom nhiều lần chạy xong liên tiếp thành một lần đọc
+
+
 class WorkerStats:
     """Thống kê của worker, lưu trong volume home để giữ qua restart. Dùng cho GUI."""
 
@@ -258,20 +451,27 @@ class WorkerStats:
             with contextlib.suppress(OSError):
                 self._path.write_text(json.dumps(d), encoding="utf-8")
 
-    def snapshot(self, kind: str, slots: int, now: datetime) -> dict[str, Any]:
+    def snapshot(
+        self, kind: str, slots: int, now: datetime, usage: dict[str, Any] | None = None
+    ) -> dict[str, Any]:
         """Trạng thái phòng provider: hạn mức chung, các agent con đang chạy, thống kê."""
         with self._lock:
             agents = sorted(self.agents.values(), key=lambda a: a["started_at"])
-            limited = self.limited_until(now)
+            limited = self.limited_until(now) or usage_limited_until(usage, now)
             state = "limited" if limited else ("working" if agents else "idle")
-            return {
+            snap: dict[str, Any] = {
                 "kind": kind,
                 "state": state,
                 "slots": slots,
                 "agents": agents,
                 "current": agents[0] if agents else None,  # tương thích GUI cũ
                 **self.data,
+                "usage": usage,
             }
+            if limited and not self.limited_until(now):
+                # Hạn mức đọc từ CLI đã chạm 100%: báo như khi một lần chạy bị từ chối.
+                snap["limit"] = {"message": "hạn mức đã dùng hết (theo CLI)", "resets_at": limited}
+            return snap
 
 
 def extract_workspace(archive_b64: str, target: Path) -> None:
@@ -507,6 +707,7 @@ class _Handler(BaseHTTPRequestHandler):
     slots = 2  # số agent con chạy song song trong phòng provider
     seats = threading.BoundedSemaphore(2)
     stats = WorkerStats(Path("/dev/null"))
+    usage = UsageProbe("")
 
     def _reply(self, status: int, body: dict[str, Any]) -> None:
         data = json.dumps(body, ensure_ascii=False).encode()
@@ -527,7 +728,7 @@ class _Handler(BaseHTTPRequestHandler):
             if not self._authorized():
                 self._reply(401, {"error": "unauthorized"})
                 return
-            self._reply(200, self.stats.snapshot(self.kind, self.slots, _now()))
+            self._reply(200, self.stats.snapshot(self.kind, self.slots, _now(), self.usage.latest))
         else:
             self._reply(404, {"error": "not found"})
 
@@ -544,7 +745,10 @@ class _Handler(BaseHTTPRequestHandler):
         try:
             length = int(self.headers.get("Content-Length", "0"))
             job = json.loads(self.rfile.read(length))
-            if until := self.stats.limited_until(_now()):
+            now = _now()
+            if until := self.stats.limited_until(now) or usage_limited_until(
+                self.usage.latest, now
+            ):
                 # Chưa tới giờ mở lại hạn mức: từ chối ngay, không gọi CLI.
                 self._reply(
                     200, {"ok": False, "limited": True, "error": f"hết hạn mức tới {until}"}
@@ -553,6 +757,7 @@ class _Handler(BaseHTTPRequestHandler):
             agent_id = self.stats.start(job, _now())
             result = run_job(job, self.kind)
             self.stats.finish(agent_id, result, tuple(result.pop("tokens")), _now())
+            self.usage.poke()
             self._reply(200, {**result, "agent_id": agent_id})
         except (ValueError, KeyError) as exc:
             self._reply(400, {"error": str(exc)})
@@ -572,6 +777,9 @@ def main() -> None:
     _Handler.stats = WorkerStats(
         Path(os.environ.get("WORKER_STATS_FILE", Path.home() / ".aico-worker-stats.json"))
     )
+    _Handler.usage = UsageProbe(_Handler.kind)
+    if USAGE_TTL > 0:
+        threading.Thread(target=_Handler.usage.loop, daemon=True).start()
     port = int(os.environ.get("WORKER_PORT", "8400"))
     ThreadingHTTPServer(("0.0.0.0", port), _Handler).serve_forever()
 

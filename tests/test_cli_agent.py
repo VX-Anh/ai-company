@@ -563,3 +563,103 @@ async def test_cors_allows_any_localhost_port(company: Company) -> None:
         ]:
             resp = await c.options("/workers", headers={"Origin": origin, **preflight})
             assert (resp.headers.get("access-control-allow-origin") == origin) is allowed, origin
+
+
+CLAUDE_USAGE = """You are currently using your subscription to power your Claude Code usage
+
+Current session: 28% used · resets Oct 20, 7:59pm (UTC)
+Current week (all models): 14% used · resets Oct 23, 1:59pm (UTC)
+
+What's contributing to your limits usage?
+"""
+
+
+def test_parse_claude_usage_windows() -> None:
+    from datetime import UTC, datetime
+
+    ws = _load_worker_server()
+    now = datetime(2026, 10, 20, 15, 0, tzinfo=UTC)
+    session, week = ws.parse_claude_usage(CLAUDE_USAGE, now)
+    assert session == {
+        "name": "session",
+        "window_minutes": 300,
+        "used_percent": 28.0,
+        "resets_at": "2026-10-20T19:59:00+00:00",
+    }
+    assert week["name"] == "week (all models)" and week["used_percent"] == 14.0
+    assert week["resets_at"] == "2026-10-23T13:59:00+00:00"
+    # Cuối năm: "Jan 2" nghĩa là năm sau.
+    assert ws._claude_reset("Jan 2, 9am (UTC)", datetime(2026, 12, 30, tzinfo=UTC)).startswith(
+        "2027-01-02T09:00"
+    )
+
+
+def test_parse_codex_rate_limits_and_limited_state() -> None:
+    from datetime import UTC, datetime
+
+    ws = _load_worker_server()
+    result = {
+        "rateLimits": {
+            "primary": {"usedPercent": 100, "windowDurationMins": 300, "resetsAt": 1792528919},
+            "secondary": {"usedPercent": 2, "windowDurationMins": 10080, "resetsAt": 1793082799},
+            "planType": "plus",
+        }
+    }
+    windows, plan = ws.parse_codex_rate_limits(result)
+    assert plan == "plus"
+    assert [(w["name"], w["used_percent"]) for w in windows] == [("5h", 100.0), ("week", 2.0)]
+
+    usage = {"windows": windows}
+    before = datetime.fromtimestamp(1792528919 - 60, UTC)
+    after = datetime.fromtimestamp(1792528919 + 60, UTC)
+    assert ws.usage_limited_until(usage, before) == windows[0]["resets_at"]
+    assert ws.usage_limited_until(usage, after) is None
+
+    stats = ws.WorkerStats(Path(os.devnull))
+    snap = stats.snapshot("codex", 2, before, usage)
+    assert snap["state"] == "limited" and snap["usage"] is usage
+    assert snap["limit"]["resets_at"] == windows[0]["resets_at"]
+    assert stats.snapshot("codex", 2, after, usage)["state"] == "idle"
+
+
+def test_room_rank_by_usage() -> None:
+    from aico.agents.cli_agent import room_rank
+
+    def usage(*percents: float) -> dict[str, Any]:
+        return {"state": "idle", "usage": {"windows": [{"used_percent": p} for p in percents]}}
+
+    assert room_rank(usage(10, 30), 80) == 0
+    assert room_rank(usage(10, 85), 80) == 1  # cửa sổ tuần sắp hết cũng tính
+    assert room_rank({"state": "idle", "usage": None}, 80) == 0  # Cursor: không công bố
+    assert room_rank({"state": "limited"}, 80) == 2
+    assert room_rank({"state": "offline"}, 80) == 2
+
+
+@pytest.mark.parametrize(("claude_used", "first"), [(90, "codex"), (20, "claude")])
+async def test_dispatch_prefers_rooms_with_headroom(
+    company: Company, claude_used: float, first: str
+) -> None:
+    runs: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        name = request.url.host
+        if request.method == "GET":
+            used = claude_used if name == "claude" else 10
+            windows = [{"used_percent": used}]
+            return httpx.Response(200, json={"state": "idle", "usage": {"windows": windows}})
+        runs.append(name)
+        return httpx.Response(200, json={"ok": True, "result": "xong"})
+
+    runner = CliAgentRunner(
+        company,
+        TaskTokens(),
+        CliSettings(
+            WORKERS,
+            "worker-secret",
+            "http://aico:8300/mcp",
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+        ),
+    )
+    ticket = Ticket(id="T-1", title="x", project=PROJECT)
+    assert await runner.run("tech_lead", ticket, "lập kế hoạch") == "xong"
+    assert runs == [first]

@@ -48,6 +48,9 @@ class CliSettings:
     bridge_url: str  # địa chỉ tool bridge nhìn từ worker
     busy_wait_seconds: float = 10
     http_client: httpx.AsyncClient | None = None  # test: worker giả
+    # Phòng có cửa sổ hạn mức dùng từ mức này (%) bị xếp sau phòng còn thoải mái.
+    usage_tight_percent: float = 80
+    status_ttl_seconds: float = 30
 
 
 class CliAgentRunner:
@@ -56,6 +59,7 @@ class CliAgentRunner:
         self._tokens = tokens
         self._settings = settings
         self._client = settings.http_client or httpx.AsyncClient()
+        self._ranks: tuple[float, dict[str, int]] = (float("-inf"), {})
 
     async def run(
         self, role_id: str, ticket: Ticket, instruction: str, *, mode: str = "read"
@@ -102,6 +106,8 @@ class CliAgentRunner:
         deadline = loop.time() + timeout
         k = spread % len(role.workers)
         order = (*role.workers[k:], *role.workers[:k])
+        ranks = await self._room_ranks()
+        order = tuple(sorted(order, key=lambda name: ranks.get(name, 0)))  # sort ổn định
         try:
             while True:
                 errors: list[str] = []
@@ -146,6 +152,23 @@ class CliAgentRunner:
         body.pop("error", None)
         return body
 
+    async def _room_ranks(self) -> dict[str, int]:
+        """Hạng của từng phòng theo hạn mức (cache ngắn để không hỏi worker mỗi lần giao việc)."""
+        now = asyncio.get_running_loop().time()
+        at, ranks = self._ranks
+        if now - at < self._settings.status_ttl_seconds:
+            return ranks
+        try:
+            ranks = {
+                s["name"]: room_rank(s, self._settings.usage_tight_percent)
+                for s in await self.statuses()
+            }
+        except Exception as exc:  # xếp hạng chỉ để tham khảo: lỗi thì giữ thứ tự khai báo
+            log.warning("không đọc được hạn mức các phòng: %s", exc)
+            ranks = {}
+        self._ranks = (now, ranks)
+        return ranks
+
     async def statuses(self) -> list[dict[str, Any]]:
         """Trạng thái từng worker cho GUI: idle | working | limited | offline, kèm thống kê."""
         roles: dict[str, list[str]] = {}
@@ -167,6 +190,16 @@ class CliAgentRunner:
             return {**resp.json(), **base}
 
         return list(await asyncio.gather(*(one(n, u) for n, u in self._settings.workers.items())))
+
+
+def room_rank(status: Mapping[str, Any], tight_percent: float) -> int:
+    """0: còn thoải mái; 1: có cửa sổ hạn mức dùng từ tight_percent; 2: hết hạn mức hoặc mất kết
+    nối. Phòng không công bố hạn mức (Cursor) tính là thoải mái cho tới khi báo hết."""
+    if status.get("state") in ("limited", "offline"):
+        return 2
+    windows = (status.get("usage") or {}).get("windows") or []
+    used = max((float(w.get("used_percent") or 0) for w in windows), default=0.0)
+    return 1 if used >= tight_percent else 0
 
 
 SUMMARY_PREFIX = "TÓM TẮT:"

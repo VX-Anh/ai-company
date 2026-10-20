@@ -130,6 +130,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                     workers=settings.workers,
                     worker_token=settings.worker_token,
                     bridge_url=settings.bridge_url,
+                    usage_tight_percent=settings.usage_tight_percent,
                     http_client=worker_client,
                 ),
             )
