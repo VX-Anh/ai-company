@@ -45,6 +45,7 @@ class Settings:
     default_project: str | None = None
     planner: str = "static"  # static | llm | cli
     coder: str = "static"  # static (ScriptedCoder) | cli
+    reviewer: str = "static"  # static (ScriptedReviewer) | cli
     # Worker CLI subscription: tên -> URL worker server; token chung giữa aico và worker.
     workers: dict[str, str] = field(default_factory=dict)
     worker_token: str | None = None
@@ -76,6 +77,7 @@ class Settings:
             default_project=env.get("AICO_DEFAULT_PROJECT"),
             planner=env.get("AICO_PLANNER", cls.planner),
             coder=env.get("AICO_CODER", cls.coder),
+            reviewer=env.get("AICO_REVIEWER", cls.reviewer),
             workers=_mapping("AICO_WORKERS"),
             worker_token=_secret("AICO_WORKER_TOKEN_FILE"),
             bridge_host=env.get("AICO_BRIDGE_HOST", cls.bridge_host),

@@ -20,7 +20,7 @@ from aico.orchestrator import (
     StaticPlanner,
     build_fix_ticket,
 )
-from aico.orchestrator.ports import Coder, Planner
+from aico.orchestrator.ports import Coder, Planner, Reviewer
 from aico.registry import Company
 from aico.tickets import InMemoryTicketStore, TicketStore
 from aico.tools import Guard, McpToolClient, ToolClient, ToolGateway
@@ -65,6 +65,7 @@ def make_harness(
     wrap_client: Callable[[ToolClient], ToolClient] | None = None,
     planner: Callable[[ToolGateway], Planner] | None = None,
     coder: Callable[[ToolGateway], Coder] | None = None,
+    reviewer_agent: Callable[[ToolGateway], Reviewer] | None = None,
 ) -> Harness:
     tickets = tickets or InMemoryTicketStore()
     approvals = approvals or InMemoryApprovalStore()
@@ -90,7 +91,7 @@ def make_harness(
         triage=RuleTriage(company.policy, sop.department),
         planner=planner(gateway) if planner is not None else StaticPlanner(),
         coder=coder(gateway) if coder is not None else ScriptedCoder(),
-        reviewer=reviewer,
+        reviewer=reviewer_agent(gateway) if reviewer_agent is not None else reviewer,
         default_project=PROJECT,
     )
     graph = build_fix_ticket(deps).compile(checkpointer=checkpointer or InMemorySaver())

@@ -196,7 +196,12 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             {"project": project, "mr_iid": s["mr_iid"]},
             ticket_id=tid,
         )
-        result = await deps.reviewer.review(await deps.tickets.get(tid), mr)
+        try:
+            result = await deps.reviewer.review(await deps.tickets.get(tid), mr)
+        except BudgetExhausted as exc:
+            return {"escalation_reason": f"review hết ngân sách: {exc}"}
+        except AgentUnavailable as exc:
+            return {"escalation_reason": f"review: {exc}"}
         rounds = s.get("review_rounds", 0) + (0 if result.passed else 1)
         return {
             "review_passed": result.passed,
@@ -291,6 +296,8 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         return "escalate"
 
     def route_review(s: TicketState) -> str:
+        if s.get("escalation_reason"):
+            return "escalate"
         if s["review_passed"]:
             return "approve_merge"
         return "code" if s["review_rounds"] < limits.max_review_rounds else "escalate"

@@ -16,6 +16,7 @@ from starlette.applications import Starlette
 from aico.agents import (
     CliAgentRunner,
     CliCoder,
+    CliReviewer,
     CliSettings,
     LlmAgentRunner,
     LlmPlanner,
@@ -36,7 +37,7 @@ from aico.orchestrator import (
     StaticPlanner,
     build_fix_ticket,
 )
-from aico.orchestrator.ports import Coder, Planner
+from aico.orchestrator.ports import Coder, Planner, Reviewer
 from aico.registry import Company, load_company
 from aico.settings import Settings
 from aico.tickets.postgres import PostgresTicketStore
@@ -111,7 +112,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
         bridge_app = create_tool_bridge_app(ToolBridge(gateway, bridge_tokens))
         planner: Planner = StaticPlanner()
         cli_agents: CliAgentRunner | None = None
-        uses_cli = "cli" in (settings.planner, settings.coder)
+        uses_cli = "cli" in (settings.planner, settings.coder, settings.reviewer)
         if uses_cli and (not settings.workers or not settings.worker_token):
             raise RuntimeError("worker cli cần AICO_WORKERS và AICO_WORKER_TOKEN_FILE")
         if settings.workers and settings.worker_token:
@@ -145,6 +146,9 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 role_id=sop.steps["code"],
                 default_project=settings.default_project,
             )
+        reviewer: Reviewer = ScriptedReviewer()
+        if settings.reviewer == "cli" and cli_agents is not None:
+            reviewer = CliReviewer(cli_agents, gateway, role_id=sop.steps["review"])
         deps = Deps(
             sop=sop,
             tickets=tickets,
@@ -153,7 +157,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             triage=RuleTriage(company.policy, sop.department),
             planner=planner,
             coder=coder,
-            reviewer=ScriptedReviewer(),
+            reviewer=reviewer,
             default_project=settings.default_project or "group/pilot-repo",
         )
         saver = AsyncPostgresSaver(saver_pool)  # type: ignore[arg-type]

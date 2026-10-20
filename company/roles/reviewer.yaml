@@ -1,15 +1,20 @@
 id: reviewer
 department: engineering
 reports_to: tech_lead
-worker: llm
+worker: cli
+# Ưu tiên phòng khác với Coder (claude) để review độc lập.
+workers: [codex, cursor, claude]
 model: reviewer-model
 prompt: prompts/reviewer.md
 tools:
   - server: gitlab
-    allow: [read_file, get_merge_request]
+    allow: [read_file, download_archive, get_merge_request]
     constraints:
       repos: [VX-Anh/aico-office]
 max_risk: L0
+limits:
+  max_iterations: 40
+  timeout_minutes: 30
 budget:
   per_ticket_usd: 1
   monthly_usd: 60

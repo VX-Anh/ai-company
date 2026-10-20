@@ -47,6 +47,7 @@ def _mcp_servers(url: str, token: str) -> dict[str, Any]:
 
 
 CLAUDE_WRITE_TOOLS = "Read,Edit,Write,Glob,Grep,Bash"
+CLAUDE_REVIEW_TOOLS = "Read,Glob,Grep,Bash"  # review: đọc và chạy build/test, không sửa file
 MAX_CHANGED_FILE_BYTES = 1_000_000
 # File cấu hình của worker trong thư mục repo: không tính là thay đổi của agent.
 LOCAL_EXCLUDES = (".cursor/",)
@@ -62,10 +63,12 @@ def build_command(
     """
     prompt = job["prompt"]
     system = job.get("system_prompt") or ""
-    read_only = job.get("mode", "read") == "read"
+    mode = job.get("mode", "read")  # read | write | review
+    read_only = mode == "read"
     url, token = job["mcp_url"], job["mcp_token"]
     if kind == "claude":
-        allowed = f"mcp__{MCP_NAME}" if read_only else f"mcp__{MCP_NAME},{CLAUDE_WRITE_TOOLS}"
+        extra = {"read": "", "write": CLAUDE_WRITE_TOOLS, "review": CLAUDE_REVIEW_TOOLS}[mode]
+        allowed = f"mcp__{MCP_NAME}" + (f",{extra}" if extra else "")
         cmd = [
             "claude",
             "-p",
@@ -372,7 +375,7 @@ def run_job(job: dict[str, Any], kind: str) -> dict[str, Any]:
             "tokens": token_usage(kind, usage, proc.stdout),
             "duration_seconds": round(time.monotonic() - started, 1),
         }
-        if repo is not None and ok:
+        if repo is not None and ok and job.get("mode") == "write":
             out["changes"], out["skipped"] = collect_changes(repo)
         return out
     except subprocess.TimeoutExpired:

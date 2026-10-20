@@ -316,7 +316,7 @@ async def test_workers_endpoint_reports_status_and_roles(company: Company) -> No
         body = (await c.get("/workers", headers={"Authorization": "Bearer api"})).json()
     by_name = {w["name"]: w for w in body}
     assert by_name["claude"]["state"] == "idle" and by_name["claude"]["runs_ok"] == 2
-    assert set(by_name["claude"]["roles"]) == {"tech_lead", "coder", "designer"}
+    assert set(by_name["claude"]["roles"]) == {"tech_lead", "coder", "reviewer", "designer"}
     assert by_name["cursor"]["state"] == "offline"
 
 
@@ -421,3 +421,74 @@ async def test_cli_coder_without_changes_escalates(company: Company) -> None:
     reasons = [e.data.get("reason", "") for e in await h.tickets.events("T-1")]
     assert any("không sửa file nào" in r for r in reasons)
     assert "ai/T-1" not in h.gitlab.project(PROJECT).files  # không tạo branch rỗng
+
+
+def test_archive_diff_and_verdict_parsing() -> None:
+    from aico.agents.cli_agent import archive_diff, parse_verdict
+
+    base = _tar_gz({"a.ts": "1\n2\n", "gone.ts": "x\n", "same.ts": "s\n"})
+    head = _tar_gz({"a.ts": "1\n3\n", "new.ts": "n\n", "same.ts": "s\n"}, root="other-root")
+    diff = archive_diff(base, head)
+    assert "-2\n+3\n" in diff and "+++ b/new.ts" in diff and "--- a/gone.ts" in diff
+    assert "same.ts" not in diff
+
+    assert parse_verdict("Ổn.\n\n**KẾT LUẬN: ĐẠT**") == (True, "Ổn.")
+    assert parse_verdict("Thiếu test cho tên rỗng.\nKẾT LUẬN: CẦN SỬA") == (
+        False,
+        "Thiếu test cho tên rỗng.",
+    )
+    assert parse_verdict("không có kết luận") is None
+
+
+def test_worker_review_mode_reads_and_runs_but_does_not_edit(tmp_path: Path) -> None:
+    ws = _load_worker_server()
+    job = {"prompt": "p", "mcp_url": "u", "mcp_token": "t", "mode": "review"}
+    claude, _ = ws.build_command(job, "claude", tmp_path)
+    allowed = claude[claude.index("--allowedTools") + 1]
+    assert "Bash" in allowed and "Edit" not in allowed and "Write" not in allowed
+
+
+async def test_cli_reviewer_requests_changes_then_passes(company: Company) -> None:
+    """Reviewer (phòng codex) yêu cầu sửa -> Coder (phòng claude) sửa lại -> Reviewer đạt."""
+    from aico.agents import CliCoder, CliReviewer
+
+    calls: list[tuple[str, str]] = []
+    verdicts = ["Biển tên đè lên chân bàn.\nKẾT LUẬN: CẦN SỬA", "Đã ổn.\nKẾT LUẬN: ĐẠT"]
+
+    async def worker(request: httpx.Request) -> httpx.Response:
+        job = json.loads(request.content)
+        name = request.url.host
+        if job["role"] == "coder" and name != "claude":
+            return httpx.Response(409, json={"error": "đủ agent"})
+        calls.append((name, job["role"]))
+        if job["role"] == "coder":
+            n = sum(1 for _, r in calls if r == "coder")
+            change = {"path": "README.md", "action": "update", "content": f"# pilot v{n}\n"}
+            return httpx.Response(
+                200, json={"ok": True, "result": "TÓM TẮT: sửa", "changes": [change]}
+            )
+        assert job["mode"] == "review" and "<diff>" in job["prompt"]
+        assert "+# pilot v" in job["prompt"]
+        return httpx.Response(200, json={"ok": True, "result": verdicts.pop(0)})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(worker))
+    runner = CliAgentRunner(
+        company, TaskTokens(), CliSettings(WORKERS, "worker-secret", "u", 0.01, client)
+    )
+    h = make_harness(
+        company,
+        coder=lambda gw: CliCoder(runner, gw, default_project=PROJECT),
+        reviewer_agent=lambda gw: CliReviewer(runner, gw),
+    )
+    h.gitlab.project(PROJECT).files["main"]["README.md"] = "# pilot\n"
+    await h.new_ticket(labels=["small-fix"])
+    await h.runner.run_until_idle()
+
+    assert (await h.tickets.get("T-1")).status is TicketStatus.AWAITING_MERGE_APPROVAL
+    assert calls == [
+        ("claude", "coder"),
+        ("codex", "reviewer"),
+        ("claude", "coder"),
+        ("codex", "reviewer"),
+    ]
+    assert h.gitlab.project(PROJECT).files["ai/T-1"]["README.md"] == "# pilot v2\n"

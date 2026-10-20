@@ -49,6 +49,7 @@ services:
       AICO_DEFAULT_PROJECT: ${AICO_DEFAULT_PROJECT:-}
       AICO_PLANNER: ${AICO_PLANNER:-cli}
       AICO_CODER: ${AICO_CODER:-cli}
+      AICO_REVIEWER: ${AICO_REVIEWER:-cli}
       AICO_WORKERS: claude=http://worker-claude:8400,codex=http://worker-codex:8400,cursor=http://worker-cursor:8400
       AICO_WORKER_TOKEN_FILE: /run/secrets/worker_token
       AICO_BRIDGE_HOST: 0.0.0.0
