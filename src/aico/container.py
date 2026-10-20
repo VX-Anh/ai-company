@@ -11,8 +11,16 @@ from fastapi import FastAPI
 from langgraph.checkpoint.postgres.aio import AsyncPostgresSaver
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
+from starlette.applications import Starlette
 
-from aico.agents import LlmAgentRunner, LlmPlanner, LlmSettings
+from aico.agents import (
+    CliAgentRunner,
+    CliCoder,
+    CliSettings,
+    LlmAgentRunner,
+    LlmPlanner,
+    LlmSettings,
+)
 from aico.api import ApiDeps
 from aico.db import create_pool
 from aico.governance import PostgresApprovalStore, PostgresAuditLog
@@ -28,11 +36,12 @@ from aico.orchestrator import (
     StaticPlanner,
     build_fix_ticket,
 )
-from aico.orchestrator.ports import Planner
+from aico.orchestrator.ports import Coder, Planner
 from aico.registry import Company, load_company
 from aico.settings import Settings
 from aico.tickets.postgres import PostgresTicketStore
 from aico.tools import Guard, McpToolClient, ToolGateway
+from aico.tools.bridge import ToolBridge, create_tool_bridge_app
 
 
 @dataclass(frozen=True)
@@ -43,6 +52,7 @@ class Container:
     poller: GitLabIssuePoller | None
     api: ApiDeps
     relay_app: FastAPI
+    bridge_app: Starlette
     tickets: PostgresTicketStore
 
 
@@ -74,7 +84,10 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
         gateway = ToolGateway(
             company,
             Guard(company.policy, approvals),
-            McpToolClient({"gitlab": settings.mcp_gitlab_url}),
+            McpToolClient(
+                {"gitlab": settings.mcp_gitlab_url}
+                | ({"pixel": settings.mcp_pixel_url} if settings.mcp_pixel_url else {})
+            ),
             PostgresAuditLog(pool),
         )
         tokens = TaskTokens()
@@ -93,8 +106,30 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
         )
         exit_stack.push_async_callback(relay_client.aclose)
         sop = company.sop("fix_ticket")
+        # Tool bridge cho worker CLI: token riêng, không dùng chung với model relay.
+        bridge_tokens = TaskTokens()
+        bridge_app = create_tool_bridge_app(ToolBridge(gateway, bridge_tokens))
         planner: Planner = StaticPlanner()
-        if settings.planner == "llm":
+        cli_agents: CliAgentRunner | None = None
+        uses_cli = "cli" in (settings.planner, settings.coder)
+        if uses_cli and (not settings.workers or not settings.worker_token):
+            raise RuntimeError("worker cli cần AICO_WORKERS và AICO_WORKER_TOKEN_FILE")
+        if settings.workers and settings.worker_token:
+            worker_client = httpx.AsyncClient()
+            exit_stack.push_async_callback(worker_client.aclose)
+            cli_agents = CliAgentRunner(
+                company,
+                bridge_tokens,
+                CliSettings(
+                    workers=settings.workers,
+                    worker_token=settings.worker_token,
+                    bridge_url=settings.bridge_url,
+                    http_client=worker_client,
+                ),
+            )
+        if settings.planner == "cli" and cli_agents is not None:
+            planner = LlmPlanner(cli_agents, role_id=sop.steps["plan"])
+        elif settings.planner == "llm":
             agents = LlmAgentRunner(
                 company,
                 gateway,
@@ -102,6 +137,14 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 LlmSettings(relay_url="http://relay/v1", http_client=relay_client),
             )
             planner = LlmPlanner(agents, role_id=sop.steps["plan"])
+        coder: Coder = ScriptedCoder()
+        if settings.coder == "cli" and cli_agents is not None:
+            coder = CliCoder(
+                cli_agents,
+                gateway,
+                role_id=sop.steps["code"],
+                default_project=settings.default_project,
+            )
         deps = Deps(
             sop=sop,
             tickets=tickets,
@@ -109,7 +152,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             gateway=gateway,
             triage=RuleTriage(company.policy, sop.department),
             planner=planner,
-            coder=ScriptedCoder(),
+            coder=coder,
             reviewer=ScriptedReviewer(),
             default_project=settings.default_project or "group/pilot-repo",
         )
@@ -134,8 +177,11 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 api_token=settings.api_token,
                 internal_token=settings.internal_token,
                 default_project=settings.default_project,
+                workers=cli_agents.statuses if cli_agents is not None else None,
+                cors_origins=settings.cors_origins,
             ),
             relay_app=relay_app,
+            bridge_app=bridge_app,
             tickets=tickets,
         )
     finally:

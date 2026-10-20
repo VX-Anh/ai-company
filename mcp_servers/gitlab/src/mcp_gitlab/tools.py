@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
@@ -10,6 +11,7 @@ from typing import Any
 from mcp_gitlab.backend import GitLabBackend, GitLabError
 
 IDEMPOTENCY_TRAILER = "Idempotency-Key:"
+MAX_ARCHIVE_BYTES = 25_000_000
 
 # (approval_id, project, mr_iid) -> (hợp lệ, lý do)
 ApprovalVerifier = Callable[[str, str, int], Awaitable[tuple[bool, str]]]
@@ -67,6 +69,20 @@ class GitLabTools:
             "path": path,
             "ref": ref,
             "content": await self._backend.get_file(project, path, ref),
+        }
+
+    async def download_archive(self, project: str, ref: str = "main") -> dict[str, Any]:
+        """Mã nguồn tại ref (tar.gz, base64) để worker sửa code trong thư mục tạm."""
+        self._c.check_project(project)
+        data = await self._backend.archive(project, ref)
+        if len(data) > MAX_ARCHIVE_BYTES:
+            raise ConstraintError(f"repo quá lớn ({len(data)} byte) để tải về worker")
+        return {
+            "project": project,
+            "ref": ref,
+            "format": "tar.gz",
+            "size": len(data),
+            "data": base64.b64encode(data).decode("ascii"),
         }
 
     async def list_issues(self, project: str, labels: list[str]) -> dict[str, Any]:

@@ -20,7 +20,7 @@ from aico.orchestrator import (
     StaticPlanner,
     build_fix_ticket,
 )
-from aico.orchestrator.ports import Planner
+from aico.orchestrator.ports import Coder, Planner
 from aico.registry import Company
 from aico.tickets import InMemoryTicketStore, TicketStore
 from aico.tools import Guard, McpToolClient, ToolClient, ToolGateway
@@ -28,7 +28,7 @@ from mcp_gitlab.backend import FakeGitLabBackend
 from mcp_gitlab.server import build_server
 from mcp_gitlab.tools import Constraints, GitLabTools
 
-PROJECT = "group/pilot-repo"
+PROJECT = "VX-Anh/aico-office"
 
 
 @dataclass
@@ -64,6 +64,7 @@ def make_harness(
     lease_seconds: float = 30,
     wrap_client: Callable[[ToolClient], ToolClient] | None = None,
     planner: Callable[[ToolGateway], Planner] | None = None,
+    coder: Callable[[ToolGateway], Coder] | None = None,
 ) -> Harness:
     tickets = tickets or InMemoryTicketStore()
     approvals = approvals or InMemoryApprovalStore()
@@ -88,7 +89,7 @@ def make_harness(
         gateway=gateway,
         triage=RuleTriage(company.policy, sop.department),
         planner=planner(gateway) if planner is not None else StaticPlanner(),
-        coder=ScriptedCoder(),
+        coder=coder(gateway) if coder is not None else ScriptedCoder(),
         reviewer=reviewer,
         default_project=PROJECT,
     )

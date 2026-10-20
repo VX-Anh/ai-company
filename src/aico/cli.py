@@ -65,9 +65,18 @@ async def _serve(settings: Settings) -> None:
                 log_level="info",
             )
         )
+        bridge = uvicorn.Server(
+            uvicorn.Config(
+                c.bridge_app,
+                host=settings.bridge_host,
+                port=settings.bridge_port,
+                log_level="info",
+            )
+        )
         tasks = [
             asyncio.create_task(api.serve(), name="api"),
             asyncio.create_task(relay.serve(), name="relay"),
+            asyncio.create_task(bridge.serve(), name="bridge"),
             asyncio.create_task(c.runner.run_forever(), name="runner"),
             asyncio.create_task(_deadlines(c), name="deadlines"),
         ]
@@ -76,12 +85,15 @@ async def _serve(settings: Settings) -> None:
                 asyncio.create_task(c.poller.run_forever(settings.poll_seconds), name="intake")
             )
         log.info(
-            "aico chạy: API %s:%d, relay %s:%d, runner %s",
+            "aico chạy: API %s:%d, relay %s:%d, tool bridge %s:%d, runner %s, planner %s",
             settings.api_host,
             settings.api_port,
             settings.relay_host,
             settings.relay_port,
+            settings.bridge_host,
+            settings.bridge_port,
             c.runner.owner,
+            settings.planner,
         )
         try:
             done, _ = await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)

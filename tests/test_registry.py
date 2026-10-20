@@ -17,7 +17,7 @@ def _edit(path: Path, **changes: object) -> None:
 
 def test_sample_company_loads(company: Company) -> None:
     coder = company.role("coder")
-    assert coder.worker == "openhands"
+    assert coder.worker == "cli" and coder.workers == ("claude", "codex", "cursor")
     assert coder.max_risk is ActionLevel.L2
     grant = coder.grant_for("gitlab")
     assert grant is not None

@@ -10,7 +10,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass
 from datetime import timedelta
-from typing import Any
+from typing import Any, Protocol
 
 import httpx
 import openai
@@ -24,6 +24,7 @@ from aico.llm_relay import TaskTokens
 from aico.orchestrator.ports import BudgetExhausted
 from aico.registry import Company
 from aico.tools import ApprovalRequired, ToolDenied, ToolError, ToolGateway, ToolSpec
+from aico.tools.gateway import without_images
 
 
 @dataclass(frozen=True)
@@ -43,7 +44,7 @@ def _gateway_tool(gateway: ToolGateway, role_id: str, ticket_id: str, spec: Tool
             return json.dumps({"error": f"bị từ chối: {exc}"}, ensure_ascii=False)
         except ToolError as exc:
             return json.dumps({"error": str(exc)}, ensure_ascii=False)
-        return json.dumps(result, ensure_ascii=False, default=str)
+        return json.dumps(without_images(result), ensure_ascii=False, default=str)
 
     return StructuredTool.from_function(
         coroutine=run,
@@ -86,8 +87,8 @@ class LlmAgentRunner:
 
     async def run(self, role_id: str, ticket: Ticket, instruction: str) -> str:
         role = self._company.role(role_id)
-        if role.worker != "llm" or role.model is None:
-            raise ValueError(f"vai trò '{role_id}' không phải LlmAgent")
+        if role.worker not in ("llm", "cli") or role.model is None:
+            raise ValueError(f"vai trò '{role_id}' không có model để gọi qua relay")
         ttl = timedelta(minutes=role.limits.timeout_minutes)
         token = self._tokens.issue(ticket.id, role_id, ttl=ttl)
         try:
@@ -128,10 +129,16 @@ def ticket_block(ticket: Ticket) -> str:
     )
 
 
+class AgentRunner(Protocol):
+    """LlmAgentRunner (API qua model relay) hoặc CliAgentRunner (worker subscription)."""
+
+    async def run(self, role_id: str, ticket: Ticket, instruction: str) -> str: ...
+
+
 class LlmPlanner:
     """Tech Lead thật: đọc code qua tool read_file rồi viết kế hoạch."""
 
-    def __init__(self, runner: LlmAgentRunner, role_id: str = "tech_lead") -> None:
+    def __init__(self, runner: AgentRunner, role_id: str = "tech_lead") -> None:
         self._runner = runner
         self._role = role_id
 

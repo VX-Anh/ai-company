@@ -8,7 +8,7 @@ tools:
   - server: gitlab
     allow: [read_file, get_merge_request]
     constraints:
-      repos: [group/pilot-repo]
+      repos: [VX-Anh/aico-office]
 max_risk: L0
 budget:
   per_ticket_usd: 1

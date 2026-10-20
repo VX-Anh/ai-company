@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import base64
+import io
+import tarfile
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 from urllib.parse import quote
@@ -18,6 +20,10 @@ class GitLabError(RuntimeError):
 
 class GitLabBackend(Protocol):
     async def get_file(self, project: str, path: str, ref: str) -> str: ...
+
+    async def archive(self, project: str, ref: str) -> bytes:
+        """Mã nguồn tại ref dạng tar.gz (một thư mục gốc)."""
+        ...
 
     async def branch_exists(self, project: str, branch: str) -> bool: ...
 
@@ -74,6 +80,13 @@ class HttpGitLabBackend:
             params={"ref": ref},
         )
         return base64.b64decode(data["content"]).decode("utf-8")
+
+    async def archive(self, project: str, ref: str) -> bytes:
+        path = f"/projects/{_pid(project)}/repository/archive.tar.gz"
+        resp = await self._client.get(self._api + path, params={"sha": ref})
+        if resp.status_code >= 400:
+            raise GitLabError(f"GitLab GET {path}: {resp.status_code}", resp.status_code)
+        return resp.content
 
     async def branch_exists(self, project: str, branch: str) -> bool:
         try:
@@ -177,6 +190,20 @@ class FakeGitLabBackend:
             return self.project(project).files[ref][path]
         except KeyError:
             raise GitLabError(f"không có file {path}@{ref}", 404) from None
+
+    async def archive(self, project: str, ref: str) -> bytes:
+        self.calls.append("archive")
+        files = self.project(project).files.get(ref)
+        if files is None:
+            raise GitLabError(f"không có ref {ref}", 404)
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+            for path, content in files.items():
+                data = content.encode("utf-8")
+                info = tarfile.TarInfo(f"{project.replace('/', '-')}-{ref}/{path}")
+                info.size = len(data)
+                tar.addfile(info, io.BytesIO(data))
+        return buf.getvalue()
 
     async def branch_exists(self, project: str, branch: str) -> bool:
         return branch in self.project(project).files

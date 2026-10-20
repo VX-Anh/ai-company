@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -18,11 +18,18 @@ def _list(name: str) -> tuple[str, ...]:
     return tuple(p.strip() for p in os.environ.get(name, "").split(",") if p.strip())
 
 
+def _mapping(name: str) -> dict[str, str]:
+    """`a=url1,b=url2` -> {a: url1, b: url2}."""
+    pairs = (p.split("=", 1) for p in _list(name) if "=" in p)
+    return {k.strip(): v.strip() for k, v in pairs}
+
+
 @dataclass(frozen=True)
 class Settings:
     database_url: str
     company_dir: Path = Path("company")
     mcp_gitlab_url: str = "http://127.0.0.1:8101/mcp"
+    mcp_pixel_url: str | None = None  # Pixelbolt (pixel art); không đặt thì không có tool pixel
     upstream_llm_url: str = "http://127.0.0.1:20128/v1"
     upstream_llm_key: str | None = None
     api_host: str = "127.0.0.1"
@@ -36,7 +43,15 @@ class Settings:
     poll_seconds: float = 60
     lease_seconds: float = 60
     default_project: str | None = None
-    planner: str = "static"  # static | llm
+    planner: str = "static"  # static | llm | cli
+    coder: str = "static"  # static (ScriptedCoder) | cli
+    # Worker CLI subscription: tên -> URL worker server; token chung giữa aico và worker.
+    workers: dict[str, str] = field(default_factory=dict)
+    worker_token: str | None = None
+    bridge_host: str = "127.0.0.1"
+    bridge_port: int = 8300
+    bridge_url: str = "http://127.0.0.1:8300/mcp"  # địa chỉ worker dùng để gọi tool bridge
+    cors_origins: tuple[str, ...] = ()  # GUI web, ví dụ http://localhost:5173
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -45,6 +60,7 @@ class Settings:
             database_url=env["AICO_DATABASE_URL"],
             company_dir=Path(env.get("AICO_COMPANY_DIR", "company")),
             mcp_gitlab_url=env.get("AICO_MCP_GITLAB_URL", cls.mcp_gitlab_url),
+            mcp_pixel_url=env.get("AICO_MCP_PIXEL_URL") or None,
             upstream_llm_url=env.get("AICO_UPSTREAM_LLM_URL", cls.upstream_llm_url),
             upstream_llm_key=_secret("AICO_UPSTREAM_LLM_KEY_FILE"),
             api_host=env.get("AICO_API_HOST", cls.api_host),
@@ -59,4 +75,11 @@ class Settings:
             lease_seconds=float(env.get("AICO_LEASE_SECONDS", cls.lease_seconds)),
             default_project=env.get("AICO_DEFAULT_PROJECT"),
             planner=env.get("AICO_PLANNER", cls.planner),
+            coder=env.get("AICO_CODER", cls.coder),
+            workers=_mapping("AICO_WORKERS"),
+            worker_token=_secret("AICO_WORKER_TOKEN_FILE"),
+            bridge_host=env.get("AICO_BRIDGE_HOST", cls.bridge_host),
+            bridge_port=int(env.get("AICO_BRIDGE_PORT", cls.bridge_port)),
+            bridge_url=env.get("AICO_BRIDGE_URL", cls.bridge_url),
+            cors_origins=_list("AICO_CORS_ORIGINS"),
         )

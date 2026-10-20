@@ -120,6 +120,7 @@ async def test_tools_for_hides_l3_and_ungranted(company: Company) -> None:
     coder = {s.name for s in await h.gateway.tools_for("coder")}
     assert coder == {
         "read_file",
+        "download_archive",
         "create_branch",
         "push",
         "open_merge_request",

@@ -2,6 +2,8 @@
 
 Biến môi trường:
 - GITLAB_FAKE=1: dùng GitLab giả trong bộ nhớ để chạy thử
+- GIT_PROVIDER: gitlab (mặc định) hoặc github; GITHUB_API_URL cho GitHub Enterprise.
+  Với GitHub, project là "owner/repo", MR là pull request; token đọc từ GITLAB_TOKEN_FILE.
 - GITLAB_URL, GITLAB_TOKEN_FILE (token của bot Developer), GITLAB_MERGE_TOKEN_FILE (merge bot)
 - GITLAB_ALLOWED_PROJECTS (phân tách bằng dấu phẩy), GITLAB_BRANCH_PATTERN (mặc định ai/*)
 - GITLAB_ALLOWED_TARGETS (mặc định main)
@@ -12,14 +14,28 @@ Biến môi trường:
 from __future__ import annotations
 
 import os
+from collections.abc import Awaitable
 from pathlib import Path
 from typing import Any
 
 import httpx
 from mcp.server.mcpserver import MCPServer
+from mcp.server.mcpserver.exceptions import ToolError
 
-from mcp_gitlab.backend import FakeGitLabBackend, GitLabBackend, HttpGitLabBackend
-from mcp_gitlab.tools import ApprovalVerifier, Constraints, GitLabTools
+from mcp_gitlab.backend import FakeGitLabBackend, GitLabBackend, GitLabError, HttpGitLabBackend
+from mcp_gitlab.github import HttpGitHubBackend
+from mcp_gitlab.tools import ApprovalVerifier, ConstraintError, Constraints, GitLabTools
+
+
+async def _anticipated(call: Awaitable[dict[str, Any]]) -> dict[str, Any]:
+    """Lỗi đã lường trước (404, sai ràng buộc...) trả nguyên văn cho agent đọc.
+
+    Exception khác bị MCP SDK che thành "Error executing tool <name>".
+    """
+    try:
+        return await call
+    except (GitLabError, ConstraintError, ValueError) as exc:
+        raise ToolError(str(exc)) from exc
 
 
 def build_server(tools: GitLabTools) -> MCPServer:
@@ -27,15 +43,19 @@ def build_server(tools: GitLabTools) -> MCPServer:
 
     @server.tool(description="Đọc nội dung một file tại ref.")
     async def read_file(project: str, path: str, ref: str = "main") -> dict[str, Any]:
-        return await tools.read_file(project, path, ref)
+        return await _anticipated(tools.read_file(project, path, ref))
+
+    @server.tool(description="Tải mã nguồn tại ref (tar.gz, base64) cho worker sửa code.")
+    async def download_archive(project: str, ref: str = "main") -> dict[str, Any]:
+        return await _anticipated(tools.download_archive(project, ref))
 
     @server.tool(description="Liệt kê issue đang mở có đủ các nhãn.")
     async def list_issues(project: str, labels: list[str]) -> dict[str, Any]:
-        return await tools.list_issues(project, labels)
+        return await _anticipated(tools.list_issues(project, labels))
 
     @server.tool(description="Tạo branch (chỉ branch khớp mẫu cho phép). Idempotent.")
     async def create_branch(project: str, branch: str, ref: str = "main") -> dict[str, Any]:
-        return await tools.create_branch(project, branch, ref)
+        return await _anticipated(tools.create_branch(project, branch, ref))
 
     @server.tool(description="Commit các file lên branch. Idempotent theo idempotency_key.")
     async def push(
@@ -45,7 +65,9 @@ def build_server(tools: GitLabTools) -> MCPServer:
         files: list[dict[str, Any]],
         idempotency_key: str,
     ) -> dict[str, Any]:
-        return await tools.push(project, branch, commit_message, files, idempotency_key)
+        return await _anticipated(
+            tools.push(project, branch, commit_message, files, idempotency_key)
+        )
 
     @server.tool(description="Mở merge request. Idempotent theo source_branch.")
     async def open_merge_request(
@@ -55,17 +77,17 @@ def build_server(tools: GitLabTools) -> MCPServer:
         description: str = "",
         target_branch: str = "main",
     ) -> dict[str, Any]:
-        return await tools.open_merge_request(
-            project, source_branch, title, description, target_branch
+        return await _anticipated(
+            tools.open_merge_request(project, source_branch, title, description, target_branch)
         )
 
     @server.tool(description="Xem trạng thái merge request.")
     async def get_merge_request(project: str, mr_iid: int) -> dict[str, Any]:
-        return await tools.get_merge_request(project, mr_iid)
+        return await _anticipated(tools.get_merge_request(project, mr_iid))
 
     @server.tool(description="Merge MR. Chỉ chạy khi approval_id là bản ghi duyệt hợp lệ.")
     async def merge_mr(project: str, mr_iid: int, approval_id: str) -> dict[str, Any]:
-        return await tools.merge_mr(project, mr_iid, approval_id)
+        return await _anticipated(tools.merge_mr(project, mr_iid, approval_id))
 
     return server
 
@@ -106,9 +128,18 @@ def main() -> None:
         token = _read_secret("GITLAB_TOKEN_FILE")
         if not token:
             raise SystemExit("thiếu GITLAB_TOKEN_FILE")
-        backend = HttpGitLabBackend(
-            os.environ["GITLAB_URL"], token, merge_token=_read_secret("GITLAB_MERGE_TOKEN_FILE")
-        )
+        merge_token = _read_secret("GITLAB_MERGE_TOKEN_FILE")
+        provider = os.environ.get("GIT_PROVIDER", "gitlab")
+        if provider == "github":
+            backend = HttpGitHubBackend(
+                token,
+                merge_token=merge_token,
+                api_url=os.environ.get("GITHUB_API_URL") or "https://api.github.com",
+            )
+        elif provider == "gitlab":
+            backend = HttpGitLabBackend(os.environ["GITLAB_URL"], token, merge_token=merge_token)
+        else:
+            raise SystemExit(f"GIT_PROVIDER không hỗ trợ: {provider}")
     constraints = Constraints(
         allowed_projects=projects,
         branch_pattern=os.environ.get("GITLAB_BRANCH_PATTERN", "ai/*"),

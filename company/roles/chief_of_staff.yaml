@@ -1,7 +1,7 @@
 id: chief_of_staff
 department: office
 worker: llm
-model: planner-model            # tên model hoặc combo khai báo trên 9router
+model: planner-model            # tên model (dùng khi gọi API qua model relay)
 prompt: prompts/chief_of_staff.md
 max_risk: L0
 budget:

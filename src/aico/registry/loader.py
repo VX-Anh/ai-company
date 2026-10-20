@@ -117,6 +117,8 @@ def _cross_check(
             problems.append(f"{where}: reports_to '{role.reports_to}' không tồn tại")
         if role.worker in ("llm", "openhands") and not role.models():
             problems.append(f"{where}: worker '{role.worker}' cần khai báo model")
+        if role.worker == "cli" and not role.workers:
+            problems.append(f"{where}: worker 'cli' cần khai báo danh sách workers")
         if role.prompt is not None and not (root / role.prompt).is_file():
             problems.append(f"{where}: không tìm thấy prompt '{role.prompt}'")
         for grant in role.tools:

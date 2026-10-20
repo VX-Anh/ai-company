@@ -1,6 +1,6 @@
 # AI Company OS (`aico`)
 
-Công ty agent khai báo bằng cấu hình: phòng ban, vai trò, SOP và quyền hạn nằm trong `company/`; LangGraph chạy SOP, mọi tool đi qua guard và MCP server, mọi lời gọi model đi qua model relay tới 9router. Thiết kế đầy đủ, kế hoạch và sơ đồ ở [`document/`](document/README.md).
+Công ty agent khai báo bằng cấu hình: phòng ban, vai trò, SOP và quyền hạn nằm trong `company/`; LangGraph chạy SOP, mọi tool đi qua guard và MCP server, việc của agent giao cho worker là CLI chính thức của từng subscription (Claude Code, Codex, Cursor), chạy headless trên máy cá nhân. Không dùng proxy biến token subscription thành API. Thiết kế đầy đủ, kế hoạch và sơ đồ ở [`document/`](document/README.md).
 
 ## Trạng thái: GĐ0 · Nền móng
 
@@ -43,20 +43,35 @@ aico serve                    API (127.0.0.1:8000), model relay (127.0.0.1:8200)
 mcp-gitlab                    MCP server GitLab (Streamable HTTP, /mcp)
 ```
 
-Biến môi trường chính: `AICO_PLANNER` (`static` hoặc `llm`), `AICO_DATABASE_URL`, `AICO_COMPANY_DIR`, `AICO_MCP_GITLAB_URL`, `AICO_UPSTREAM_LLM_URL` (9router), `AICO_UPSTREAM_LLM_KEY_FILE`, `AICO_API_TOKEN_FILE`, `AICO_INTERNAL_TOKEN_FILE`, `AICO_INTAKE_PROJECTS`. Secret luôn đọc từ file. Xem `src/aico/settings.py` và `mcp_servers/gitlab/src/mcp_gitlab/server.py`.
+Biến môi trường chính: `AICO_PLANNER` (`static` hoặc `llm`), `AICO_DATABASE_URL`, `AICO_COMPANY_DIR`, `AICO_MCP_GITLAB_URL`, `AICO_UPSTREAM_LLM_URL` và `AICO_UPSTREAM_LLM_KEY_FILE` (API trả theo lượng dùng, nếu có), `AICO_API_TOKEN_FILE`, `AICO_INTERNAL_TOKEN_FILE`, `AICO_INTAKE_PROJECTS`. Secret luôn đọc từ file. Xem `src/aico/settings.py` và `mcp_servers/gitlab/src/mcp_gitlab/server.py`.
 
 ## Chạy bằng Docker Compose (sau khi có WSL2 + Docker)
 
 ```bash
 cd deploy
 cp .env.example .env                       # điền mật khẩu, repo pilot
-for s in gitlab_token gitlab_merge_token ninerouter_key aico_api_token aico_internal_token; do
+for s in gitlab_token gitlab_merge_token aico_api_token aico_internal_token worker_token; do
   [ -f secrets/$s ] || openssl rand -hex 24 > secrets/$s   # token GitLab thật thì ghi đè
 done
+sudo groupadd -g 10100 aico-secrets && sudo usermod -aG aico-secrets $USER
+chgrp 10100 secrets/* && chmod 640 secrets/*   # chỉ container aico, mcp-gitlab đọc được
 docker compose up -d --build
+# Đăng nhập mỗi worker một lần (credential nằm trong volume riêng của worker đó):
+docker compose exec -it worker-claude claude          # rồi gõ /login
+docker compose exec -it worker-codex codex login --device-auth
+docker compose exec -it worker-cursor cursor-agent login
 ```
 
-`GITLAB_FAKE=1` trong `.env` cho phép chạy thử toàn luồng mà chưa cần GitLab thật. Dashboard 9router ở `http://127.0.0.1:20128` (đổi mật khẩu mặc định, tạo API key rồi ghi vào `secrets/ninerouter_key`).
+`GITLAB_FAKE=1` trong `.env` cho phép chạy thử toàn luồng mà chưa cần GitLab thật.
+
+## MCP server cho agent
+
+| Server | Tool | Ghi chú |
+| --- | --- | --- |
+| `gitlab` (`mcp-gitlab`) | `read_file`, `list_issues`, `create_branch`, `push`, `open_merge_request`, `get_merge_request`, `merge_mr` | GitHub hoặc GitLab theo `GIT_PROVIDER`; giữ token, tự kiểm tra repo/branch/bản ghi duyệt |
+| `pixel` (`mcp-pixel`) | `pixel_help`, `pixel_validate`, `pixel_inspect`, `pixel_patch`, `pixel_render`, `pixel_compile`, `pixel_scene`, `pixel_import` | [Pixelbolt](https://github.com/skulitom/Pixelbolt) v0.9.0 (trước là PixelForge, MIT, offline) sau cầu nối stdio -> HTTP; vẽ pixel art từ công thức JSON, file ra volume `pixel-data` |
+
+Agent chỉ gọi tool qua tool bridge của aico, nên mọi lời gọi đi qua guard (quyền theo `company/roles/*.yaml`, mức theo `company/policies/default.yaml`) và audit. Ảnh trả về (bản xem trước của Pixelbolt) được chuyển tiếp cho worker nhưng không ghi vào audit.
 
 ## REST API
 

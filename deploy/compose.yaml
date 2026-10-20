@@ -42,17 +42,25 @@ services:
       AICO_API_HOST: 0.0.0.0
       AICO_RELAY_HOST: 0.0.0.0
       AICO_MCP_GITLAB_URL: http://mcp-gitlab:8101/mcp
-      AICO_UPSTREAM_LLM_URL: http://9router:20128/v1
-      AICO_UPSTREAM_LLM_KEY_FILE: /run/secrets/ninerouter_key
+      AICO_MCP_PIXEL_URL: http://mcp-pixel:8102/mcp
       AICO_API_TOKEN_FILE: /run/secrets/aico_api_token
       AICO_INTERNAL_TOKEN_FILE: /run/secrets/aico_internal_token
       AICO_INTAKE_PROJECTS: ${GITLAB_PROJECTS:-}
       AICO_DEFAULT_PROJECT: ${AICO_DEFAULT_PROJECT:-}
-    secrets: [ninerouter_key, aico_api_token, aico_internal_token]
+      AICO_PLANNER: ${AICO_PLANNER:-cli}
+      AICO_CODER: ${AICO_CODER:-cli}
+      AICO_WORKERS: claude=http://worker-claude:8400,codex=http://worker-codex:8400,cursor=http://worker-cursor:8400
+      AICO_WORKER_TOKEN_FILE: /run/secrets/worker_token
+      AICO_BRIDGE_HOST: 0.0.0.0
+      AICO_BRIDGE_URL: http://aico:8300/mcp   # worker gọi tool qua đây (mạng workers)
+      # GUI web (aico-office) gọi API từ trình duyệt
+      AICO_CORS_ORIGINS: ${AICO_CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+    secrets: [aico_api_token, aico_internal_token, worker_token]
+    group_add: ["${SECRETS_GID:-10100}"]  # file secret mode 640, nhóm SECRETS_GID
     ports:
       - "127.0.0.1:8000:8000"   # API và console chỉ mở cho máy này
     # GĐ1: relay tách thành service riêng trên mạng `sandbox`; không nối aico vào mạng đó.
-    networks: [core]
+    networks: [core, workers]
     depends_on:
       migrate: {condition: service_completed_successfully}
       mcp-gitlab: {condition: service_started}
@@ -64,6 +72,8 @@ services:
       dockerfile: deploy/docker/mcp-gitlab.Dockerfile
     environment:
       GITLAB_FAKE: ${GITLAB_FAKE:-0}
+      GIT_PROVIDER: ${GIT_PROVIDER:-github}   # github | gitlab
+      GITHUB_API_URL: ${GITHUB_API_URL:-}
       GITLAB_URL: ${GITLAB_URL:-}
       GITLAB_TOKEN_FILE: /run/secrets/gitlab_token
       GITLAB_MERGE_TOKEN_FILE: /run/secrets/gitlab_merge_token
@@ -71,35 +81,77 @@ services:
       APPROVAL_VERIFY_URL: http://aico:8000/internal/approvals
       APPROVAL_VERIFY_TOKEN_FILE: /run/secrets/aico_internal_token
     secrets: [gitlab_token, gitlab_merge_token, aico_internal_token]
+    group_add: ["${SECRETS_GID:-10100}"]
     networks: [core]
     restart: unless-stopped
 
-  9router:
-    # TODO: pin tag cụ thể sau khi chọn phiên bản; không dùng latest lâu dài.
-    image: decolua/9router:latest
-    environment:
-      DATA_DIR: /app/data
-      REQUIRE_API_KEY: "true"
+  # Pixel art: Pixelbolt (MIT, offline) sau cầu nối stdio -> HTTP. Không có secret; chỉ aico
+  # gọi tới (mạng core), agent dùng qua tool bridge nên vẫn qua guard + audit.
+  mcp-pixel:
+    build:
+      context: ..
+      dockerfile: deploy/docker/mcp-pixel.Dockerfile
     volumes:
-      - ninerouter-data:/app/data
-    ports:
-      - "127.0.0.1:20128:20128"  # dashboard 9router chỉ mở cho máy này
+      - pixel-data:/data
     networks: [core]
     restart: unless-stopped
+
+  # Worker: CLI chính thức của từng subscription (Claude Code, Codex, Cursor), mỗi CLI một
+  # container. Credential nằm trong volume home riêng, đăng nhập một lần bằng
+  # `docker compose exec -it worker-<tên> <cli> login`. Chỉ mount worker_token (không có
+  # secret GitLab/DB); dùng tool qua tool bridge của aico bằng token tạm theo task.
+  worker-claude: &worker
+    build:
+      context: ..
+      dockerfile: deploy/docker/worker.Dockerfile
+    image: ai-company/worker:dev
+    environment:
+      WORKER_KIND: claude
+      WORKER_TOKEN_FILE: /run/secrets/worker_token
+      WORKER_SLOTS: ${WORKER_SLOTS:-2}  # số agent con chạy song song trong phòng provider
+    secrets: [worker_token]
+    group_add: ["${SECRETS_GID:-10100}"]
+    volumes:
+      - worker-claude-home:/home/worker
+    networks: [workers]
+    restart: unless-stopped
+
+  worker-codex:
+    <<: *worker
+    environment:
+      WORKER_KIND: codex
+      WORKER_TOKEN_FILE: /run/secrets/worker_token
+      WORKER_SLOTS: ${WORKER_SLOTS:-2}  # số agent con chạy song song trong phòng provider
+    volumes:
+      - worker-codex-home:/home/worker
+
+  worker-cursor:
+    <<: *worker
+    environment:
+      WORKER_KIND: cursor
+      WORKER_TOKEN_FILE: /run/secrets/worker_token
+      WORKER_SLOTS: ${WORKER_SLOTS:-2}  # số agent con chạy song song trong phòng provider
+    volumes:
+      - worker-cursor-home:/home/worker
 
 networks:
   core: {}
+  # Worker cần Internet để gọi Anthropic/OpenAI/Cursor; tách khỏi mạng core (DB, MCP).
+  workers: {}
   # GĐ1: sandbox OpenHands và model relay; không có đường ra Internet.
   sandbox:
     internal: true
 
 volumes:
   pgdata: {}
-  ninerouter-data: {}
+  worker-claude-home: {}
+  worker-codex-home: {}
+  worker-cursor-home: {}
+  pixel-data: {}
 
 secrets:
   gitlab_token: {file: ./secrets/gitlab_token}
   gitlab_merge_token: {file: ./secrets/gitlab_merge_token}
-  ninerouter_key: {file: ./secrets/ninerouter_key}
   aico_api_token: {file: ./secrets/aico_api_token}
+  worker_token: {file: ./secrets/worker_token}
   aico_internal_token: {file: ./secrets/aico_internal_token}

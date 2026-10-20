@@ -1,14 +1,24 @@
 # Mức rủi ro của từng tool: L0 đọc, L1 ghi trong sandbox, L2 ghi ra ngoài đảo ngược được, L3 cần người duyệt.
 tool_levels:
   gitlab.read_file: L0
+  gitlab.download_archive: L0
   gitlab.list_issues: L0
   gitlab.get_merge_request: L0
   gitlab.create_branch: L2
   gitlab.push: L2
   gitlab.open_merge_request: L2
   gitlab.merge_mr: L3
+  # Pixelbolt: vẽ pixel art từ công thức JSON, chỉ ghi file trong thư mục output của container
+  pixel.pixel_help: L0
+  pixel.pixel_inspect: L0
+  pixel.pixel_validate: L1
+  pixel.pixel_patch: L1
+  pixel.pixel_render: L1
+  pixel.pixel_compile: L1
+  pixel.pixel_scene: L1
+  pixel.pixel_import: L1
 
-# Giá quy đổi ra USD (giá trị ví dụ). Tuyến subscription trên 9router đặt 0 và giới hạn bằng token.
+# Giá quy đổi ra USD (giá trị ví dụ) cho model gọi qua API. Worker subscription không tính tiền theo token.
 model_prices:
   planner-model: {input_per_mtok: 3, output_per_mtok: 15}
   reviewer-model: {input_per_mtok: 3, output_per_mtok: 15}

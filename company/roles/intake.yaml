@@ -7,5 +7,5 @@ tools:
   - server: gitlab
     allow: [list_issues]
     constraints:
-      repos: [group/pilot-repo]
+      repos: [VX-Anh/aico-office]
 max_risk: L0

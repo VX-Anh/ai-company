@@ -1,14 +1,17 @@
 id: tech_lead
 department: engineering
 reports_to: chief_of_staff
-worker: llm
-model: planner-model
+worker: cli
+# Worker subscription theo thứ tự ưu tiên; bận hoặc lỗi thì chuyển worker sau.
+# TODO: chốt worker nào làm Tech Lead.
+workers: [claude, codex, cursor]
+model: planner-model            # chỉ dùng khi AICO_PLANNER=llm (gọi API qua model relay)
 prompt: prompts/tech_lead.md
 tools:
   - server: gitlab
     allow: [read_file]
     constraints:
-      repos: [group/pilot-repo]
+      repos: [VX-Anh/aico-office]
 max_risk: L0
 budget:
   per_ticket_usd: 1

@@ -48,7 +48,9 @@ class RoleSpec(_Spec):
     id: str = Field(pattern=_ID_PATTERN)
     department: str = Field(pattern=_ID_PATTERN)
     reports_to: str | None = None
-    worker: Literal["llm", "openhands", "system"]
+    worker: Literal["llm", "cli", "openhands", "system"]
+    # worker: cli — các worker subscription (claude, codex, cursor) theo thứ tự ưu tiên.
+    workers: tuple[str, ...] = ()
     model: str | None = None
     allowed_models: tuple[str, ...] = ()
     prompt: str | None = None

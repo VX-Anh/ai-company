@@ -19,7 +19,7 @@ from mcp_gitlab.backend import FakeGitLabBackend
 from mcp_gitlab.server import build_server
 from mcp_gitlab.tools import Constraints, GitLabTools
 
-PROJECT = "group/pilot-repo"
+PROJECT = "VX-Anh/aico-office"
 
 
 def test_check_branch() -> None:

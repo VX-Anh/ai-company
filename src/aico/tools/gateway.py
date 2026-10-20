@@ -9,12 +9,14 @@ from typing import Any, Protocol
 
 from mcp.client.client import Client
 from mcp.server.mcpserver import MCPServer
-from mcp.types import CallToolResult, TextContent
+from mcp.types import CallToolResult, ImageContent, TextContent
 
 from aico.core import ActionLevel
 from aico.governance import AuditEntry, AuditLog, mask_secrets
 from aico.registry import Company
 from aico.tools.guard import Guard, Verdict
+
+IMAGES_KEY = "_images"  # [{mime_type, data(base64)}] trong kết quả tool
 
 
 class ToolError(RuntimeError):
@@ -47,15 +49,35 @@ def _result_to_dict(result: CallToolResult) -> dict[str, Any]:
     texts = [c.text for c in result.content if isinstance(c, TextContent)]
     if result.is_error:
         raise ToolError("; ".join(texts) or "tool trả lỗi")
+    data: dict[str, Any]
     if isinstance(result.structured_content, dict):
-        return result.structured_content
-    if texts:
+        data = dict(result.structured_content)
+    elif texts:
         try:
             parsed = json.loads(texts[0])
         except json.JSONDecodeError:
-            return {"text": "\n".join(texts)}
-        return parsed if isinstance(parsed, dict) else {"result": parsed}
-    return {}
+            parsed = {"text": "\n".join(texts)}
+        data = parsed if isinstance(parsed, dict) else {"result": parsed}
+    else:
+        data = {}
+    # Ảnh (ví dụ bản xem trước của Pixelbolt) giữ lại để tool bridge trả cho worker xem.
+    images = [
+        {"mime_type": c.mime_type, "data": c.data}
+        for c in result.content
+        if isinstance(c, ImageContent)
+    ]
+    if images:
+        data[IMAGES_KEY] = images
+    return data
+
+
+def without_images(result: dict[str, Any]) -> dict[str, Any]:
+    """Bỏ dữ liệu ảnh (base64) khỏi kết quả, chỉ ghi số ảnh: cho audit và model chỉ đọc chữ."""
+    if IMAGES_KEY not in result:
+        return result
+    return {k: v for k, v in result.items() if k != IMAGES_KEY} | {
+        "images": len(result[IMAGES_KEY])
+    }
 
 
 class McpToolClient:
@@ -85,7 +107,7 @@ class McpToolClient:
 
 
 def _summary(result: dict[str, Any]) -> str:
-    text = json.dumps(mask_secrets(result), ensure_ascii=False, default=str)
+    text = json.dumps(mask_secrets(without_images(result)), ensure_ascii=False, default=str)
     return text if len(text) <= 300 else text[:300] + "…"
 
 

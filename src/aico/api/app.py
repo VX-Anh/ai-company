@@ -6,10 +6,12 @@ Chỉ bind 127.0.0.1. Endpoint /internal chỉ dành cho MCP server, cần token
 from __future__ import annotations
 
 import secrets
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from aico.core import Decision, Event, Ticket, TicketStatus
@@ -36,6 +38,9 @@ class ApiDeps:
     api_token: str | None = None
     internal_token: str | None = None
     default_project: str | None = None
+    # Trạng thái worker cho GUI; None khi không dùng worker CLI.
+    workers: Callable[[], Awaitable[list[dict[str, Any]]]] | None = None
+    cors_origins: tuple[str, ...] = ()  # origin của GUI web được gọi API từ trình duyệt
 
 
 class CreateTicket(BaseModel):
@@ -68,6 +73,13 @@ def _bearer_ok(authorization: str | None, expected: str | None) -> bool:
 
 def create_api_app(deps: ApiDeps) -> FastAPI:
     app = FastAPI(title="AI Company OS")
+    if deps.cors_origins:
+        app.add_middleware(
+            CORSMiddleware,
+            allow_origins=list(deps.cors_origins),
+            allow_methods=["GET", "POST"],
+            allow_headers=["Authorization", "Content-Type"],
+        )
 
     def require_user(authorization: Annotated[str | None, Header()] = None) -> None:
         if not _bearer_ok(authorization, deps.api_token):
@@ -88,6 +100,10 @@ def create_api_app(deps: ApiDeps) -> FastAPI:
     @app.get("/healthz")
     async def healthz() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.get("/workers", dependencies=user)
+    async def list_workers() -> list[dict[str, Any]]:
+        return await deps.workers() if deps.workers is not None else []
 
     @app.post("/tickets", status_code=201, dependencies=user)
     async def create_ticket(body: CreateTicket) -> Ticket:

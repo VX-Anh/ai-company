@@ -12,3 +12,6 @@ build/
 !.env.example
 deploy/secrets/*
 !deploy/secrets/.gitkeep
+
+# thông tin truy cập máy chủ, không đưa lên repo
+.ssh/

@@ -17,7 +17,14 @@ from langgraph.types import interrupt
 
 from aico.core import ApprovalKind, Artifact, Decision, SopSpec, TicketStatus
 from aico.governance import ApprovalStore
-from aico.orchestrator.ports import BudgetExhausted, Coder, Planner, Reviewer, Triage
+from aico.orchestrator.ports import (
+    AgentUnavailable,
+    BudgetExhausted,
+    Coder,
+    Planner,
+    Reviewer,
+    Triage,
+)
 from aico.orchestrator.state import TicketState
 from aico.tickets import TicketStore
 from aico.tools import ToolError, ToolGateway
@@ -93,6 +100,8 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             text = await deps.planner.plan(ticket, s.get("plan_feedback") or None)
         except BudgetExhausted as exc:
             return {"escalation_reason": f"lập kế hoạch hết ngân sách: {exc}"}
+        except AgentUnavailable as exc:
+            return {"escalation_reason": f"lập kế hoạch: không worker nào làm được: {exc}"}
         return {"plan": text, "plan_rounds": s.get("plan_rounds", 0) + 1}
 
     async def approve_plan(s: TicketState) -> dict[str, Any]:
@@ -127,7 +136,12 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         branch = f"ai/{tid}"
         ticket = await deps.tickets.get(tid)
         feedback = s.get("review_notes") or s.get("merge_error") or None
-        result = await deps.coder.code(ticket, s.get("plan", ""), feedback)
+        try:
+            result = await deps.coder.code(ticket, s.get("plan", ""), feedback)
+        except BudgetExhausted as exc:
+            return {"escalation_reason": f"viết code hết ngân sách: {exc}"}
+        except AgentUnavailable as exc:
+            return {"escalation_reason": f"viết code: {exc}"}
 
         await deps.gateway.call(
             role,
@@ -266,6 +280,9 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             return "escalate"
         return "code" if s["risk"] == "low" else "approve_plan"
 
+    def route_code(s: TicketState) -> str:
+        return "escalate" if s.get("escalation_reason") else "review"
+
     def route_plan_approval(s: TicketState) -> str:
         if s["plan_decision"] == Decision.APPROVED:
             return "code"
@@ -310,7 +327,7 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
     g.add_edge("triage", "plan")
     g.add_conditional_edges("plan", route_plan, ["code", "approve_plan", "escalate"])
     g.add_conditional_edges("approve_plan", route_plan_approval, ["code", "plan", "escalate"])
-    g.add_edge("code", "review")
+    g.add_conditional_edges("code", route_code, ["review", "escalate"])
     g.add_conditional_edges("review", route_review, ["approve_merge", "code", "escalate"])
     g.add_conditional_edges("approve_merge", route_merge_approval, ["merge", "code", "escalate"])
     g.add_conditional_edges("merge", route_merge, ["finish", "code", "escalate"])

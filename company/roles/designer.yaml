@@ -1,0 +1,19 @@
+id: designer
+department: engineering
+reports_to: tech_lead
+worker: cli
+# Vẽ sprite, animation pixel cho repo GUI (aico-office) bằng Pixelbolt.
+workers: [claude, codex, cursor]
+prompt: prompts/designer.md
+tools:
+  - server: pixel
+    allow: [pixel_help, pixel_validate, pixel_inspect, pixel_patch, pixel_render,
+            pixel_compile, pixel_scene, pixel_import]
+  - server: gitlab
+    allow: [read_file]
+    constraints:
+      repos: [VX-Anh/aico-office]
+max_risk: L1
+limits:
+  max_iterations: 40
+  timeout_minutes: 30

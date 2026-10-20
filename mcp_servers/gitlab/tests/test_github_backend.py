@@ -1,0 +1,198 @@
+"""GitLabTools chạy trên backend GitHub (API giả bằng MockTransport)."""
+
+from __future__ import annotations
+
+import base64
+import itertools
+import json
+import re
+from typing import Any
+
+import httpx
+import pytest
+from mcp.client.client import Client
+
+from mcp_gitlab.backend import FakeGitLabBackend
+from mcp_gitlab.github import HttpGitHubBackend
+from mcp_gitlab.server import build_server
+from mcp_gitlab.tools import Constraints, GitLabTools
+
+REPO = "acme/pilot"
+
+
+class FakeGitHub:
+    """Đủ API cho luồng: đọc file, branch, commit qua Git Data API, PR, issue, merge."""
+
+    def __init__(self) -> None:
+        ids = itertools.count(1)
+        self.next_sha = lambda: f"{next(ids):040x}"
+        root = self.next_sha()
+        self.commits: dict[str, dict[str, Any]] = {
+            root: {"message": "init", "files": {"README.md": "# pilot\n"}, "parents": []}
+        }
+        self.trees: dict[str, dict[str, str]] = {}
+        self.refs = {"main": root}
+        self.pulls: list[dict[str, Any]] = []
+        self.issues = [
+            {
+                "number": 1,
+                "title": "Lỗi",
+                "body": "chi tiết",
+                "labels": [{"name": "ai-company"}],
+                "html_url": "u1",
+            },
+            {"number": 2, "title": "PR", "labels": [{"name": "ai-company"}], "pull_request": {}},
+        ]
+        self.auth: list[str] = []
+
+    def _files(self, branch: str) -> dict[str, str]:
+        return self.commits[self.refs[branch]]["files"]
+
+    def handler(self, request: httpx.Request) -> httpx.Response:  # noqa: C901
+        self.auth.append(request.headers["authorization"])
+        path = request.url.path.removeprefix(f"/repos/{REPO}")
+        body = json.loads(request.content) if request.content else {}
+        m, p = request.method, path
+        if m == "GET" and (g := re.fullmatch(r"/contents/(.+)", p)):
+            files = self._files(request.url.params["ref"])
+            if g[1] not in files:
+                return httpx.Response(404, json={"message": "Not Found"})
+            content = base64.b64encode(files[g[1]].encode()).decode()
+            return httpx.Response(200, json={"type": "file", "content": content})
+        if m == "GET" and (g := re.fullmatch(r"/git/ref/heads/(.+)", p)):
+            if g[1] not in self.refs:
+                return httpx.Response(404, json={"message": "Not Found"})
+            return httpx.Response(200, json={"object": {"sha": self.refs[g[1]]}})
+        if m == "POST" and p == "/git/refs":
+            self.refs[body["ref"].removeprefix("refs/heads/")] = body["sha"]
+            return httpx.Response(201, json={})
+        if m == "GET" and p == "/commits":
+            sha, out = self.refs[request.url.params["sha"]], []
+            while sha:
+                c = self.commits[sha]
+                out.append({"sha": sha, "commit": {"message": c["message"]}})
+                sha = c["parents"][0] if c["parents"] else None
+            return httpx.Response(200, json=out)
+        if m == "GET" and (g := re.fullmatch(r"/git/commits/(\w+)", p)):
+            tree = f"tree-{g[1]}"
+            self.trees[tree] = dict(self.commits[g[1]]["files"])
+            return httpx.Response(200, json={"tree": {"sha": tree}})
+        if m == "POST" and p == "/git/trees":
+            files = dict(self.trees[body["base_tree"]])
+            for e in body["tree"]:
+                if e.get("sha", "") is None:
+                    files.pop(e["path"], None)
+                else:
+                    files[e["path"]] = e["content"]
+            sha = f"tree-new-{len(self.trees)}"
+            self.trees[sha] = files
+            return httpx.Response(201, json={"sha": sha})
+        if m == "POST" and p == "/git/commits":
+            sha = self.next_sha()
+            self.commits[sha] = {
+                "message": body["message"],
+                "files": self.trees[body["tree"]],
+                "parents": body["parents"],
+            }
+            return httpx.Response(201, json={"sha": sha})
+        if m == "PATCH" and (g := re.fullmatch(r"/git/refs/heads/(.+)", p)):
+            self.refs[g[1]] = body["sha"]
+            return httpx.Response(200, json={})
+        if m == "DELETE" and (g := re.fullmatch(r"/git/refs/heads/(.+)", p)):
+            self.refs.pop(g[1], None)
+            return httpx.Response(204)
+        if m == "GET" and p == "/issues":
+            return httpx.Response(200, json=self.issues)
+        if m == "GET" and p == "/pulls":
+            head = request.url.params["head"].split(":", 1)[1]
+            return httpx.Response(
+                200,
+                json=[
+                    pr for pr in self.pulls if pr["head"]["ref"] == head and pr["state"] == "open"
+                ],
+            )
+        if m == "POST" and p == "/pulls":
+            pr = {
+                "number": len(self.pulls) + 10,
+                "state": "open",
+                "merged": False,
+                "title": body["title"],
+                "body": body["body"],
+                "head": {"ref": body["head"]},
+                "base": {"ref": body["base"]},
+                "html_url": f"https://github.com/{REPO}/pull/{len(self.pulls) + 10}",
+            }
+            self.pulls.append(pr)
+            return httpx.Response(201, json=pr)
+        if (g := re.fullmatch(r"/pulls/(\d+)(/merge)?", p)) and m in ("GET", "PUT"):
+            pr = next(pr for pr in self.pulls if pr["number"] == int(g[1]))
+            if m == "PUT":
+                pr.update(state="closed", merged=True)
+                self.refs[pr["base"]["ref"]] = self.refs[pr["head"]["ref"]]
+                return httpx.Response(200, json={"merged": True})
+            return httpx.Response(200, json=pr)
+        return httpx.Response(500, json={"message": f"fake chưa hỗ trợ {m} {p}"})
+
+
+def _tools(gh: FakeGitHub) -> GitLabTools:
+    backend = HttpGitHubBackend(
+        "dev-token", merge_token="merge-token", transport=httpx.MockTransport(gh.handler)
+    )
+
+    async def verify(approval_id: str, project: str, mr_iid: int) -> tuple[bool, str]:
+        return True, "ok"
+
+    return GitLabTools(backend, Constraints(allowed_projects=(REPO,)), verify)
+
+
+async def test_full_flow_on_github() -> None:
+    gh = FakeGitHub()
+    tools = _tools(gh)
+    assert (await tools.read_file(REPO, "README.md"))["content"] == "# pilot\n"
+    issues = (await tools.list_issues(REPO, ["ai-company"]))["issues"]
+    assert [(i["iid"], i["title"]) for i in issues] == [(1, "Lỗi")]  # PR bị lọc ra
+
+    assert (await tools.create_branch(REPO, "ai/T-1"))["created"]
+    assert not (await tools.create_branch(REPO, "ai/T-1"))["created"]
+    files = [
+        {"path": "README.md", "content": "# pilot\n\n## Cài đặt\n"},
+        {"path": "NOTES.md", "content": "x"},
+    ]
+    first = await tools.push(REPO, "ai/T-1", "Thêm mục cài đặt", files, "T-1:code:1")
+    again = await tools.push(REPO, "ai/T-1", "Thêm mục cài đặt", files, "T-1:code:1")
+    assert first["created"] and not again["created"] and first["commit"] == again["commit"]
+    assert gh._files("ai/T-1")["README.md"].endswith("## Cài đặt\n")  # noqa: SLF001
+    assert "README.md" in gh._files("main")  # noqa: SLF001
+
+    mr = await tools.open_merge_request(REPO, "ai/T-1", "T-1: cài đặt")
+    same = await tools.open_merge_request(REPO, "ai/T-1", "T-1: cài đặt")
+    assert mr["created"] and not same["created"] and mr["iid"] == same["iid"]
+    assert mr["state"] == "opened" and not mr["merged"]
+
+    merged = await tools.merge_mr(REPO, mr["iid"], "A-1")
+    assert merged["merged"] and merged["merged_now"]
+    assert gh._files("main")["NOTES.md"] == "x"  # noqa: SLF001
+    assert "ai/T-1" not in gh.refs  # branch nguồn đã xóa sau merge
+    assert "Bearer merge-token" in gh.auth and gh.auth[0] == "Bearer dev-token"
+
+
+async def test_missing_file_message_reaches_agent() -> None:
+    """Lỗi đã lường trước phải tới được agent, không bị che thành 'Error executing tool'."""
+    gh_tools = _tools(FakeGitHub())
+    gl = FakeGitLabBackend()
+    gl_tools = GitLabTools(gl, Constraints(allowed_projects=("g/p",)))
+    for tools, project in ((gh_tools, REPO), (gl_tools, "g/p")):
+        async with Client(build_server(tools)) as client:
+            result = await client.call_tool("read_file", {"project": project, "path": "nope.py"})
+            text = result.content[0].text  # type: ignore[union-attr]
+            assert result.is_error and ("404" in text or "không có file" in text), text
+            denied = await client.call_tool("read_file", {"project": "evil/x", "path": "a"})
+            assert "không nằm trong danh sách" in denied.content[0].text  # type: ignore[union-attr]
+
+
+def test_project_must_be_owner_repo() -> None:
+    from mcp_gitlab.backend import GitLabError
+    from mcp_gitlab.github import _repo
+
+    with pytest.raises(GitLabError):
+        _repo("group/sub/repo")

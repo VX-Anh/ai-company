@@ -103,11 +103,14 @@ class Runner:
         result = await self._graph.ainvoke(payload, config)
         for item in result.get("__interrupt__", ()):
             value = item.value
+            data = {"kind": value["kind"], "round": value["round"]}
+            if "plan" in value:
+                data["plan"] = value["plan"]  # người duyệt đọc kế hoạch qua /events
             await self._tickets.transition(
                 ticket.id,
                 TicketStatus(value["status"]),
                 actor=self.owner,
-                data={"kind": value["kind"], "round": value["round"]},
+                data=data,
             )
             deadline = utcnow() + timedelta(hours=float(value["deadline_hours"]))
             await self._tickets.update(ticket.id, actor=self.owner, approval_deadline=deadline)

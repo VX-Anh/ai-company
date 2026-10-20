@@ -44,6 +44,10 @@ class BudgetExhausted(Exception):
     """Agent hết ngân sách giữa chừng: ticket dừng và hỏi người, không coi là lỗi."""
 
 
+class AgentUnavailable(Exception):
+    """Không worker nào làm được việc (hết hạn mức subscription, lỗi, bận quá lâu): hỏi người."""
+
+
 class Triage(Protocol):
     async def triage(self, ticket: Ticket) -> TriageResult: ...
 
