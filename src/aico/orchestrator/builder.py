@@ -130,12 +130,16 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
     async def code(s: TicketState) -> dict[str, Any]:
         tid = s["ticket_id"]
         role = deps.role("code")
-        await deps.tickets.transition(tid, S.IN_PROGRESS, actor=role)
         attempt = s.get("code_attempts", 0) + 1
+        feedback = s.get("review_notes") or s.get("merge_error") or None
+        # Góp ý (review cần sửa, người yêu cầu sửa, merge lỗi) hiện trên /events cho người xem.
+        data: dict[str, Any] = {"attempt": attempt}
+        if feedback:
+            data["feedback"] = feedback
+        await deps.tickets.transition(tid, S.IN_PROGRESS, actor=role, data=data)
         project = await project_of(tid)
         branch = f"ai/{tid}"
         ticket = await deps.tickets.get(tid)
-        feedback = s.get("review_notes") or s.get("merge_error") or None
         try:
             result = await deps.coder.code(ticket, s.get("plan", ""), feedback)
         except BudgetExhausted as exc:
@@ -218,6 +222,7 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
                 "ticket_id": s["ticket_id"],
                 "round": round_,
                 "mr_iid": s["mr_iid"],
+                "review_notes": s.get("review_notes", ""),
                 "deadline_hours": limits.approval_deadline_hours,
             }
         )

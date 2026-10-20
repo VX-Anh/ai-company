@@ -492,3 +492,13 @@ async def test_cli_reviewer_requests_changes_then_passes(company: Company) -> No
         ("codex", "reviewer"),
     ]
     assert h.gitlab.project(PROJECT).files["ai/T-1"]["README.md"] == "# pilot v2\n"
+
+    # Ghi chú review hiện trên /events: góp ý khi quay lại Coder, kết luận khi chờ duyệt merge.
+    events = await h.tickets.events("T-1")
+    redo = [e for e in events if e.to_status is TicketStatus.IN_PROGRESS]
+    assert redo[0].data == {"attempt": 1}
+    assert redo[1].data["attempt"] == 2
+    assert "[review bởi codex]" in redo[1].data["feedback"]
+    assert "đè lên chân bàn" in redo[1].data["feedback"]
+    merge = next(e for e in events if e.to_status is TicketStatus.AWAITING_MERGE_APPROVAL)
+    assert merge.data["review_notes"] == "[review bởi codex]\nĐã ổn."
