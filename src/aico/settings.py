@@ -46,6 +46,7 @@ class Settings:
     planner: str = "static"  # static | llm | cli
     coder: str = "static"  # static (ScriptedCoder) | cli
     reviewer: str = "static"  # static (ScriptedReviewer) | cli
+    runner_concurrency: int = 3  # số ticket chạy song song (mỗi vòng runner một ticket)
     # Worker CLI subscription: tên -> URL worker server; token chung giữa aico và worker.
     workers: dict[str, str] = field(default_factory=dict)
     worker_token: str | None = None
@@ -78,6 +79,9 @@ class Settings:
             planner=env.get("AICO_PLANNER", cls.planner),
             coder=env.get("AICO_CODER", cls.coder),
             reviewer=env.get("AICO_REVIEWER", cls.reviewer),
+            runner_concurrency=max(
+                1, int(env.get("AICO_RUNNER_CONCURRENCY", cls.runner_concurrency))
+            ),
             workers=_mapping("AICO_WORKERS"),
             worker_token=_secret("AICO_WORKER_TOKEN_FILE"),
             bridge_host=env.get("AICO_BRIDGE_HOST", cls.bridge_host),

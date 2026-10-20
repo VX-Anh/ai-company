@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import Any, Protocol
+from typing import Any, Protocol, runtime_checkable
 
 from aico.core import PolicySpec, Ticket, TicketRisk
+from aico.orchestrator.workplan import WorkItem
 
 
 @dataclass(frozen=True)
@@ -35,6 +36,29 @@ class CodeResult:
 
 
 @dataclass(frozen=True)
+class ItemResult:
+    """Kết quả một đầu việc trong kế hoạch có cấu trúc."""
+
+    item_id: str
+    title: str
+    status: str  # xong | lỗi | bỏ qua
+    changes: tuple[FileChange, ...] = ()
+    summary: str = ""
+    worker: str = ""
+    error: str = ""
+    rejected: tuple[str, ...] = ()  # file sửa ngoài phạm vi owns, đã bỏ
+
+    def doc_row(self) -> dict[str, Any]:
+        return {
+            "id": self.item_id,
+            "title": self.title,
+            "status": self.status if not self.error else f"{self.status}: {self.error[:120]}",
+            "worker": self.worker,
+            "rejected": list(self.rejected),
+        }
+
+
+@dataclass(frozen=True)
 class ReviewResult:
     passed: bool
     notes: str = ""
@@ -58,6 +82,15 @@ class Planner(Protocol):
 
 class Coder(Protocol):
     async def code(self, ticket: Ticket, plan: str, feedback: str | None) -> CodeResult: ...
+
+
+@runtime_checkable
+class ItemCoder(Protocol):
+    """Coder chạy được nhiều đầu việc song song theo cây phụ thuộc (worker CLI)."""
+
+    async def run_items(
+        self, ticket: Ticket, plan: str, items: list[WorkItem], feedback: str | None
+    ) -> list[ItemResult]: ...
 
 
 class Reviewer(Protocol):

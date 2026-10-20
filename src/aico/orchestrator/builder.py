@@ -10,22 +10,33 @@ Quy ước:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
-from aico.core import ApprovalKind, Artifact, Decision, SopSpec, TicketStatus
+from aico.core import ApprovalKind, Artifact, Decision, SopSpec, Ticket, TicketStatus
 from aico.governance import ApprovalStore
 from aico.orchestrator.ports import (
     AgentUnavailable,
     BudgetExhausted,
     Coder,
+    FileChange,
+    ItemCoder,
     Planner,
     Reviewer,
     Triage,
 )
 from aico.orchestrator.state import TicketState
+from aico.orchestrator.workplan import (
+    ARCHITECTURE_DOC,
+    WorkItem,
+    fix_item,
+    parse_work_plan,
+    plan_doc_path,
+    render_architecture_doc,
+    render_plan_doc,
+)
 from aico.tickets import TicketStore
 from aico.tools import ToolError, ToolGateway
 
@@ -45,6 +56,8 @@ class Deps:
     reviewer: Reviewer
     default_project: str = "group/pilot-repo"
     target_branch: str = "main"
+    # Vai trò được giao đầu việc trong kế hoạch có cấu trúc; phần tử đầu là mặc định.
+    item_roles: tuple[str, ...] = ("coder",)
 
     def role(self, step: str) -> str:
         return self.sop.steps[step]
@@ -102,7 +115,14 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             return {"escalation_reason": f"lập kế hoạch hết ngân sách: {exc}"}
         except AgentUnavailable as exc:
             return {"escalation_reason": f"lập kế hoạch: không worker nào làm được: {exc}"}
-        return {"plan": text, "plan_rounds": s.get("plan_rounds", 0) + 1}
+        work = parse_work_plan(text, deps.item_roles)
+        return {
+            "plan": text,
+            "plan_rounds": s.get("plan_rounds", 0) + 1,
+            "work_items": [item.to_dict() for item in work.items],
+            "architecture": work.architecture or "",
+            "plan_notes": list(work.notes),
+        }
 
     async def approve_plan(s: TicketState) -> dict[str, Any]:
         # Chạy lại từ đầu khi resume: không đặt side effect trước interrupt().
@@ -113,6 +133,7 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
                 "ticket_id": s["ticket_id"],
                 "round": s["plan_rounds"],
                 "plan": s["plan"],
+                "work_items": s.get("work_items", []),
                 "deadline_hours": limits.approval_deadline_hours,
             }
         )
@@ -127,6 +148,118 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         )
         return {"plan_decision": decision.value, "plan_feedback": comment}
 
+    async def file_action(tid: str, project: str, branch: str, path: str) -> str:
+        """create | update cho file docs (GitLab phân biệt hai loại; GitHub thì không)."""
+        try:
+            await deps.gateway.call(
+                deps.role("code"),
+                GITLAB,
+                "read_file",
+                {"project": project, "path": path, "ref": branch},
+                ticket_id=tid,
+            )
+        except ToolError:
+            return "create"
+        return "update"
+
+    async def code_items(
+        s: TicketState,
+        ticket: Ticket,
+        project: str,
+        branch: str,
+        attempt: int,
+        feedback: str | None,
+    ) -> dict[str, Any]:
+        """Chạy các đầu việc song song, mỗi đầu việc một commit, rồi commit tài liệu kế hoạch."""
+        tid = s["ticket_id"]
+        role = deps.role("code")
+        coder = cast(ItemCoder, deps.coder)
+        items = [WorkItem.from_dict(d) for d in s.get("work_items") or []]
+        if not items:
+            items = [WorkItem("W1", "Thực hiện kế hoạch", deps.item_roles[0])]
+        work = [fix_item(feedback)] if feedback else items
+        try:
+            results = await coder.run_items(ticket, s.get("plan", ""), work, feedback)
+        except BudgetExhausted as exc:
+            return {"escalation_reason": f"viết code hết ngân sách: {exc}"}
+        except AgentUnavailable as exc:
+            return {"escalation_reason": f"viết code: {exc}"}
+        produced = [r for r in results if r.changes]
+        if not produced:
+            errors = "; ".join(f"{r.item_id}: {r.error}" for r in results if r.error)
+            return {"escalation_reason": f"viết code: không đầu việc nào sửa được file ({errors})"}
+
+        await deps.gateway.call(
+            role,
+            GITLAB,
+            "create_branch",
+            {"project": project, "branch": branch, "ref": deps.target_branch},
+            ticket_id=tid,
+        )
+        for r in produced:
+            await deps.gateway.call(
+                role,
+                GITLAB,
+                "push",
+                {
+                    "project": project,
+                    "branch": branch,
+                    "commit_message": f"{tid}/{r.item_id}: {r.summary}",
+                    "files": [c.to_arg() for c in r.changes],
+                    "idempotency_key": f"{tid}:code:{attempt}:{r.item_id}",
+                },
+                ticket_id=tid,
+            )
+        doc = render_plan_doc(
+            tid,
+            ticket.title,
+            s.get("plan", ""),
+            [i.to_dict() for i in items],
+            [r.doc_row() for r in results],
+            attempt=attempt,
+            notes=list(s.get("plan_notes") or []),
+        )
+        docs = [(plan_doc_path(tid), doc)]
+        if s.get("architecture"):
+            docs.append((ARCHITECTURE_DOC, render_architecture_doc(s["architecture"], tid)))
+        files = [
+            FileChange(path, content, await file_action(tid, project, branch, path)).to_arg()
+            for path, content in docs
+        ]
+        await deps.gateway.call(
+            role,
+            GITLAB,
+            "push",
+            {
+                "project": project,
+                "branch": branch,
+                "commit_message": f"{tid}: cập nhật tài liệu kế hoạch (lần {attempt})",
+                "files": files,
+                "idempotency_key": f"{tid}:docs:{attempt}",
+            },
+            ticket_id=tid,
+        )
+        mr = await deps.gateway.call(
+            role,
+            GITLAB,
+            "open_merge_request",
+            {
+                "project": project,
+                "source_branch": branch,
+                "target_branch": deps.target_branch,
+                "title": f"{tid}: {ticket.title}",
+                "description": doc,
+            },
+            ticket_id=tid,
+        )
+        await deps.tickets.add_artifact(tid, Artifact(kind="branch", ref=branch), actor=role)
+        await deps.tickets.add_artifact(
+            tid,
+            Artifact(kind="merge_request", ref=f"{project}!{mr['iid']}", url=mr.get("web_url")),
+            actor=role,
+        )
+        return {"code_attempts": attempt, "branch": branch, "mr_iid": mr["iid"], "merge_error": ""}
+
     async def code(s: TicketState) -> dict[str, Any]:
         tid = s["ticket_id"]
         role = deps.role("code")
@@ -140,6 +273,8 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         project = await project_of(tid)
         branch = f"ai/{tid}"
         ticket = await deps.tickets.get(tid)
+        if isinstance(deps.coder, ItemCoder):
+            return await code_items(s, ticket, project, branch, attempt, feedback)
         try:
             result = await deps.coder.code(ticket, s.get("plan", ""), feedback)
         except BudgetExhausted as exc:

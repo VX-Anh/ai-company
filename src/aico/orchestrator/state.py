@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import TypedDict
+from typing import Any, TypedDict
 
 
 class TicketState(TypedDict):
@@ -9,6 +9,9 @@ class TicketState(TypedDict):
     ticket_id: str
     risk: str
     plan: str
+    work_items: list[dict[str, Any]]  # đầu việc đọc từ kế hoạch (WorkItem.to_dict)
+    architecture: str  # sơ đồ Mermaid Tech Lead cập nhật, ghi vào docs/architecture.md
+    plan_notes: list[str]
     plan_rounds: int
     plan_decision: str
     plan_feedback: str

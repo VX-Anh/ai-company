@@ -93,6 +93,7 @@ def make_harness(
         coder=coder(gateway) if coder is not None else ScriptedCoder(),
         reviewer=reviewer_agent(gateway) if reviewer_agent is not None else reviewer,
         default_project=PROJECT,
+        item_roles=("coder", "designer"),
     )
     graph = build_fix_ticket(deps).compile(checkpointer=checkpointer or InMemorySaver())
     runner = Runner(graph, tickets, owner=owner, lease_seconds=lease_seconds)

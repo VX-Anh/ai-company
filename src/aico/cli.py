@@ -77,7 +77,10 @@ async def _serve(settings: Settings) -> None:
             asyncio.create_task(api.serve(), name="api"),
             asyncio.create_task(relay.serve(), name="relay"),
             asyncio.create_task(bridge.serve(), name="bridge"),
-            asyncio.create_task(c.runner.run_forever(), name="runner"),
+            *(
+                asyncio.create_task(r.run_forever(), name=f"runner-{i}")
+                for i, r in enumerate(c.runners)
+            ),
             asyncio.create_task(_deadlines(c), name="deadlines"),
         ]
         if c.poller is not None:
@@ -85,14 +88,14 @@ async def _serve(settings: Settings) -> None:
                 asyncio.create_task(c.poller.run_forever(settings.poll_seconds), name="intake")
             )
         log.info(
-            "aico chạy: API %s:%d, relay %s:%d, tool bridge %s:%d, runner %s, planner %s",
+            "aico chạy: API %s:%d, relay %s:%d, tool bridge %s:%d, %d runner, planner %s",
             settings.api_host,
             settings.api_port,
             settings.relay_host,
             settings.relay_port,
             settings.bridge_host,
             settings.bridge_port,
-            c.runner.owner,
+            len(c.runners),
             settings.planner,
         )
         try:

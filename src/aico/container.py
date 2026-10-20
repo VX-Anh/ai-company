@@ -50,6 +50,8 @@ class Container:
     settings: Settings
     company: Company
     runner: Runner
+    # Nhiều vòng runner, mỗi vòng giữ một ticket: các ticket chạy song song ở các phòng provider.
+    runners: tuple[Runner, ...]
     poller: GitLabIssuePoller | None
     api: ApiDeps
     relay_app: FastAPI
@@ -159,10 +161,15 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             coder=coder,
             reviewer=reviewer,
             default_project=settings.default_project or "group/pilot-repo",
+            item_roles=("coder", "designer"),
         )
         saver = AsyncPostgresSaver(saver_pool)  # type: ignore[arg-type]
         graph = build_fix_ticket(deps).compile(checkpointer=saver)
-        runner = Runner(graph, tickets, lease_seconds=settings.lease_seconds)
+        runners = tuple(
+            Runner(graph, tickets, lease_seconds=settings.lease_seconds)
+            for _ in range(settings.runner_concurrency)
+        )
+        runner = runners[0]
         poller = (
             GitLabIssuePoller(
                 gateway, tickets, settings.intake_projects, label=settings.intake_label
@@ -174,6 +181,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             settings=settings,
             company=company,
             runner=runner,
+            runners=runners,
             poller=poller,
             api=ApiDeps(
                 tickets=tickets,

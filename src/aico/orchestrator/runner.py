@@ -105,7 +105,7 @@ class Runner:
             value = item.value
             data = {"kind": value["kind"], "round": value["round"]}
             # Người duyệt đọc kế hoạch / ghi chú review qua /events.
-            for key in ("plan", "review_notes"):
+            for key in ("plan", "work_items", "review_notes"):
                 if value.get(key):
                     data[key] = value[key]
             await self._tickets.transition(

@@ -392,8 +392,10 @@ async def test_cli_coder_edits_workspace_and_opens_mr(company: Company) -> None:
     assert jobs[0]["workspace"]["ref"] == "main"  # chưa có branch ai/T-1
     files = h.gitlab.project(PROJECT).files["ai/T-1"]
     assert files["README.md"].endswith("## Cài đặt\n") and files["docs/setup.md"] == "npm ci\n"
-    commit = h.gitlab.project(PROJECT).commits["ai/T-1"][-1]["message"]
-    assert commit.startswith("T-1: Thêm hướng dẫn cài đặt vào README")
+    commits = [c["message"] for c in h.gitlab.project(PROJECT).commits["ai/T-1"]]
+    assert commits[-2].startswith("T-1/W1: Thêm hướng dẫn cài đặt vào README")
+    assert commits[-1].startswith("T-1: cập nhật tài liệu kế hoạch (lần 1)")
+    assert "| W1 |" in files["docs/plans/T-1.md"]
     tools = [(e.role, e.tool, e.decision) for e in h.audit.entries if e.role == "coder"]
     assert ("coder", "download_archive", "allow") in tools
     assert ("coder", "open_merge_request", "allow") in tools
