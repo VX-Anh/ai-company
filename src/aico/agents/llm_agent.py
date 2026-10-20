@@ -138,6 +138,7 @@ PLAN_FORMAT = """Kết thúc kế hoạch bằng đúng hai khối code:
 - role: coder (viết code) hoặc designer (vẽ sprite/pixel art bằng tool pixel_*, lưu công thức
   .pixel.json vào repo).
 - owns: các file/thư mục (kết thúc bằng /) đầu việc ĐƯỢC sửa; agent sửa ngoài owns bị bỏ.
+  Không đưa docs/architecture.md và docs/plans/ vào owns: hệ thống tự ghi hai chỗ này.
   Các đầu việc chạy cùng lúc phải có owns KHÔNG chồng nhau.
 - depends_on: đầu việc cần xong trước (ví dụ bước ghép nối sửa file dùng chung như main.ts).
 - Chia sao cho nhiều đầu việc chạy cùng lúc được; việc nhỏ thì chỉ 1 đầu việc. Tối đa 6.

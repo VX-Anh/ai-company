@@ -23,6 +23,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tarfile
 import tempfile
@@ -343,6 +344,120 @@ def collect_changes(repo: Path) -> tuple[list[dict[str, Any]], list[str]]:
     return changes, skipped
 
 
+IDLE_SECONDS = float(os.environ.get("WORKER_IDLE_SECONDS", "360"))
+CHECK_EVERY = 30.0
+MIN_CPU_PROGRESS = 0.5  # giây CPU tối thiểu trong một khoảng kiểm tra để coi là đang làm
+
+
+class AgentStalled(RuntimeError):
+    """Agent không dùng CPU và không đổi file trong IDLE_SECONDS: coi là treo."""
+
+
+def _tree_cpu_seconds(pid: int) -> float | None:
+    """Tổng CPU (user + system) của tiến trình và mọi tiến trình con; None nếu không đọc được."""
+    proc = Path("/proc")
+    if not proc.is_dir():
+        return None
+    children: dict[int, list[int]] = {}
+    cpu: dict[int, float] = {}
+    tick = os.sysconf("SC_CLK_TCK")
+    for entry in proc.iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            stat = (entry / "stat").read_text()
+        except OSError:
+            continue
+        fields = stat.rsplit(")", 1)[1].split()  # bỏ "pid (tên)" vì tên có thể chứa dấu cách
+        child = int(entry.name)
+        children.setdefault(int(fields[1]), []).append(child)
+        cpu[child] = (int(fields[11]) + int(fields[12])) / tick
+    total, stack = 0.0, [pid]
+    while stack:
+        current = stack.pop()
+        total += cpu.get(current, 0.0)
+        stack.extend(children.get(current, []))
+    return total
+
+
+def _latest_mtime(root: Path) -> float:
+    """mtime mới nhất trong thư mục làm việc (không đi sâu vào .git, node_modules)."""
+    latest = root.stat().st_mtime
+    stack = [root]
+    while stack:
+        with contextlib.suppress(OSError), os.scandir(stack.pop()) as entries:
+            for entry in entries:
+                with contextlib.suppress(OSError):
+                    latest = max(latest, entry.stat(follow_symlinks=False).st_mtime)
+                    if entry.is_dir(follow_symlinks=False) and entry.name not in (
+                        ".git",
+                        "node_modules",
+                    ):
+                        stack.append(Path(entry.path))
+    return latest
+
+
+def _terminate(proc: subprocess.Popen[str]) -> None:
+    with contextlib.suppress(OSError):
+        if hasattr(os, "killpg"):
+            os.killpg(proc.pid, signal.SIGTERM)
+        else:
+            proc.terminate()
+    try:
+        proc.wait(timeout=5)
+    except subprocess.TimeoutExpired:
+        with contextlib.suppress(OSError):
+            if hasattr(os, "killpg"):
+                os.killpg(proc.pid, signal.SIGKILL)
+            else:
+                proc.kill()
+
+
+def run_agent(
+    cmd: list[str],
+    cwd: Path,
+    env: dict[str, str],
+    timeout: float,
+    idle_seconds: float = IDLE_SECONDS,
+    check_every: float = CHECK_EVERY,
+) -> tuple[int, str, str]:
+    """Chạy CLI và giám sát: quá timeout -> TimeoutExpired; treo -> AgentStalled.
+
+    Tiến triển = CPU của cây tiến trình tăng hoặc có file trong cwd đổi. Không có tiến triển
+    suốt idle_seconds thì dừng cả nhóm tiến trình.
+    """
+    proc = subprocess.Popen(
+        cmd,
+        cwd=cwd,
+        env=env,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        text=True,
+        start_new_session=True,
+    )
+    started = last_progress = time.monotonic()
+    last_cpu = _tree_cpu_seconds(proc.pid) or 0.0
+    last_mtime = _latest_mtime(cwd)
+    while True:
+        try:
+            stdout, stderr = proc.communicate(timeout=check_every)
+            return proc.returncode, stdout, stderr
+        except subprocess.TimeoutExpired:
+            pass
+        now = time.monotonic()
+        cpu = _tree_cpu_seconds(proc.pid)
+        mtime = _latest_mtime(cwd)
+        if (cpu is not None and cpu - last_cpu >= MIN_CPU_PROGRESS) or mtime > last_mtime:
+            last_progress = now
+        last_cpu, last_mtime = cpu if cpu is not None else last_cpu, max(mtime, last_mtime)
+        if now - started > timeout:
+            _terminate(proc)
+            raise subprocess.TimeoutExpired(cmd, timeout)
+        if now - last_progress > idle_seconds:
+            _terminate(proc)
+            raise AgentStalled(f"agent không hoạt động {int(now - last_progress)} giây (treo)")
+
+
 def run_job(job: dict[str, Any], kind: str) -> dict[str, Any]:
     workdir = Path(tempfile.mkdtemp(prefix="job-"))
     started = time.monotonic()
@@ -353,25 +468,22 @@ def run_job(job: dict[str, Any], kind: str) -> dict[str, Any]:
             extract_workspace(job["workspace"]["data"], repo)
             snapshot_repo(repo)
         cmd, extra_env = build_command(job, kind, workdir, repo)
-        proc = subprocess.run(
+        returncode, stdout, stderr = run_agent(
             cmd,
             cwd=repo or workdir,
             env={**os.environ, **extra_env},
-            capture_output=True,
-            text=True,
             timeout=float(job.get("timeout_seconds", 1800)),
-            check=False,
         )
-        ok, result, usage = parse_output(kind, proc.stdout, workdir)
-        if proc.returncode != 0:
+        ok, result, usage = parse_output(kind, stdout, workdir)
+        if returncode != 0:
             ok = False
-            result = result or proc.stderr[-2000:]
+            result = result or stderr[-2000:]
         out: dict[str, Any] = {
             "ok": ok,
             "result": result if ok else "",
-            "error": "" if ok else (result or proc.stderr[-2000:] or f"exit {proc.returncode}"),
+            "error": "" if ok else (result or stderr[-2000:] or f"exit {returncode}"),
             "usage": usage,
-            "tokens": token_usage(kind, usage, proc.stdout),
+            "tokens": token_usage(kind, usage, stdout),
             "duration_seconds": round(time.monotonic() - started, 1),
         }
         if repo is not None and ok and job.get("mode") == "write":
@@ -379,6 +491,8 @@ def run_job(job: dict[str, Any], kind: str) -> dict[str, Any]:
         return out
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "hết thời gian", "result": "", "usage": {}, "tokens": (0, 0)}
+    except AgentStalled as exc:
+        return {"ok": False, "error": str(exc), "result": "", "usage": {}, "tokens": (0, 0)}
     except (subprocess.CalledProcessError, tarfile.TarError, OSError) as exc:
         detail = getattr(exc, "stderr", "") or str(exc)
         error = f"chuẩn bị workspace lỗi: {detail}"[:500]

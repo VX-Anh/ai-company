@@ -191,6 +191,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 default_project=settings.default_project,
                 workers=cli_agents.statuses if cli_agents is not None else None,
                 cors_origins=settings.cors_origins,
+                cors_origin_regex=settings.cors_origin_regex,
             ),
             relay_app=relay_app,
             bridge_app=bridge_app,

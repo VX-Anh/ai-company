@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -504,3 +505,55 @@ async def test_cli_reviewer_requests_changes_then_passes(company: Company) -> No
     assert "đè lên chân bàn" in redo[1].data["feedback"]
     merge = next(e for e in events if e.to_status is TicketStatus.AWAITING_MERGE_APPROVAL)
     assert merge.data["review_notes"] == "[review bởi codex]\nĐã ổn."
+
+
+def test_run_agent_stops_stalled_agent(tmp_path: Path) -> None:
+    import sys
+
+    ws = _load_worker_server()
+    sleeper = [sys.executable, "-c", "import time; time.sleep(30)"]
+    with pytest.raises(ws.AgentStalled, match="treo"):
+        ws.run_agent(
+            sleeper, tmp_path, dict(os.environ), timeout=20, idle_seconds=1, check_every=0.3
+        )
+
+
+def test_run_agent_keeps_agent_that_writes_files(tmp_path: Path) -> None:
+    import sys
+
+    ws = _load_worker_server()
+    writer = [
+        sys.executable,
+        "-c",
+        "import time\nfor i in range(8):\n    open(f'f{i}.txt','w').write('x'); time.sleep(0.25)\n"
+        "print('xong')",
+    ]
+    code, out, _ = ws.run_agent(
+        writer, tmp_path, dict(os.environ), timeout=20, idle_seconds=1, check_every=0.3
+    )
+    assert code == 0 and out.strip() == "xong"
+
+
+async def test_cors_allows_any_localhost_port(company: Company) -> None:
+    from aico.api import ApiDeps, create_api_app
+    from aico.settings import Settings
+
+    h = make_harness(company)
+    app = create_api_app(
+        ApiDeps(
+            h.tickets, h.approvals, api_token="api", cors_origin_regex=Settings.cors_origin_regex
+        )
+    )
+    preflight = {
+        "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Headers": "authorization",
+    }
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://a") as c:
+        for origin, allowed in [
+            ("http://localhost:5174", True),
+            ("http://127.0.0.1:5199", True),
+            ("http://evil.example", False),
+            ("http://localhost.evil.example", False),
+        ]:
+            resp = await c.options("/workers", headers={"Origin": origin, **preflight})
+            assert (resp.headers.get("access-control-allow-origin") == origin) is allowed, origin

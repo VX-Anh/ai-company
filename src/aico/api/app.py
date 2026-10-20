@@ -41,6 +41,7 @@ class ApiDeps:
     # Trạng thái worker cho GUI; None khi không dùng worker CLI.
     workers: Callable[[], Awaitable[list[dict[str, Any]]]] | None = None
     cors_origins: tuple[str, ...] = ()  # origin của GUI web được gọi API từ trình duyệt
+    cors_origin_regex: str | None = None  # ví dụ mọi cổng localhost (API vẫn đòi token)
 
 
 class CreateTicket(BaseModel):
@@ -73,10 +74,11 @@ def _bearer_ok(authorization: str | None, expected: str | None) -> bool:
 
 def create_api_app(deps: ApiDeps) -> FastAPI:
     app = FastAPI(title="AI Company OS")
-    if deps.cors_origins:
+    if deps.cors_origins or deps.cors_origin_regex:
         app.add_middleware(
             CORSMiddleware,
             allow_origins=list(deps.cors_origins),
+            allow_origin_regex=deps.cors_origin_regex,
             allow_methods=["GET", "POST"],
             allow_headers=["Authorization", "Content-Type"],
         )
