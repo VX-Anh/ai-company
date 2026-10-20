@@ -317,7 +317,13 @@ async def test_workers_endpoint_reports_status_and_roles(company: Company) -> No
         body = (await c.get("/workers", headers={"Authorization": "Bearer api"})).json()
     by_name = {w["name"]: w for w in body}
     assert by_name["claude"]["state"] == "idle" and by_name["claude"]["runs_ok"] == 2
-    assert set(by_name["claude"]["roles"]) == {"tech_lead", "coder", "reviewer", "designer"}
+    assert set(by_name["claude"]["roles"]) == {
+        "tech_lead",
+        "coder",
+        "reviewer",
+        "designer",
+        "researcher",
+    }
     assert by_name["cursor"]["state"] == "offline"
 
 

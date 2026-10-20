@@ -12,6 +12,7 @@ from aico.agents.llm_agent import (
     LlmSettings,
     ticket_block,
 )
+from aico.agents.retro import RETRO_LABEL, RetroPlanner
 
 __all__ = [
     "AgentRunner",
@@ -22,6 +23,8 @@ __all__ = [
     "LlmAgentRunner",
     "LlmPlanner",
     "LlmSettings",
+    "RETRO_LABEL",
+    "RetroPlanner",
     "WorkerUnavailable",
     "ticket_block",
 ]

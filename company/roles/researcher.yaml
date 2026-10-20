@@ -1,0 +1,17 @@
+id: researcher
+department: engineering
+reports_to: tech_lead
+worker: cli
+# Hồi cứu nội bộ (ticket nhãn retro): đọc lịch sử ticket do aico gom sẵn, đề xuất quy tắc mới.
+# Chỉ đọc repo; mọi thay đổi đi qua Coder, Reviewer và người duyệt.
+workers: [claude, codex, cursor]
+prompt: prompts/researcher.md
+tools:
+  - server: gitlab
+    allow: [read_file]
+    constraints:
+      repos: [VX-Anh/aico-office]
+max_risk: L0
+limits:
+  max_iterations: 40
+  timeout_minutes: 30

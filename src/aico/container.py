@@ -14,6 +14,7 @@ from psycopg_pool import AsyncConnectionPool
 from starlette.applications import Starlette
 
 from aico.agents import (
+    RETRO_LABEL,
     CliAgentRunner,
     CliCoder,
     CliReviewer,
@@ -21,6 +22,7 @@ from aico.agents import (
     LlmAgentRunner,
     LlmPlanner,
     LlmSettings,
+    RetroPlanner,
 )
 from aico.api import ApiDeps
 from aico.db import create_pool
@@ -30,6 +32,7 @@ from aico.llm_relay import PostgresBudgetLedger, RelayDeps, TaskTokens, create_r
 from aico.observability import LoggingTraceSink
 from aico.orchestrator import (
     Deps,
+    LabelPlanner,
     RuleTriage,
     Runner,
     ScriptedCoder,
@@ -140,6 +143,9 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 LlmSettings(relay_url="http://relay/v1", http_client=relay_client),
             )
             planner = LlmPlanner(agents, role_id=sop.steps["plan"])
+        if cli_agents is not None and "researcher" in company.roles:
+            # Ticket gắn nhãn retro: Researcher hồi cứu lịch sử thay Tech Lead lập kế hoạch.
+            planner = LabelPlanner(planner, {RETRO_LABEL: RetroPlanner(cli_agents, tickets)})
         coder: Coder = ScriptedCoder()
         if settings.coder == "cli" and cli_agents is not None:
             coder = CliCoder(

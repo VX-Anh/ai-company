@@ -115,6 +115,23 @@ class RuleTriage:
         return TriageResult(self._department, TicketRisk(self._policy.default_risk), "mặc định")
 
 
+class LabelPlanner:
+    """Chọn planner theo nhãn ticket (`retro` cho Researcher); không khớp thì dùng mặc định."""
+
+    def __init__(self, default: Planner, by_label: dict[str, Planner]) -> None:
+        self._default = default
+        self._by_label = {label.lower(): p for label, p in by_label.items()}
+
+    def pick(self, ticket: Ticket) -> Planner:
+        for label in ticket.labels:
+            if (planner := self._by_label.get(label.lower())) is not None:
+                return planner
+        return self._default
+
+    async def plan(self, ticket: Ticket, feedback: str | None) -> str:
+        return await self.pick(ticket).plan(ticket, feedback)
+
+
 class StaticPlanner:
     async def plan(self, ticket: Ticket, feedback: str | None) -> str:
         lines = [f"Kế hoạch cho {ticket.id}: {ticket.title}", "1. Sửa code", "2. Chạy test"]

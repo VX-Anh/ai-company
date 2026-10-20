@@ -27,6 +27,9 @@ model_prices:
 # Phân loại rủi ro ticket bằng luật (GĐ0–GĐ1). Luật đầu tiên khớp được dùng.
 default_risk: medium
 risk_rules:
+  # Hồi cứu sửa quy tắc của agent: luôn cần người duyệt kế hoạch.
+  - risk: medium
+    labels: [retro]
   - risk: high
     labels: [security, data, infra]
     keywords: [auth, permission, migration, phân quyền, xác thực]
