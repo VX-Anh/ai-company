@@ -139,3 +139,39 @@ async def test_merge_needs_a_valid_approval_of_this_ticket(company: Company) -> 
             "merge_bot", "gitlab", "merge_mr", {**args, "approval_id": other.id}, ticket_id="T-9"
         )
     assert h.gitlab.project(PROJECT).mrs[0]["state"] == "opened"
+
+
+async def test_escalated_ticket_merged_by_merge_bot_after_human_approval(company: Company) -> None:
+    import httpx
+
+    from aico.api import ApiDeps, create_api_app
+    from aico.orchestrator.escalation import EscalationError, merge_escalated
+
+    reviewer = ScriptedReviewer([ReviewResult(False, "thiếu test")] * 3)
+    h = make_harness(company, reviewer=reviewer)
+    await h.new_ticket(labels=["low-risk"])
+    await h.runner.run_until_idle()
+    assert (await h.tickets.get("T-1")).status is S.ESCALATED
+
+    async def merge(ticket_id: str, actor: str, comment: str):  # noqa: ANN202
+        return await merge_escalated(
+            h.tickets, h.approvals, h.gateway, ticket_id, actor=actor, comment=comment
+        )
+
+    app = create_api_app(ApiDeps(h.tickets, h.approvals, merge_escalated=merge))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://a") as c:
+        body = {"action": "merge", "actor": "owner", "comment": "đã tự kiểm"}
+        resp = await c.post("/tickets/T-1/escalation", json=body)
+        assert resp.status_code == 200, resp.text
+        # Ticket đã xong: gọi lại bị từ chối, không merge lần hai.
+        assert (await c.post("/tickets/T-1/escalation", json=body)).status_code == 409
+
+    t = await h.tickets.get("T-1")
+    assert t.status is S.DONE
+    assert h.gitlab.project(PROJECT).mrs[0]["state"] == "merged"
+    merges = [e for e in h.audit.entries if e.tool == "merge_mr"]
+    assert [(e.role, e.decision) for e in merges] == [("merge_bot", "allow")]
+
+    await h.new_ticket("T-2")  # chưa escalate, chưa có MR
+    with pytest.raises(EscalationError):
+        await merge_escalated(h.tickets, h.approvals, h.gateway, "T-2", actor="owner")

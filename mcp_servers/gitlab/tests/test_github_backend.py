@@ -44,6 +44,8 @@ class FakeGitHub:
             {"number": 2, "title": "PR", "labels": [{"name": "ai-company"}], "pull_request": {}},
         ]
         self.auth: list[str] = []
+        self.ref_lag = 0  # số lần đọc ref mới tạo còn 404 (bản sao GitHub chưa đồng bộ)
+        self._lagging: dict[str, int] = {}
 
     def _files(self, branch: str) -> dict[str, str]:
         return self.commits[self.refs[branch]]["files"]
@@ -60,11 +62,15 @@ class FakeGitHub:
             content = base64.b64encode(files[g[1]].encode()).decode()
             return httpx.Response(200, json={"type": "file", "content": content})
         if m == "GET" and (g := re.fullmatch(r"/git/ref/heads/(.+)", p)):
-            if g[1] not in self.refs:
+            if g[1] not in self.refs or self._lagging.get(g[1], 0) > 0:
+                if g[1] in self._lagging:
+                    self._lagging[g[1]] -= 1
                 return httpx.Response(404, json={"message": "Not Found"})
             return httpx.Response(200, json={"object": {"sha": self.refs[g[1]]}})
         if m == "POST" and p == "/git/refs":
-            self.refs[body["ref"].removeprefix("refs/heads/")] = body["sha"]
+            name = body["ref"].removeprefix("refs/heads/")
+            self.refs[name] = body["sha"]
+            self._lagging[name] = self.ref_lag
             return httpx.Response(201, json={})
         if m == "GET" and p == "/commits":
             sha, out = self.refs[request.url.params["sha"]], []
@@ -174,6 +180,15 @@ async def test_full_flow_on_github() -> None:
     assert gh._files("main")["NOTES.md"] == "x"  # noqa: SLF001
     assert "ai/T-1" not in gh.refs  # branch nguồn đã xóa sau merge
     assert "Bearer merge-token" in gh.auth and gh.auth[0] == "Bearer dev-token"
+
+
+async def test_push_right_after_create_branch_survives_github_lag() -> None:
+    gh = FakeGitHub()
+    gh.ref_lag = 3  # ref mới tạo: 3 lần đọc đầu vẫn 404
+    tools = _tools(gh)
+    assert (await tools.create_branch(REPO, "ai/T-2"))["created"]
+    files = [{"path": "NOTES.md", "content": "x"}]
+    assert (await tools.push(REPO, "ai/T-2", "Ghi chú", files, "T-2:code:1"))["created"]
 
 
 async def test_missing_file_message_reaches_agent() -> None:

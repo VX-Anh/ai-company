@@ -24,6 +24,7 @@ from aico.orchestrator.ports import (
     FileChange,
     ItemCoder,
     Planner,
+    Previewer,
     Reviewer,
     Triage,
 )
@@ -58,6 +59,8 @@ class Deps:
     target_branch: str = "main"
     # Vai trò được giao đầu việc trong kế hoạch có cấu trúc; phần tử đầu là mặc định.
     item_roles: tuple[str, ...] = ("coder",)
+    # Bản xem trước của MR (máy build từ xa); None thì không dựng.
+    previewer: Previewer | None = None
 
     def role(self, step: str) -> str:
         return self.sop.steps[step]
@@ -258,6 +261,8 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             Artifact(kind="merge_request", ref=f"{project}!{mr['iid']}", url=mr.get("web_url")),
             actor=role,
         )
+        if deps.previewer is not None:
+            deps.previewer.schedule(tid, project, branch)
         return {"code_attempts": attempt, "branch": branch, "mr_iid": mr["iid"], "merge_error": ""}
 
     async def code(s: TicketState) -> dict[str, Any]:
@@ -321,6 +326,8 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             Artifact(kind="merge_request", ref=f"{project}!{mr['iid']}", url=mr.get("web_url")),
             actor=role,
         )
+        if deps.previewer is not None:
+            deps.previewer.schedule(tid, project, branch)
         return {"code_attempts": attempt, "branch": branch, "mr_iid": mr["iid"], "merge_error": ""}
 
     async def review(s: TicketState) -> dict[str, Any]:

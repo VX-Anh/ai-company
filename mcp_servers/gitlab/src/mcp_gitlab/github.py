@@ -8,6 +8,7 @@ Quy đổi sang khái niệm GitLab mà phần còn lại của hệ thống dù
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import contextlib
 from typing import Any
@@ -52,8 +53,10 @@ class HttpGitHubBackend:
         api_url: str = "https://api.github.com",
         timeout: float = 30,
         transport: httpx.AsyncBaseTransport | None = None,  # test: GitHub giả
+        ref_visible_seconds: float = 15,
     ) -> None:
         self._api = api_url.rstrip("/")
+        self._ref_visible_seconds = ref_visible_seconds
         base_headers = {
             "Accept": "application/vnd.github+json",
             "X-GitHub-Api-Version": "2022-11-28",
@@ -114,6 +117,16 @@ class HttpGitHubBackend:
         await self._request(
             "POST", f"{_repo(project)}/git/refs", json={"ref": f"refs/heads/{branch}", "sha": sha}
         )
+        # GitHub trả 201 nhưng vài giây sau đọc ref vẫn có thể 404 (bản sao chưa đồng bộ):
+        # chờ tới khi đọc được để bước push ngay sau không báo "branch chưa tồn tại".
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + self._ref_visible_seconds
+        delay = 0.25
+        while not await self.branch_exists(project, branch):
+            if loop.time() + delay > deadline:
+                raise GitLabError(f"đã tạo branch '{branch}' nhưng GitHub chưa thấy sau chờ", 503)
+            await asyncio.sleep(delay)
+            delay = min(delay * 2, 2)
         return {"name": branch}
 
     async def recent_commits(self, project: str, branch: str) -> list[dict[str, Any]]:

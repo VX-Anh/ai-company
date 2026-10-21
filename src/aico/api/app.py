@@ -42,6 +42,10 @@ class ApiDeps:
     workers: Callable[[], Awaitable[list[dict[str, Any]]]] | None = None
     cors_origins: tuple[str, ...] = ()  # origin của GUI web được gọi API từ trình duyệt
     cors_origin_regex: str | None = None  # ví dụ mọi cổng localhost (API vẫn đòi token)
+    # Merge MR của ticket đã escalate qua merge_bot: (ticket_id, actor, comment) -> ticket.
+    merge_escalated: Callable[[str, str, str], Awaitable[Ticket]] | None = None
+    # Dựng lại bản xem trước MR của ticket trên máy build từ xa: ticket_id -> kết quả (có url).
+    preview: Callable[[str], Awaitable[dict[str, Any]]] | None = None
 
 
 class CreateTicket(BaseModel):
@@ -59,7 +63,7 @@ class DecisionIn(BaseModel):
 
 
 class EscalationAction(BaseModel):
-    action: str = Field(pattern="^(close|fail)$")
+    action: str = Field(pattern="^(close|fail|merge)$")
     actor: str = Field(min_length=1)
     comment: str = ""
 
@@ -153,6 +157,13 @@ def create_api_app(deps: ApiDeps) -> FastAPI:
         ticket = await get_ticket(ticket_id)
         if ticket.status is not S.ESCALATED:
             raise HTTPException(409, "ticket không ở trạng thái escalated")
+        if body.action == "merge":
+            if deps.merge_escalated is None:
+                raise HTTPException(501, "chưa cấu hình merge cho ticket escalated")
+            try:
+                return await deps.merge_escalated(ticket_id, body.actor, body.comment)
+            except ValueError as exc:  # EscalationError
+                raise HTTPException(409, str(exc)) from None
         target = S.DONE if body.action == "close" else S.FAILED
         try:
             return await deps.tickets.transition(
@@ -160,6 +171,18 @@ def create_api_app(deps: ApiDeps) -> FastAPI:
             )
         except TransitionError as exc:
             raise HTTPException(409, str(exc)) from None
+
+    @app.post("/tickets/{ticket_id}/preview", dependencies=user)
+    async def build_preview(ticket_id: str) -> dict[str, Any]:
+        await get_ticket(ticket_id)
+        if deps.preview is None:
+            raise HTTPException(501, "chưa cấu hình máy build từ xa cho bản xem trước")
+        try:
+            return await deps.preview(ticket_id)
+        except ValueError as exc:  # ticket chưa có branch, repo không bật xem trước
+            raise HTTPException(409, str(exc)) from None
+        except RuntimeError as exc:  # PreviewError: build lỗi, máy build không phản hồi
+            raise HTTPException(502, str(exc)) from None
 
     @app.get("/internal/approvals/{approval_id}", dependencies=[Depends(require_internal)])
     async def verify_approval(

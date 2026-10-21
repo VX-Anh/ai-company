@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import contextlib
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from typing import Any
 
 import httpx
 from fastapi import FastAPI
@@ -14,6 +16,7 @@ from psycopg_pool import AsyncConnectionPool
 from starlette.applications import Starlette
 
 from aico.agents import (
+    REMOTE_BUILD_HINT,
     RETRO_LABEL,
     CliAgentRunner,
     CliCoder,
@@ -22,9 +25,12 @@ from aico.agents import (
     LlmAgentRunner,
     LlmPlanner,
     LlmSettings,
+    PreviewSettings,
+    RemotePreviewer,
     RetroPlanner,
 )
 from aico.api import ApiDeps
+from aico.core import Ticket
 from aico.db import create_pool
 from aico.governance import PostgresApprovalStore, PostgresAuditLog
 from aico.intake import GitLabIssuePoller
@@ -40,12 +46,15 @@ from aico.orchestrator import (
     StaticPlanner,
     build_fix_ticket,
 )
+from aico.orchestrator.escalation import merge_escalated
 from aico.orchestrator.ports import Coder, Planner, Reviewer
 from aico.registry import Company, load_company
 from aico.settings import Settings
 from aico.tickets.postgres import PostgresTicketStore
 from aico.tools import Guard, McpToolClient, ToolGateway
 from aico.tools.bridge import ToolBridge, create_tool_bridge_app
+
+log = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -147,6 +156,23 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
         if cli_agents is not None and "researcher" in company.roles:
             # Ticket gắn nhãn retro: Researcher hồi cứu lịch sử thay Tech Lead lập kế hoạch.
             planner = LabelPlanner(planner, {RETRO_LABEL: RetroPlanner(cli_agents, tickets)})
+        remote = await _remote_ready(settings) if settings.worker_token else False
+        build_hint = REMOTE_BUILD_HINT if remote else None
+        previewer: RemotePreviewer | None = None
+        if remote and settings.remote_url and settings.worker_token and settings.preview_projects:
+            preview_client = httpx.AsyncClient()
+            exit_stack.push_async_callback(preview_client.aclose)
+            previewer = RemotePreviewer(
+                PreviewSettings(
+                    url=settings.remote_url,
+                    token=settings.worker_token,
+                    http_client=preview_client,
+                    projects=settings.preview_projects,
+                ),
+                gateway,
+                tickets,
+                role_id=sop.steps["code"],
+            )
         coder: Coder = ScriptedCoder()
         if settings.coder == "cli" and cli_agents is not None:
             coder = CliCoder(
@@ -154,10 +180,13 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 gateway,
                 role_id=sop.steps["code"],
                 default_project=settings.default_project,
+                build_hint=build_hint,
             )
         reviewer: Reviewer = ScriptedReviewer()
         if settings.reviewer == "cli" and cli_agents is not None:
-            reviewer = CliReviewer(cli_agents, gateway, role_id=sop.steps["review"])
+            reviewer = CliReviewer(
+                cli_agents, gateway, role_id=sop.steps["review"], build_hint=build_hint
+            )
         deps = Deps(
             sop=sop,
             tickets=tickets,
@@ -169,7 +198,32 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             reviewer=reviewer,
             default_project=settings.default_project or "group/pilot-repo",
             item_roles=("coder", "designer"),
+            previewer=previewer,
         )
+
+        async def preview_ticket(ticket_id: str) -> dict[str, Any]:
+            if previewer is None:
+                raise ValueError("chưa bật bản xem trước (AICO_PREVIEW_PROJECTS)")
+            ticket = await tickets.get(ticket_id)
+            branches = [a.ref for a in ticket.artifacts if a.kind == "branch"]
+            project = ticket.project or settings.default_project
+            if not branches or not project:
+                raise ValueError("ticket chưa có branch code")
+            if not previewer.enabled_for(project):
+                raise ValueError(f"repo {project} không nằm trong AICO_PREVIEW_PROJECTS")
+            return await previewer.build(ticket_id, project, branches[-1])
+
+        async def merge_escalated_ticket(ticket_id: str, actor: str, comment: str) -> Ticket:
+            return await merge_escalated(
+                tickets,
+                approvals,
+                gateway,
+                ticket_id,
+                actor=actor,
+                comment=comment,
+                merge_role=sop.steps["merge"],
+            )
+
         saver = AsyncPostgresSaver(saver_pool)  # type: ignore[arg-type]
         graph = build_fix_ticket(deps).compile(checkpointer=saver)
         runners = tuple(
@@ -199,6 +253,8 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 workers=cli_agents.statuses if cli_agents is not None else None,
                 cors_origins=settings.cors_origins,
                 cors_origin_regex=settings.cors_origin_regex,
+                merge_escalated=merge_escalated_ticket,
+                preview=preview_ticket if previewer is not None else None,
             ),
             relay_app=relay_app,
             bridge_app=bridge_app,
@@ -209,6 +265,19 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
         await upstream.aclose()
         await saver_pool.close()
         await pool.close()
+
+
+async def _remote_ready(settings: Settings) -> bool:
+    """Máy build từ xa đã cấu hình server chưa; chưa thì agent chạy build/test như cũ."""
+    if not settings.remote_url:
+        return False
+    try:
+        async with httpx.AsyncClient(timeout=5) as client:
+            resp = await client.get(f"{settings.remote_url.rstrip('/')}/health")
+            return resp.status_code == 200 and bool(resp.json().get("target"))
+    except (httpx.HTTPError, ValueError):
+        log.warning("không gọi được máy build từ xa %s", settings.remote_url)
+        return False
 
 
 async def setup_checkpointer(database_url: str) -> None:

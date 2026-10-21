@@ -16,6 +16,8 @@ RUN cp -a /home/worker/.local/share/cursor-agent /opt/cursor-agent \
     && ln -s "$(readlink -f /home/worker/.local/bin/cursor-agent | sed 's#/home/worker/.local/share/cursor-agent#/opt/cursor-agent#')" /usr/local/bin/cursor-agent \
     && rm -rf /home/worker/.local
 COPY deploy/worker/worker_server.py /opt/worker_server.py
+COPY deploy/remote/aico_remote.py /opt/aico_remote.py
+RUN ln -s /opt/aico_remote.py /usr/local/bin/aico-remote && chmod 755 /opt/aico_remote.py
 USER worker
 ENV PYTHONUNBUFFERED=1
 CMD ["python3", "/opt/worker_server.py"]

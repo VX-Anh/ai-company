@@ -97,6 +97,12 @@ class Reviewer(Protocol):
     async def review(self, ticket: Ticket, mr: dict[str, Any]) -> ReviewResult: ...
 
 
+class Previewer(Protocol):
+    """Dựng bản xem trước của branch MR (chạy nền, lỗi không ảnh hưởng luồng)."""
+
+    def schedule(self, ticket_id: str, project: str, branch: str) -> None: ...
+
+
 class RuleTriage:
     """Phân loại rủi ro bằng luật trong policy (GĐ0–GĐ1). Luật đầu tiên khớp được dùng."""
 

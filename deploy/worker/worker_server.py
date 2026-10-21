@@ -597,6 +597,13 @@ def _latest_mtime(root: Path) -> float:
     return latest
 
 
+def _beat(path: Path | None) -> float:
+    try:
+        return path.stat().st_mtime if path is not None else 0.0
+    except OSError:
+        return 0.0
+
+
 def _terminate(proc: subprocess.Popen[str]) -> None:
     with contextlib.suppress(OSError):
         if hasattr(os, "killpg"):
@@ -620,11 +627,13 @@ def run_agent(
     timeout: float,
     idle_seconds: float = IDLE_SECONDS,
     check_every: float = CHECK_EVERY,
+    heartbeat: Path | None = None,
 ) -> tuple[int, str, str]:
     """Chạy CLI và giám sát: quá timeout -> TimeoutExpired; treo -> AgentStalled.
 
-    Tiến triển = CPU của cây tiến trình tăng hoặc có file trong cwd đổi. Không có tiến triển
-    suốt idle_seconds thì dừng cả nhóm tiến trình.
+    Tiến triển = CPU của cây tiến trình tăng, có file trong cwd đổi, hoặc file heartbeat được
+    chạm (aico-remote chạm khi chờ build trên server, lúc đó máy này không tốn CPU). Không có
+    tiến triển suốt idle_seconds thì dừng cả nhóm tiến trình.
     """
     proc = subprocess.Popen(
         cmd,
@@ -638,6 +647,7 @@ def run_agent(
     started = last_progress = time.monotonic()
     last_cpu = _tree_cpu_seconds(proc.pid) or 0.0
     last_mtime = _latest_mtime(cwd)
+    last_beat = _beat(heartbeat)
     while True:
         try:
             stdout, stderr = proc.communicate(timeout=check_every)
@@ -647,8 +657,11 @@ def run_agent(
         now = time.monotonic()
         cpu = _tree_cpu_seconds(proc.pid)
         mtime = _latest_mtime(cwd)
-        if (cpu is not None and cpu - last_cpu >= MIN_CPU_PROGRESS) or mtime > last_mtime:
+        beat = _beat(heartbeat)
+        busy = cpu is not None and cpu - last_cpu >= MIN_CPU_PROGRESS
+        if busy or mtime > last_mtime or beat > last_beat:
             last_progress = now
+        last_beat = max(beat, last_beat)
         last_cpu, last_mtime = cpu if cpu is not None else last_cpu, max(mtime, last_mtime)
         if now - started > timeout:
             _terminate(proc)
@@ -668,11 +681,13 @@ def run_job(job: dict[str, Any], kind: str) -> dict[str, Any]:
             extract_workspace(job["workspace"]["data"], repo)
             snapshot_repo(repo)
         cmd, extra_env = build_command(job, kind, workdir, repo)
+        heartbeat = workdir / ".heartbeat"
         returncode, stdout, stderr = run_agent(
             cmd,
             cwd=repo or workdir,
-            env={**os.environ, **extra_env},
+            env={**os.environ, **extra_env, "AICO_HEARTBEAT_FILE": str(heartbeat)},
             timeout=float(job.get("timeout_seconds", 1800)),
+            heartbeat=heartbeat,
         )
         ok, result, usage = parse_output(kind, stdout, workdir)
         if returncode != 0:

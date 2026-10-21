@@ -53,6 +53,7 @@ cp .env.example .env                       # điền mật khẩu, repo pilot
 for s in gitlab_token gitlab_merge_token aico_api_token aico_internal_token worker_token; do
   [ -f secrets/$s ] || openssl rand -hex 24 > secrets/$s   # token GitLab thật thì ghi đè
 done
+touch secrets/remote_ssh_key secrets/remote_known_hosts   # máy build từ xa, xem mục dưới
 sudo groupadd -g 10100 aico-secrets && sudo usermod -aG aico-secrets $USER
 chgrp 10100 secrets/* && chmod 640 secrets/*   # chỉ container aico, mcp-gitlab đọc được
 docker compose up -d --build
@@ -63,6 +64,27 @@ docker compose exec -it worker-cursor cursor-agent login
 ```
 
 `GITLAB_FAKE=1` trong `.env` cho phép chạy thử toàn luồng mà chưa cần GitLab thật.
+
+## Máy build từ xa (server compute)
+
+Service `remote-runner` (`deploy/remote/remote_runner.py`) điều khiển Docker rootless trên server
+qua SSH. Server chỉ nhận mã nguồn, không nhận secret nào. Mỗi lần chạy dùng container và volume
+tạm: pha setup có mạng (giải nén, `npm ci` / `uv sync` theo lockfile, cache ở volume
+`aico-cache`), pha chạy lệnh không có mạng, `--cap-drop ALL`, giới hạn RAM và số tiến trình.
+
+- **Build/test của agent**: trong worker, `aico-remote 'npm run build && npm test'` gửi thư mục
+  hiện tại (bỏ `.git`, `node_modules`, `dist`) và trả log cùng mã thoát. Coder và Reviewer được
+  nhắc dùng lệnh này khi máy build đã cấu hình. Lệnh chạm file heartbeat để watchdog không coi
+  agent đang chờ là treo.
+- **Bản xem trước MR**: khi mở MR cho repo trong `AICO_PREVIEW_PROJECTS`, aico tải mã nguồn branch
+  qua MCP gitlab, server build (`npm run build -- --base=./`) rồi trả `dist` về PC. Bản xem trước ở
+  `http://localhost:8500/preview/<ticket>/`, gắn vào ticket dạng artifact `preview`; dựng lại
+  bằng `POST /tickets/{id}/preview`. Danh sách: `http://localhost:8500/preview/`.
+
+Cài đặt: `ssh-keygen -t ed25519 -N "" -f secrets/remote_ssh_key`, thêm khoá công khai vào
+`~/.ssh/authorized_keys` của user trên server với tiền tố `restrict`, chép dòng host key của
+server từ `known_hosts` đã tin vào `secrets/remote_known_hosts`, đặt `REMOTE_SSH_TARGET` và
+`AICO_PREVIEW_PROJECTS` trong `.env`. Để trống `REMOTE_SSH_TARGET` thì agent build/test như cũ.
 
 ## MCP server cho agent
 

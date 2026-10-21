@@ -59,6 +59,10 @@ services:
       AICO_BRIDGE_URL: http://aico:8300/mcp   # worker gọi tool qua đây (mạng workers)
       # GUI web (aico-office) gọi API từ trình duyệt
       AICO_CORS_ORIGINS: ${AICO_CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
+      # Máy build từ xa (server): agent chạy build/test bằng aico-remote; MR của các repo trong
+      # AICO_PREVIEW_PROJECTS được dựng bản xem trước. Để trống REMOTE_SSH_TARGET thì tắt.
+      AICO_REMOTE_URL: ${AICO_REMOTE_URL:-http://remote-runner:8500}
+      AICO_PREVIEW_PROJECTS: ${AICO_PREVIEW_PROJECTS:-}
     secrets: [aico_api_token, aico_internal_token, worker_token]
     group_add: ["${SECRETS_GID:-10100}"]  # file secret mode 640, nhóm SECRETS_GID
     ports:
@@ -68,6 +72,7 @@ services:
     depends_on:
       migrate: {condition: service_completed_successfully}
       mcp-gitlab: {condition: service_started}
+      remote-runner: {condition: service_started}
     restart: unless-stopped
 
   mcp-gitlab:
@@ -100,6 +105,32 @@ services:
     networks: [core]
     restart: unless-stopped
 
+  # Máy build từ xa: chạy build/test và dựng bản xem trước trên server (compute, không giữ bí
+  # mật). Chỉ container này có khoá SSH tới server; worker gọi nó bằng worker_token.
+  remote-runner:
+    build:
+      context: ..
+      dockerfile: deploy/docker/remote.Dockerfile
+    image: ai-company/remote-runner:dev
+    environment:
+      REMOTE_SSH_TARGET: ${REMOTE_SSH_TARGET:-}
+      REMOTE_SSH_KEY_FILE: /run/secrets/remote_ssh_key
+      REMOTE_KNOWN_HOSTS_FILE: /run/secrets/remote_known_hosts
+      RUNNER_TOKEN_FILE: /run/secrets/worker_token
+      REMOTE_IMAGES: ${REMOTE_IMAGES:-node=node:22-bookworm-slim,python=ghcr.io/astral-sh/uv:python3.12-bookworm-slim}
+      REMOTE_CPUS: ${REMOTE_CPUS:-}   # trống: Docker rootless trên server chưa có controller cpu
+      REMOTE_MEMORY: ${REMOTE_MEMORY:-6g}
+      REMOTE_CONCURRENCY: ${REMOTE_CONCURRENCY:-4}
+      PREVIEW_PUBLIC_URL: ${PREVIEW_PUBLIC_URL:-http://localhost:8500}
+    secrets: [remote_ssh_key, remote_known_hosts, worker_token]
+    group_add: ["${SECRETS_GID:-10100}"]
+    volumes:
+      - previews:/data/previews
+    ports:
+      - "127.0.0.1:8500:8500"   # bản xem trước chỉ mở cho máy này
+    networks: [workers]
+    restart: unless-stopped
+
   # Worker: CLI chính thức của từng subscription (Claude Code, Codex, Cursor), mỗi CLI một
   # container. Credential nằm trong volume home riêng, đăng nhập một lần bằng
   # `docker compose exec -it worker-<tên> <cli> login`. Chỉ mount worker_token (không có
@@ -114,6 +145,8 @@ services:
       WORKER_TOKEN_FILE: /run/secrets/worker_token
       WORKER_SLOTS: ${WORKER_SLOTS:-2}  # số agent con chạy song song trong phòng provider
       WORKER_USAGE_TTL: ${WORKER_USAGE_TTL:-300}  # giây giữa hai lần đọc hạn mức từ CLI
+      AICO_REMOTE_URL: &remote-url ${AICO_REMOTE_URL:-http://remote-runner:8500}
+      AICO_REMOTE_AUTH_FILE: /run/secrets/worker_token
     secrets: [worker_token]
     group_add: ["${SECRETS_GID:-10100}"]
     volumes:
@@ -128,6 +161,8 @@ services:
       WORKER_TOKEN_FILE: /run/secrets/worker_token
       WORKER_SLOTS: ${WORKER_SLOTS:-2}  # số agent con chạy song song trong phòng provider
       WORKER_USAGE_TTL: ${WORKER_USAGE_TTL:-300}  # giây giữa hai lần đọc hạn mức từ CLI
+      AICO_REMOTE_URL: *remote-url
+      AICO_REMOTE_AUTH_FILE: /run/secrets/worker_token
     volumes:
       - worker-codex-home:/home/worker
 
@@ -138,6 +173,8 @@ services:
       WORKER_TOKEN_FILE: /run/secrets/worker_token
       WORKER_SLOTS: ${WORKER_SLOTS:-2}  # số agent con chạy song song trong phòng provider
       WORKER_USAGE_TTL: ${WORKER_USAGE_TTL:-300}  # giây giữa hai lần đọc hạn mức từ CLI
+      AICO_REMOTE_URL: *remote-url
+      AICO_REMOTE_AUTH_FILE: /run/secrets/worker_token
     volumes:
       - worker-cursor-home:/home/worker
 
@@ -155,6 +192,7 @@ volumes:
   worker-codex-home: {}
   worker-cursor-home: {}
   pixel-data: {}
+  previews: {}
 
 secrets:
   gitlab_token: {file: ./secrets/gitlab_token}
@@ -162,3 +200,5 @@ secrets:
   aico_api_token: {file: ./secrets/aico_api_token}
   worker_token: {file: ./secrets/worker_token}
   aico_internal_token: {file: ./secrets/aico_internal_token}
+  remote_ssh_key: {file: ./secrets/remote_ssh_key}
+  remote_known_hosts: {file: ./secrets/remote_known_hosts}

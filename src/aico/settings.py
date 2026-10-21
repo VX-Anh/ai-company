@@ -55,6 +55,10 @@ class Settings:
     bridge_url: str = "http://127.0.0.1:8300/mcp"  # địa chỉ worker dùng để gọi tool bridge
     # Phòng có cửa sổ hạn mức đã dùng từ mức này (%) được giao việc sau phòng còn thoải mái.
     usage_tight_percent: float = 80
+    # Máy build từ xa (deploy/remote): agent chạy build/test qua aico-remote, MR của các repo
+    # trong preview_projects được dựng bản xem trước. Không đặt thì giữ cách cũ.
+    remote_url: str | None = None
+    preview_projects: tuple[str, ...] = ()
     cors_origins: tuple[str, ...] = ()  # GUI web, ví dụ http://localhost:5173
     # Mặc định cho GUI chạy ở mọi cổng trên máy này (dev server tự đổi cổng khi bị chiếm).
     cors_origin_regex: str | None = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
@@ -92,6 +96,8 @@ class Settings:
             bridge_port=int(env.get("AICO_BRIDGE_PORT", cls.bridge_port)),
             bridge_url=env.get("AICO_BRIDGE_URL", cls.bridge_url),
             usage_tight_percent=float(env.get("AICO_USAGE_TIGHT_PERCENT", cls.usage_tight_percent)),
+            remote_url=env.get("AICO_REMOTE_URL") or None,
+            preview_projects=_list("AICO_PREVIEW_PROJECTS"),
             cors_origins=_list("AICO_CORS_ORIGINS"),
             cors_origin_regex=env.get("AICO_CORS_ORIGIN_REGEX", cls.cors_origin_regex) or None,
         )

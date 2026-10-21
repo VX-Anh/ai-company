@@ -67,7 +67,7 @@ class TicketSource(StrEnum):
 class Artifact(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    kind: Literal["branch", "merge_request", "report"]
+    kind: Literal["branch", "merge_request", "report", "preview"]
     ref: str
     url: str | None = None
 
