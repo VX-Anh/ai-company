@@ -14,7 +14,7 @@ from typing import Any
 
 import uvicorn
 
-from aico.api import create_api_app
+from aico.api import create_api_app, with_api_prefix
 from aico.container import build_container, setup_checkpointer
 from aico.db import migrate
 from aico.orchestrator import expire_overdue_approvals
@@ -51,7 +51,7 @@ async def _serve(settings: Settings) -> None:
     async with build_container(settings) as c:
         api = uvicorn.Server(
             uvicorn.Config(
-                create_api_app(c.api),
+                with_api_prefix(create_api_app(c.api)),
                 host=settings.api_host,
                 port=settings.api_port,
                 log_level="info",

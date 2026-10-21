@@ -257,6 +257,9 @@ async def test_preview_scheduled_after_merge_request(company: Company) -> None:
         def schedule(self, ticket_id: str, project: str, branch: str) -> None:
             holder["p"].schedule(ticket_id, project, branch)
 
+        def schedule_site(self, ticket_id: str, project: str, ref: str) -> None:
+            holder["p"].schedule_site(ticket_id, project, ref)
+
     h = make_harness(company, previewer=Lazy())
     holder["p"] = _previewer(h, runner)
     await h.new_ticket(labels=["low-risk"])
@@ -272,6 +275,16 @@ async def test_preview_scheduled_after_merge_request(company: Company) -> None:
         assert tar.getmembers()  # mã nguồn branch tải qua MCP gitlab
     previews = [a for a in t.artifacts if a.kind == "preview"]
     assert [(a.ref, a.url) for a in previews] == [("ai/T-1", "http://localhost:8500/preview/T-1/")]
+
+    # Merge xong: dựng lại bản chính của repo (tên theo repo), không gắn thêm vào ticket.
+    await h.decide("T-1", "approved")
+    await h.runner.run_until_idle()
+    for task in list(holder["p"]._tasks):
+        await task
+    assert (await h.tickets.get("T-1")).status is TicketStatus.DONE
+    assert [(j["name"], j["meta"]["ref"]) for j in jobs[1:]] == [("aico-office", "main")]
+    t = await h.tickets.get("T-1")
+    assert len([a for a in t.artifacts if a.kind == "preview"]) == 1
 
 
 async def test_preview_errors_do_not_touch_ticket(company: Company) -> None:
@@ -299,10 +312,10 @@ async def test_preview_api(company: Company) -> None:
 
     h = make_harness(company)
 
-    async def preview(ticket_id: str) -> dict[str, Any]:
+    async def preview(ticket_id: str, site: bool) -> dict[str, Any]:
         if ticket_id == "T-1":
             raise ValueError("ticket chưa có branch code")
-        return {"ok": True, "url": "u"}
+        return {"ok": True, "url": "u", "site": site}
 
     await h.new_ticket()
     await h.new_ticket("T-2")
@@ -310,7 +323,71 @@ async def test_preview_api(company: Company) -> None:
     off = create_api_app(ApiDeps(h.tickets, h.approvals))
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://a") as c:
         assert (await c.post("/tickets/T-1/preview")).status_code == 409
-        assert (await c.post("/tickets/T-2/preview")).json() == {"ok": True, "url": "u"}
+        assert (await c.post("/tickets/T-2/preview")).json() == {
+            "ok": True,
+            "url": "u",
+            "site": False,
+        }
+        assert (await c.post("/tickets/T-2/preview?site=true")).json()["site"] is True
         assert (await c.post("/tickets/T-9/preview")).status_code == 404
     async with httpx.AsyncClient(transport=httpx.ASGITransport(app=off), base_url="http://a") as c:
         assert (await c.post("/tickets/T-2/preview")).status_code == 501
+
+
+async def test_api_prefix_serves_api_but_not_internal(company: Company) -> None:
+    from aico.api import ApiDeps, create_api_app, with_api_prefix
+
+    h = make_harness(company)
+    await h.new_ticket()
+    app = with_api_prefix(create_api_app(ApiDeps(h.tickets, h.approvals, internal_token="i")))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://a") as c:
+        assert (await c.get("/tickets/T-1")).status_code == 200
+        assert (await c.get("/api/tickets/T-1")).json()["id"] == "T-1"  # GUI cùng origin
+        headers = {"Authorization": "Bearer i"}
+        url = "/internal/approvals/x?project=p&mr_iid=1"
+        assert (await c.get(url, headers=headers)).status_code == 200
+        assert (await c.get("/api" + url, headers=headers)).status_code == 404
+        assert (await c.get("/apix/tickets/T-1")).status_code == 404
+
+
+def test_public_hosts_serve_site_and_refuse_post(tmp_path: Path) -> None:
+    cfg = rr.Config(
+        {
+            "PREVIEW_DIR": str(tmp_path),
+            "PREVIEW_PUBLIC_URL": "https://preview.aico.io.vn",
+            "PREVIEW_HOSTS": "office.aico.io.vn=aico-office",
+        }
+    )
+    (tmp_path / "aico-office" / "assets").mkdir(parents=True)
+    (tmp_path / "aico-office" / "index.html").write_text("<h1>office</h1>")
+    (tmp_path / "aico-office" / "assets" / "a.js").write_text("1")
+    assert cfg.public_hosts == {"office.aico.io.vn", "preview.aico.io.vn"}
+    handler: Any = type("H", (rr.Handler,), {"runner": rr.Runner(cfg), "token": TOKEN})
+    httpd = ThreadingHTTPServer(("127.0.0.1", 0), handler)
+    threading.Thread(target=httpd.serve_forever, daemon=True).start()
+    base = f"http://127.0.0.1:{httpd.server_address[1]}"
+
+    def get(path: str, host: str) -> tuple[int, bytes]:
+        req = urllib.request.Request(base + path, headers={"Host": host})
+        try:
+            with urllib.request.urlopen(req, timeout=5) as resp:
+                return resp.status, resp.read()
+        except urllib.error.HTTPError as exc:
+            return exc.code, b""
+
+    try:
+        assert get("/", "office.aico.io.vn") == (200, b"<h1>office</h1>")
+        assert get("/assets/a.js", "office.aico.io.vn:443") == (200, b"1")
+        assert get("/preview/aico-office/", "preview.aico.io.vn")[1] == b"<h1>office</h1>"
+        assert get("/", "localhost:8500")[0] == 404
+        req = urllib.request.Request(
+            base + "/exec",
+            data=b"{}",
+            headers={"Host": "preview.aico.io.vn", "Authorization": f"Bearer {TOKEN}"},
+            method="POST",
+        )
+        with pytest.raises(urllib.error.HTTPError) as err:
+            urllib.request.urlopen(req, timeout=5)
+        assert err.value.code == 403
+    finally:
+        httpd.shutdown()

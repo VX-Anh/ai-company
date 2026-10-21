@@ -409,6 +409,8 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
                 "merge_error": str(exc),
             }
         if mr.get("merged"):
+            if deps.previewer is not None:
+                deps.previewer.schedule_site(tid, project, deps.target_branch)
             return {"merged": True}
         return {
             "merged": False,

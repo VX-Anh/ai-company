@@ -29,6 +29,11 @@ REMOTE_BUILD_HINT = (
 )
 
 
+def site_name(project: str) -> str:
+    """Tên bản chính của repo: phần tên repo, vd VX-Anh/aico-office -> aico-office."""
+    return project.rsplit("/", 1)[-1]
+
+
 class PreviewError(RuntimeError):
     """Không dựng được bản xem trước (tải mã nguồn lỗi, build lỗi, máy build không phản hồi)."""
 
@@ -61,8 +66,14 @@ class RemotePreviewer:
     def enabled_for(self, project: str) -> bool:
         return project in self._s.projects
 
-    async def build(self, ticket_id: str, project: str, branch: str) -> dict[str, Any]:
-        """Dựng bản xem trước của branch, gắn link vào ticket; trả kết quả của máy build."""
+    async def build(
+        self, ticket_id: str, project: str, branch: str, *, site: bool = False
+    ) -> dict[str, Any]:
+        """Dựng bản xem trước của branch, gắn link vào ticket; trả kết quả của máy build.
+
+        site: dựng bản chính của repo (sau khi merge), tên theo repo (vd aico-office, phục vụ ở
+        tên miền trong PREVIEW_HOSTS), không gắn vào ticket.
+        """
         if not self.enabled_for(project):
             raise PreviewError(f"repo {project} không nằm trong AICO_PREVIEW_PROJECTS")
         try:
@@ -76,7 +87,7 @@ class RemotePreviewer:
         except ToolError as exc:
             raise PreviewError(f"không tải được {branch}: {exc}") from exc
         job = {
-            "name": ticket_id,
+            "name": site_name(project) if site else ticket_id,
             "archive": archive["data"],
             "strip": 1,  # archive GitHub/GitLab có một thư mục gốc
             "build": self._s.build,
@@ -97,22 +108,30 @@ class RemotePreviewer:
         if resp.status_code != 200 or not result.get("ok"):
             error = result.get("error") or f"HTTP {resp.status_code}"
             raise PreviewError(f"{error}\n{result.get('output', '')}".strip())
-        await self._tickets.add_artifact(
-            ticket_id, Artifact(kind="preview", ref=branch, url=result["url"]), actor=self._role
-        )
+        if not site:
+            await self._tickets.add_artifact(
+                ticket_id, Artifact(kind="preview", ref=branch, url=result["url"]), actor=self._role
+            )
         return result
 
     def schedule(self, ticket_id: str, project: str, branch: str) -> None:
         """Dựng nền sau khi MR có code mới; review không phải chờ."""
+        self._spawn(ticket_id, project, branch, site=False)
+
+    def schedule_site(self, ticket_id: str, project: str, ref: str) -> None:
+        """Dựng lại bản chính của repo sau khi ticket merge xong."""
+        self._spawn(ticket_id, project, ref, site=True)
+
+    def _spawn(self, ticket_id: str, project: str, ref: str, *, site: bool) -> None:
         if not self.enabled_for(project):
             return
-        task = asyncio.create_task(self._build_logged(ticket_id, project, branch))
+        task = asyncio.create_task(self._build_logged(ticket_id, project, ref, site))
         self._tasks.add(task)
         task.add_done_callback(self._tasks.discard)
 
-    async def _build_logged(self, ticket_id: str, project: str, branch: str) -> None:
+    async def _build_logged(self, ticket_id: str, project: str, branch: str, site: bool) -> None:
         try:
-            result = await self.build(ticket_id, project, branch)
+            result = await self.build(ticket_id, project, branch, site=site)
             log.info("ticket %s: bản xem trước %s", ticket_id, result.get("url"))
         except PreviewError as exc:
             log.warning("ticket %s: không dựng được bản xem trước: %s", ticket_id, exc)

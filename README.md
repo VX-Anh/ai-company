@@ -53,7 +53,7 @@ cp .env.example .env                       # điền mật khẩu, repo pilot
 for s in gitlab_token gitlab_merge_token aico_api_token aico_internal_token worker_token; do
   [ -f secrets/$s ] || openssl rand -hex 24 > secrets/$s   # token GitLab thật thì ghi đè
 done
-touch secrets/remote_ssh_key secrets/remote_known_hosts   # máy build từ xa, xem mục dưới
+touch secrets/remote_ssh_key secrets/remote_known_hosts secrets/cloudflare_tunnel_token  # xem mục dưới
 sudo groupadd -g 10100 aico-secrets && sudo usermod -aG aico-secrets $USER
 chgrp 10100 secrets/* && chmod 640 secrets/*   # chỉ container aico, mcp-gitlab đọc được
 docker compose up -d --build
@@ -85,6 +85,24 @@ Cài đặt: `ssh-keygen -t ed25519 -N "" -f secrets/remote_ssh_key`, thêm kho�
 `~/.ssh/authorized_keys` của user trên server với tiền tố `restrict`, chép dòng host key của
 server từ `known_hosts` đã tin vào `secrets/remote_known_hosts`, đặt `REMOTE_SSH_TARGET` và
 `AICO_PREVIEW_PROJECTS` trong `.env`. Để trống `REMOTE_SSH_TARGET` thì agent build/test như cũ.
+
+Sau mỗi lần merge, bản chính của repo (branch đích) được dựng lại với tên theo repo, vd
+`aico-office`; dựng tay bằng `POST /tickets/{id}/preview?site=true`.
+
+## Tên miền (Cloudflare Tunnel)
+
+Server ở sau NAT và user không có root, nên không mở cổng: service `cloudflared` (profile
+`tunnel`) trên PC nối ra Cloudflare, token chỉ nằm ở `secrets/cloudflare_tunnel_token`.
+
+| Hostname | Service trong tunnel | Nội dung |
+| --- | --- | --- |
+| `office.aico.io.vn`, path `^/api` | `http://aico:8000` | API (aico phục vụ thêm dưới `/api`, trừ `/internal`) |
+| `office.aico.io.vn` | `http://remote-runner:8500` | GUI bản main (`PREVIEW_HOSTS=office.aico.io.vn=aico-office`) |
+| `preview.aico.io.vn` | `http://remote-runner:8500` | bản xem trước PR (`PREVIEW_PUBLIC_URL=https://preview.aico.io.vn`) |
+
+Đặt Cloudflare Access (đăng nhập bằng email) cho cả hai hostname trước khi bật tunnel. Qua tên
+miền, remote-runner chỉ nhận GET; API vẫn đòi token như khi chạy ở máy này. Trên GUI, nhập địa
+chỉ API là `https://office.aico.io.vn/api`.
 
 ## MCP server cho agent
 

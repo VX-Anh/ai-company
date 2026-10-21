@@ -122,6 +122,7 @@ services:
       REMOTE_MEMORY: ${REMOTE_MEMORY:-6g}
       REMOTE_CONCURRENCY: ${REMOTE_CONCURRENCY:-4}
       PREVIEW_PUBLIC_URL: ${PREVIEW_PUBLIC_URL:-http://localhost:8500}
+      PREVIEW_HOSTS: ${PREVIEW_HOSTS:-}   # vd office.aico.io.vn=aico-office (bản main ở gốc "/")
     secrets: [remote_ssh_key, remote_known_hosts, worker_token]
     group_add: ["${SECRETS_GID:-10100}"]
     volumes:
@@ -129,6 +130,23 @@ services:
     ports:
       - "127.0.0.1:8500:8500"   # bản xem trước chỉ mở cho máy này
     networks: [workers]
+    restart: unless-stopped
+
+  # Cloudflare Tunnel: đưa GUI, API (/api) và bản xem trước ra tên miền mà không mở cổng nào.
+  # Tunnel quản lý trên dashboard Cloudflare (public hostname + Access), token chỉ nằm trên PC.
+  # Bật bằng COMPOSE_PROFILES=tunnel trong .env sau khi có secrets/cloudflare_tunnel_token.
+  cloudflared:
+    image: cloudflare/cloudflared:2026.9.3
+    profiles: [tunnel]
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN_FILE: /run/secrets/cloudflare_tunnel_token
+    secrets: [cloudflare_tunnel_token]
+    group_add: ["${SECRETS_GID:-10100}"]
+    networks: [workers]   # tới aico:8000 và remote-runner:8500; ra Internet để nối Cloudflare
+    depends_on:
+      aico: {condition: service_started}
+      remote-runner: {condition: service_started}
     restart: unless-stopped
 
   # Worker: CLI chính thức của từng subscription (Claude Code, Codex, Cursor), mỗi CLI một
@@ -202,3 +220,4 @@ secrets:
   aico_internal_token: {file: ./secrets/aico_internal_token}
   remote_ssh_key: {file: ./secrets/remote_ssh_key}
   remote_known_hosts: {file: ./secrets/remote_known_hosts}
+  cloudflare_tunnel_token: {file: ./secrets/cloudflare_tunnel_token}

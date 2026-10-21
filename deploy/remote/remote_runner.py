@@ -12,6 +12,8 @@ Biến môi trường:
 - REMOTE_IMAGES: tên=image, cách nhau dấu phẩy; tên đầu tiên là mặc định
 - REMOTE_CPUS, REMOTE_MEMORY, REMOTE_CONCURRENCY, REMOTE_MAX_TIMEOUT
 - PREVIEW_DIR, PREVIEW_PUBLIC_URL (địa chỉ người mở bản xem trước), RUNNER_PORT (mặc định 8500)
+- PREVIEW_HOSTS: tên miền=bản xem trước, vd office.aico.io.vn=aico-office: tên miền đó phục vụ
+  bản xem trước ở gốc "/" (bản main của GUI). Request tới tên miền công khai chỉ được GET.
 
 POST /exec {command, archive (tar.gz base64), strip?, image?, timeout_seconds?}
   -> {exit_code, output, truncated, duration_seconds}
@@ -42,10 +44,12 @@ from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path, PurePosixPath
 from typing import Any
+from urllib.parse import urlsplit
 
 MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 MAX_OUTPUT_CHARS = 60_000
 MAX_PREVIEW_BYTES = 200 * 1024 * 1024
+LOCAL_HOSTS = {"", "localhost", "127.0.0.1", "remote-runner"}
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 DEFAULT_BUILD = "npm run build -- --base=./"
 # Cài dependency theo lockfile có sẵn; repo không có lockfile thì bỏ qua.
@@ -84,6 +88,12 @@ class Config:
         self.max_timeout = float(env.get("REMOTE_MAX_TIMEOUT", "1200"))
         self.preview_dir = Path(env.get("PREVIEW_DIR", "/data/previews"))
         self.public_url = env.get("PREVIEW_PUBLIC_URL", "http://localhost:8500").rstrip("/")
+        self.hosts = {
+            h.lower(): name for h, name in parse_images(env.get("PREVIEW_HOSTS", "")).items()
+        }
+        public = urlsplit(self.public_url).hostname or ""
+        # Tên miền đi qua tunnel ra Internet: không nhận POST (chạy lệnh, dựng bản xem trước).
+        self.public_hosts = set(self.hosts) | ({public} if public not in LOCAL_HOSTS else set())
 
 
 def container_flags(cfg: Config, name: str, volume: str) -> list[str]:
@@ -420,8 +430,28 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, status: int, data: Any) -> None:
         self._send(status, json.dumps(data, ensure_ascii=False).encode(), "application/json")
 
+    def _host(self) -> str:
+        return (self.headers.get("Host") or "").rsplit(":", 1)[0].lower()
+
+    def _file(self, name: str, rest: str) -> None:
+        file = static_path(self.runner.cfg.preview_dir, name, rest.lstrip("/"))
+        if file is None:
+            return self._send(404, b"not found", "text/plain")
+        kind = mimetypes.guess_type(file.name)[0] or "application/octet-stream"
+        return self._send(200, file.read_bytes(), kind)
+
+    def _redirect(self, location: str) -> None:
+        self.send_response(301)
+        self.send_header("Location", location)
+        self.end_headers()
+
     def do_GET(self) -> None:  # noqa: N802 - tên do http.server quy định
         path = self.path.split("?", 1)[0]
+        site = self.runner.cfg.hosts.get(self._host())
+        if site is not None and not path.startswith("/preview"):
+            return self._file(site, path)
+        if path == "/" and self._host() in self.runner.cfg.public_hosts:
+            return self._redirect("/preview/")
         if path == "/health":
             return self._json(200, {"ok": True, "target": bool(self.runner.cfg.target)})
         if path in ("/preview", "/preview/"):
@@ -433,18 +463,13 @@ class Handler(BaseHTTPRequestHandler):
         if match:
             name, rest = match.group(1), match.group(2)
             if rest is None:
-                self.send_response(301)
-                self.send_header("Location", f"/preview/{name}/")
-                self.end_headers()
-                return None
-            file = static_path(self.runner.cfg.preview_dir, name, rest.lstrip("/"))
-            if file is None:
-                return self._send(404, b"not found", "text/plain")
-            kind = mimetypes.guess_type(file.name)[0] or "application/octet-stream"
-            return self._send(200, file.read_bytes(), kind)
+                return self._redirect(f"/preview/{name}/")
+            return self._file(name, rest)
         return self._send(404, b"not found", "text/plain")
 
     def do_POST(self) -> None:  # noqa: N802
+        if self._host() in self.runner.cfg.public_hosts:
+            return self._json(403, {"error": "chỉ gọi được từ mạng nội bộ"})
         auth = self.headers.get("Authorization", "")
         if not self.token or not hmac.compare_digest(auth, f"Bearer {self.token}"):
             return self._json(401, {"error": "sai token"})

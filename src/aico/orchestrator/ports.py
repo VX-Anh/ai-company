@@ -102,6 +102,8 @@ class Previewer(Protocol):
 
     def schedule(self, ticket_id: str, project: str, branch: str) -> None: ...
 
+    def schedule_site(self, ticket_id: str, project: str, ref: str) -> None: ...
+
 
 class RuleTriage:
     """Phân loại rủi ro bằng luật trong policy (GĐ0–GĐ1). Luật đầu tiên khớp được dùng."""

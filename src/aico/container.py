@@ -201,20 +201,22 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             previewer=previewer,
         )
 
-        async def preview_ticket(ticket_id: str) -> dict[str, Any]:
+        async def preview_ticket(ticket_id: str, site: bool) -> dict[str, Any]:
             if previewer is None:
                 raise ValueError("chưa bật bản xem trước (AICO_PREVIEW_PROJECTS)")
             ticket = await tickets.get(ticket_id)
             branches = [a.ref for a in ticket.artifacts if a.kind == "branch"]
             project = ticket.project or settings.default_project
-            if not branches or not project:
+            if not project or not (branches or site):
                 raise ValueError("ticket chưa có branch code")
             if not previewer.enabled_for(project):
                 raise ValueError(f"repo {project} không nằm trong AICO_PREVIEW_PROJECTS")
+            if site:  # bản chính của repo (branch đích), không phải branch của ticket
+                return await previewer.build(ticket_id, project, deps.target_branch, site=True)
             return await previewer.build(ticket_id, project, branches[-1])
 
         async def merge_escalated_ticket(ticket_id: str, actor: str, comment: str) -> Ticket:
-            return await merge_escalated(
+            ticket = await merge_escalated(
                 tickets,
                 approvals,
                 gateway,
@@ -223,6 +225,9 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 comment=comment,
                 merge_role=sop.steps["merge"],
             )
+            if previewer is not None and ticket.project:
+                previewer.schedule_site(ticket_id, ticket.project, deps.target_branch)
+            return ticket
 
         saver = AsyncPostgresSaver(saver_pool)  # type: ignore[arg-type]
         graph = build_fix_ticket(deps).compile(checkpointer=saver)

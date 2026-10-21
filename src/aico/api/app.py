@@ -13,6 +13,8 @@ from typing import Annotated, Any
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
+from starlette.responses import PlainTextResponse
+from starlette.types import ASGIApp, Receive, Scope, Send
 
 from aico.core import Decision, Event, Ticket, TicketStatus
 from aico.governance import ApprovalStore
@@ -44,8 +46,9 @@ class ApiDeps:
     cors_origin_regex: str | None = None  # ví dụ mọi cổng localhost (API vẫn đòi token)
     # Merge MR của ticket đã escalate qua merge_bot: (ticket_id, actor, comment) -> ticket.
     merge_escalated: Callable[[str, str, str], Awaitable[Ticket]] | None = None
-    # Dựng lại bản xem trước MR của ticket trên máy build từ xa: ticket_id -> kết quả (có url).
-    preview: Callable[[str], Awaitable[dict[str, Any]]] | None = None
+    # Dựng lại bản xem trước trên máy build từ xa: (ticket_id, site) -> kết quả (có url).
+    # site=True dựng bản chính của repo (branch đích) thay cho branch của ticket.
+    preview: Callable[[str, bool], Awaitable[dict[str, Any]]] | None = None
 
 
 class CreateTicket(BaseModel):
@@ -173,12 +176,12 @@ def create_api_app(deps: ApiDeps) -> FastAPI:
             raise HTTPException(409, str(exc)) from None
 
     @app.post("/tickets/{ticket_id}/preview", dependencies=user)
-    async def build_preview(ticket_id: str) -> dict[str, Any]:
+    async def build_preview(ticket_id: str, site: bool = False) -> dict[str, Any]:
         await get_ticket(ticket_id)
         if deps.preview is None:
             raise HTTPException(501, "chưa cấu hình máy build từ xa cho bản xem trước")
         try:
-            return await deps.preview(ticket_id)
+            return await deps.preview(ticket_id, site)
         except ValueError as exc:  # ticket chưa có branch, repo không bật xem trước
             raise HTTPException(409, str(exc)) from None
         except RuntimeError as exc:  # PreviewError: build lỗi, máy build không phản hồi
@@ -194,3 +197,26 @@ def create_api_app(deps: ApiDeps) -> FastAPI:
         return {"valid": valid, "reason": reason}
 
     return app
+
+
+API_PREFIX = "/api"
+
+
+def with_api_prefix(app: ASGIApp) -> ASGIApp:
+    """Phục vụ API ở cả gốc (PC, worker) và dưới /api (GUI qua tên miền, cùng origin).
+
+    Qua /api không mở /internal: tunnel chỉ chuyển /api ra Internet, đường kiểm tra bản ghi duyệt
+    của mcp-gitlab chỉ dùng trong mạng Docker.
+    """
+
+    async def prefixed(scope: Scope, receive: Receive, send: Send) -> None:
+        path: str = scope.get("path", "")
+        if scope["type"] == "http" and (path == API_PREFIX or path.startswith(API_PREFIX + "/")):
+            inner = path[len(API_PREFIX) :] or "/"
+            if inner == "/internal" or inner.startswith("/internal/"):
+                await PlainTextResponse("not found", status_code=404)(scope, receive, send)
+                return
+            scope = {**scope, "path": inner, "raw_path": inner.encode()}
+        await app(scope, receive, send)
+
+    return prefixed
