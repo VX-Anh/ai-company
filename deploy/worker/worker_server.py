@@ -71,7 +71,6 @@ def build_command(
     workdir: thư mục tạm của job (file phụ như .last-message). cwd: thư mục CLI chạy (repo khi
     job có workspace), nơi Cursor đọc .cursor/.
     """
-    prompt = job["prompt"]
     system = job.get("system_prompt") or ""
     mode = job.get("mode", "read")  # read | write | review
     read_only = mode == "read"
@@ -81,8 +80,7 @@ def build_command(
         allowed = f"mcp__{MCP_NAME}" + (f",{extra}" if extra else "")
         cmd = [
             "claude",
-            "-p",
-            prompt,
+            "-p",  # prompt đi qua stdin (prompt_input)
             "--output-format",
             "json",
             "--mcp-config",
@@ -100,7 +98,6 @@ def build_command(
             cmd += ["--append-system-prompt", system]
         return cmd, {}
     if kind == "codex":
-        full = f"{system}\n\n{prompt}" if system else prompt
         cmd = [
             "codex",
             "exec",
@@ -120,8 +117,7 @@ def build_command(
             # Tool của aico đã qua guard + audit: không cần Codex hỏi duyệt từng lời gọi.
             f'mcp_servers.{MCP_NAME}.default_tools_approval_mode="approve"',
         ]
-        cmd.append(full)
-        return cmd, {"AICO_TASK_TOKEN": token}
+        return cmd, {"AICO_TASK_TOKEN": token}  # không có PROMPT: Codex đọc stdin
     if kind == "cursor":
         cursor_dir = (cwd or workdir) / ".cursor"
         cursor_dir.mkdir(exist_ok=True)
@@ -131,12 +127,25 @@ def build_command(
         # Cho phép gọi tool MCP của aico mà không hỏi (đã qua guard + audit phía aico).
         permissions = {"permissions": {"allow": [f"Mcp({MCP_NAME}:*)"], "deny": []}}
         (cursor_dir / "cli.json").write_text(json.dumps(permissions), encoding="utf-8")
-        full = f"{system}\n\n{prompt}" if system else prompt
-        cmd = ["cursor-agent", "-p", full, "--output-format", "json", "--trust", "--approve-mcps"]
+        cmd = ["cursor-agent", "-p", "--output-format", "json", "--trust", "--approve-mcps"]
         # ask: chỉ đọc. Ghi code: --force cho chạy lệnh (build/test) trong thư mục repo tạm.
         cmd += ["--mode", "ask"] if read_only else ["--force"]
         return cmd, {}
     raise ValueError(f"WORKER_KIND không hỗ trợ: {kind}")
+
+
+def prompt_input(job: dict[str, Any], kind: str) -> str:
+    """Prompt đưa vào CLI qua stdin.
+
+    Không truyền bằng tham số dòng lệnh: một tham số tối đa 128 KB trên Linux, prompt review có
+    diff lớn vượt mức đó và cả 3 CLI cùng lỗi "Argument list too long". Claude nhận system prompt
+    riêng (--append-system-prompt); Codex và Cursor ghép system prompt vào đầu.
+    """
+    prompt = job["prompt"]
+    system = job.get("system_prompt") or ""
+    if kind == "claude" or not system:
+        return prompt
+    return f"{system}\n\n{prompt}"
 
 
 def parse_output(kind: str, stdout: str, workdir: Path) -> tuple[bool, str, dict[str, Any]]:
@@ -642,17 +651,20 @@ def run_agent(
     idle_seconds: float = IDLE_SECONDS,
     check_every: float = CHECK_EVERY,
     heartbeat: Path | None = None,
+    stdin: str | None = None,
 ) -> tuple[int, str, str]:
     """Chạy CLI và giám sát: quá timeout -> TimeoutExpired; treo -> AgentStalled.
 
     Tiến triển = CPU của cây tiến trình tăng, có file trong cwd đổi, hoặc file heartbeat được
     chạm (aico-remote chạm khi chờ build trên server, lúc đó máy này không tốn CPU). Không có
-    tiến triển suốt idle_seconds thì dừng cả nhóm tiến trình.
+    tiến triển suốt idle_seconds thì dừng cả nhóm tiến trình. stdin: prompt ghi vào CLI.
     """
     proc = subprocess.Popen(
         cmd,
         cwd=cwd,
         env=env,
+        # Không có prompt thì stdin rỗng, để CLI không treo chờ đọc.
+        stdin=subprocess.PIPE if stdin is not None else subprocess.DEVNULL,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
         text=True,
@@ -662,12 +674,14 @@ def run_agent(
     last_cpu = _tree_cpu_seconds(proc.pid) or 0.0
     last_mtime = _latest_mtime(cwd)
     last_beat = _beat(heartbeat)
+    pending = stdin  # communicate() chỉ nhận input ở lần gọi đầu
     while True:
         try:
-            stdout, stderr = proc.communicate(timeout=check_every)
+            stdout, stderr = proc.communicate(input=pending, timeout=check_every)
             return proc.returncode, stdout, stderr
         except subprocess.TimeoutExpired:
             pass
+        pending = None
         now = time.monotonic()
         cpu = _tree_cpu_seconds(proc.pid)
         mtime = _latest_mtime(cwd)
@@ -729,6 +743,7 @@ def run_job(
             env={**os.environ, **extra_env, "AICO_HEARTBEAT_FILE": str(heartbeat)},
             timeout=float(job.get("timeout_seconds", 1800)),
             heartbeat=heartbeat,
+            stdin=prompt_input(job, kind),
         )
         ok, result, usage = parse_output(kind, stdout, workdir)
         if returncode != 0:

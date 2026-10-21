@@ -542,6 +542,26 @@ def test_run_agent_keeps_agent_that_writes_files(tmp_path: Path) -> None:
     assert code == 0 and out.strip() == "xong"
 
 
+@pytest.mark.parametrize("kind", ["claude", "codex", "cursor"])
+def test_large_prompt_goes_through_stdin(kind: str, tmp_path: Path) -> None:
+    """Prompt review có diff lớn (> 128 KB, giới hạn một tham số trên Linux) đi qua stdin."""
+    import sys
+
+    ws = _load_worker_server()
+    prompt = "diff " + "x" * 300_000
+    job = {"prompt": prompt, "system_prompt": "S", "mcp_url": "u", "mcp_token": "t"}
+    cmd, _ = ws.build_command(job, kind, tmp_path, tmp_path)
+    assert all(len(arg) < 10_000 for arg in cmd) and prompt not in cmd
+    stdin = ws.prompt_input(job, kind)
+    assert stdin.endswith(prompt)
+    assert stdin.startswith("S\n\n") == (kind != "claude")  # Claude: --append-system-prompt
+    counter = [sys.executable, "-c", "import sys; print(len(sys.stdin.read()))"]
+    code, out, _ = ws.run_agent(
+        counter, tmp_path, dict(os.environ), timeout=20, check_every=0.3, stdin=stdin
+    )
+    assert code == 0 and int(out) == len(stdin)
+
+
 async def test_cors_allows_any_localhost_port(company: Company) -> None:
     from aico.api import ApiDeps, create_api_app
     from aico.settings import Settings
