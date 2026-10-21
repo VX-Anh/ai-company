@@ -46,7 +46,7 @@ from aico.orchestrator import (
     StaticPlanner,
     build_fix_ticket,
 )
-from aico.orchestrator.escalation import merge_escalated
+from aico.orchestrator.escalation import merge_escalated, retry_push
 from aico.orchestrator.ports import Coder, Planner, Reviewer
 from aico.registry import Company, load_company
 from aico.settings import Settings
@@ -229,6 +229,23 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 previewer.schedule_site(ticket_id, ticket.project, deps.target_branch)
             return ticket
 
+        async def retry_push_ticket(ticket_id: str, actor: str, comment: str) -> Ticket:
+            ticket = await retry_push(
+                tickets,
+                gateway,
+                ticket_id,
+                actor=actor,
+                comment=comment,
+                code_role=sop.steps["code"],
+                default_project=settings.default_project,
+                target_branch=deps.target_branch,
+            )
+            mrs = [a for a in ticket.artifacts if a.kind == "merge_request"]
+            if previewer is not None and mrs:
+                project = mrs[-1].ref.rpartition("!")[0]
+                previewer.schedule(ticket_id, project, f"ai/{ticket_id}")
+            return ticket
+
         saver = AsyncPostgresSaver(saver_pool)  # type: ignore[arg-type]
         graph = build_fix_ticket(deps).compile(checkpointer=saver)
         runners = tuple(
@@ -259,6 +276,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 cors_origins=settings.cors_origins,
                 cors_origin_regex=settings.cors_origin_regex,
                 merge_escalated=merge_escalated_ticket,
+                retry_push=retry_push_ticket,
                 preview=preview_ticket if previewer is not None else None,
             ),
             relay_app=relay_app,

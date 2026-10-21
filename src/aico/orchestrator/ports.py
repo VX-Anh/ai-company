@@ -94,7 +94,9 @@ class ItemCoder(Protocol):
 
 
 class Reviewer(Protocol):
-    async def review(self, ticket: Ticket, mr: dict[str, Any]) -> ReviewResult: ...
+    async def review(self, ticket: Ticket, mr: dict[str, Any], plan: str = "") -> ReviewResult:
+        """plan: kế hoạch đã duyệt, là chuẩn để chấm (yêu cầu ngoài kế hoạch chỉ là gợi ý)."""
+        ...
 
 
 class Previewer(Protocol):
@@ -165,7 +167,7 @@ class ScriptedReviewer:
 
     results: list[ReviewResult] = field(default_factory=list)
 
-    async def review(self, ticket: Ticket, mr: dict[str, Any]) -> ReviewResult:
+    async def review(self, ticket: Ticket, mr: dict[str, Any], plan: str = "") -> ReviewResult:
         if self.results:
             return self.results.pop(0)
         return ReviewResult(passed=True, notes="đạt")

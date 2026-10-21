@@ -478,6 +478,8 @@ async def test_cli_reviewer_requests_changes_then_passes(company: Company) -> No
             )
         assert job["mode"] == "review" and "<diff>" in job["prompt"]
         assert "+# pilot v" in job["prompt"]
+        # Chấm theo kế hoạch đã duyệt: yêu cầu trái kế hoạch chỉ là gợi ý, không bắt sửa.
+        assert "<plan>" in job["prompt"] and "Gợi ý ngoài kế hoạch" in job["prompt"]
         return httpx.Response(200, json={"ok": True, "result": verdicts.pop(0)})
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(worker))

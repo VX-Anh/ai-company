@@ -96,6 +96,7 @@ def make_harness(
         default_project=PROJECT,
         item_roles=("coder", "designer"),
         previewer=previewer,
+        git_retry_delays=(0.0,),  # test không chờ giữa các lần thử lại Git
     )
     graph = build_fix_ticket(deps).compile(checkpointer=checkpointer or InMemorySaver())
     runner = Runner(graph, tickets, owner=owner, lease_seconds=lease_seconds)

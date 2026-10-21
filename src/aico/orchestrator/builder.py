@@ -9,6 +9,7 @@ Quy ước:
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from typing import Any, cast
 
@@ -61,6 +62,8 @@ class Deps:
     item_roles: tuple[str, ...] = ("coder",)
     # Bản xem trước của MR (máy build từ xa); None thì không dựng.
     previewer: Previewer | None = None
+    # Chờ giữa các lần thử lại tool Git ở bước code (giây); hết lượt thì escalate.
+    git_retry_delays: tuple[float, ...] = (2.0, 5.0)
 
     def role(self, step: str) -> str:
         return self.sop.steps[step]
@@ -165,6 +168,102 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             return "create"
         return "update"
 
+    async def git(tid: str, tool: str, args: dict[str, Any]) -> Any:
+        """Gọi tool Git của bước code, thử lại khi lỗi (GitHub trễ ref, mạng chập chờn).
+
+        create_branch, push (theo idempotency_key), open_merge_request đều idempotent nên thử
+        lại không tạo bản trùng.
+        """
+        for delay in (*deps.git_retry_delays, None):
+            try:
+                return await deps.gateway.call(deps.role("code"), GITLAB, tool, args, ticket_id=tid)
+            except ToolError:
+                if delay is None:
+                    raise
+                await asyncio.sleep(delay)
+
+    async def publish(
+        tid: str,
+        ticket: Ticket,
+        project: str,
+        branch: str,
+        attempt: int,
+        commits: list[tuple[str, list[dict[str, Any]], str]],
+        *,
+        description: str,
+        docs: list[tuple[str, str]] | None = None,
+    ) -> dict[str, Any]:
+        """Tạo branch, push từng commit, mở MR. Lỗi Git sau khi thử lại: escalate và giữ thay đổi.
+
+        Code agent viết xong không mất khi GitHub lỗi: thay đổi nằm trong event escalated để
+        người xem, lấy lại hoặc đẩy tay.
+        """
+        role = deps.role("code")
+        try:
+            await git(
+                tid,
+                "create_branch",
+                {"project": project, "branch": branch, "ref": deps.target_branch},
+            )
+            for message, files, key in commits:
+                await git(
+                    tid,
+                    "push",
+                    {
+                        "project": project,
+                        "branch": branch,
+                        "commit_message": message,
+                        "files": files,
+                        "idempotency_key": key,
+                    },
+                )
+            if docs:
+                doc_files = [
+                    FileChange(
+                        path, content, await file_action(tid, project, branch, path)
+                    ).to_arg()
+                    for path, content in docs
+                ]
+                await git(
+                    tid,
+                    "push",
+                    {
+                        "project": project,
+                        "branch": branch,
+                        "commit_message": f"{tid}: cập nhật tài liệu kế hoạch (lần {attempt})",
+                        "files": doc_files,
+                        "idempotency_key": f"{tid}:docs:{attempt}",
+                    },
+                )
+            mr = await git(
+                tid,
+                "open_merge_request",
+                {
+                    "project": project,
+                    "source_branch": branch,
+                    "target_branch": deps.target_branch,
+                    "title": f"{tid}: {ticket.title}",
+                    "description": description,
+                },
+            )
+        except ToolError as exc:
+            unpushed = [f for _, files, _ in commits for f in files]
+            unpushed += [{"path": path, "action": "update", "content": c} for path, c in docs or []]
+            return {
+                "code_attempts": attempt,
+                "escalation_reason": f"đẩy code lên Git lỗi (lần code {attempt}): {exc}",
+                "unpushed_changes": unpushed,
+            }
+        await deps.tickets.add_artifact(tid, Artifact(kind="branch", ref=branch), actor=role)
+        await deps.tickets.add_artifact(
+            tid,
+            Artifact(kind="merge_request", ref=f"{project}!{mr['iid']}", url=mr.get("web_url")),
+            actor=role,
+        )
+        if deps.previewer is not None:
+            deps.previewer.schedule(tid, project, branch)
+        return {"code_attempts": attempt, "branch": branch, "mr_iid": mr["iid"], "merge_error": ""}
+
     async def code_items(
         s: TicketState,
         ticket: Ticket,
@@ -175,7 +274,6 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
     ) -> dict[str, Any]:
         """Chạy các đầu việc song song, mỗi đầu việc một commit, rồi commit tài liệu kế hoạch."""
         tid = s["ticket_id"]
-        role = deps.role("code")
         coder = cast(ItemCoder, deps.coder)
         items = [WorkItem.from_dict(d) for d in s.get("work_items") or []]
         if not items:
@@ -192,27 +290,14 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             errors = "; ".join(f"{r.item_id}: {r.error}" for r in results if r.error)
             return {"escalation_reason": f"viết code: không đầu việc nào sửa được file ({errors})"}
 
-        await deps.gateway.call(
-            role,
-            GITLAB,
-            "create_branch",
-            {"project": project, "branch": branch, "ref": deps.target_branch},
-            ticket_id=tid,
-        )
-        for r in produced:
-            await deps.gateway.call(
-                role,
-                GITLAB,
-                "push",
-                {
-                    "project": project,
-                    "branch": branch,
-                    "commit_message": f"{tid}/{r.item_id}: {r.summary}",
-                    "files": [c.to_arg() for c in r.changes],
-                    "idempotency_key": f"{tid}:code:{attempt}:{r.item_id}",
-                },
-                ticket_id=tid,
+        commits = [
+            (
+                f"{tid}/{r.item_id}: {r.summary}",
+                [c.to_arg() for c in r.changes],
+                f"{tid}:code:{attempt}:{r.item_id}",
             )
+            for r in produced
+        ]
         doc = render_plan_doc(
             tid,
             ticket.title,
@@ -225,45 +310,9 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         docs = [(plan_doc_path(tid), doc)]
         if s.get("architecture"):
             docs.append((ARCHITECTURE_DOC, render_architecture_doc(s["architecture"], tid)))
-        files = [
-            FileChange(path, content, await file_action(tid, project, branch, path)).to_arg()
-            for path, content in docs
-        ]
-        await deps.gateway.call(
-            role,
-            GITLAB,
-            "push",
-            {
-                "project": project,
-                "branch": branch,
-                "commit_message": f"{tid}: cập nhật tài liệu kế hoạch (lần {attempt})",
-                "files": files,
-                "idempotency_key": f"{tid}:docs:{attempt}",
-            },
-            ticket_id=tid,
+        return await publish(
+            tid, ticket, project, branch, attempt, commits, description=doc, docs=docs
         )
-        mr = await deps.gateway.call(
-            role,
-            GITLAB,
-            "open_merge_request",
-            {
-                "project": project,
-                "source_branch": branch,
-                "target_branch": deps.target_branch,
-                "title": f"{tid}: {ticket.title}",
-                "description": doc,
-            },
-            ticket_id=tid,
-        )
-        await deps.tickets.add_artifact(tid, Artifact(kind="branch", ref=branch), actor=role)
-        await deps.tickets.add_artifact(
-            tid,
-            Artifact(kind="merge_request", ref=f"{project}!{mr['iid']}", url=mr.get("web_url")),
-            actor=role,
-        )
-        if deps.previewer is not None:
-            deps.previewer.schedule(tid, project, branch)
-        return {"code_attempts": attempt, "branch": branch, "mr_iid": mr["iid"], "merge_error": ""}
 
     async def code(s: TicketState) -> dict[str, Any]:
         tid = s["ticket_id"]
@@ -287,48 +336,16 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         except AgentUnavailable as exc:
             return {"escalation_reason": f"viết code: {exc}"}
 
-        await deps.gateway.call(
-            role,
-            GITLAB,
-            "create_branch",
-            {"project": project, "branch": branch, "ref": deps.target_branch},
-            ticket_id=tid,
+        commits = [
+            (
+                f"{tid}: {result.summary}",
+                [c.to_arg() for c in result.changes],
+                f"{tid}:code:{attempt}",
+            )
+        ]
+        return await publish(
+            tid, ticket, project, branch, attempt, commits, description=s.get("plan", "")
         )
-        await deps.gateway.call(
-            role,
-            GITLAB,
-            "push",
-            {
-                "project": project,
-                "branch": branch,
-                "commit_message": f"{tid}: {result.summary}",
-                "files": [c.to_arg() for c in result.changes],
-                "idempotency_key": f"{tid}:code:{attempt}",
-            },
-            ticket_id=tid,
-        )
-        mr = await deps.gateway.call(
-            role,
-            GITLAB,
-            "open_merge_request",
-            {
-                "project": project,
-                "source_branch": branch,
-                "target_branch": deps.target_branch,
-                "title": f"{tid}: {ticket.title}",
-                "description": s.get("plan", ""),
-            },
-            ticket_id=tid,
-        )
-        await deps.tickets.add_artifact(tid, Artifact(kind="branch", ref=branch), actor=role)
-        await deps.tickets.add_artifact(
-            tid,
-            Artifact(kind="merge_request", ref=f"{project}!{mr['iid']}", url=mr.get("web_url")),
-            actor=role,
-        )
-        if deps.previewer is not None:
-            deps.previewer.schedule(tid, project, branch)
-        return {"code_attempts": attempt, "branch": branch, "mr_iid": mr["iid"], "merge_error": ""}
 
     async def review(s: TicketState) -> dict[str, Any]:
         tid = s["ticket_id"]
@@ -343,7 +360,7 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             ticket_id=tid,
         )
         try:
-            result = await deps.reviewer.review(await deps.tickets.get(tid), mr)
+            result = await deps.reviewer.review(await deps.tickets.get(tid), mr, s.get("plan", ""))
         except BudgetExhausted as exc:
             return {"escalation_reason": f"review hết ngân sách: {exc}"}
         except AgentUnavailable as exc:
@@ -420,9 +437,14 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
 
     async def escalate(s: TicketState) -> dict[str, Any]:
         reason = s.get("escalation_reason") or _escalation_reason(s, deps.sop)
-        await deps.tickets.transition(
-            s["ticket_id"], S.ESCALATED, actor="orchestrator", data={"reason": reason}
-        )
+        # Người xử lý escalate cần đủ ngữ cảnh: góp ý review cuối, số vòng, code chưa đẩy được.
+        data: dict[str, Any] = {"reason": reason}
+        if s.get("review_notes"):
+            data["review_notes"] = s["review_notes"]
+            data["review_rounds"] = s.get("review_rounds", 0)
+        if s.get("unpushed_changes"):
+            data["unpushed_changes"] = s["unpushed_changes"]
+        await deps.tickets.transition(s["ticket_id"], S.ESCALATED, actor="orchestrator", data=data)
         return {"escalation_reason": reason}
 
     async def finish(s: TicketState) -> dict[str, Any]:

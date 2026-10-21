@@ -46,6 +46,8 @@ class ApiDeps:
     cors_origin_regex: str | None = None  # ví dụ mọi cổng localhost (API vẫn đòi token)
     # Merge MR của ticket đã escalate qua merge_bot: (ticket_id, actor, comment) -> ticket.
     merge_escalated: Callable[[str, str, str], Awaitable[Ticket]] | None = None
+    # Đẩy lại code chưa đẩy được của ticket escalated, mở MR: (ticket_id, actor, comment) -> ticket.
+    retry_push: Callable[[str, str, str], Awaitable[Ticket]] | None = None
     # Dựng lại bản xem trước trên máy build từ xa: (ticket_id, site) -> kết quả (có url).
     # site=True dựng bản chính của repo (branch đích) thay cho branch của ticket.
     preview: Callable[[str, bool], Awaitable[dict[str, Any]]] | None = None
@@ -66,7 +68,7 @@ class DecisionIn(BaseModel):
 
 
 class EscalationAction(BaseModel):
-    action: str = Field(pattern="^(close|fail|merge)$")
+    action: str = Field(pattern="^(close|fail|merge|retry_push)$")
     actor: str = Field(min_length=1)
     comment: str = ""
 
@@ -160,11 +162,12 @@ def create_api_app(deps: ApiDeps) -> FastAPI:
         ticket = await get_ticket(ticket_id)
         if ticket.status is not S.ESCALATED:
             raise HTTPException(409, "ticket không ở trạng thái escalated")
-        if body.action == "merge":
-            if deps.merge_escalated is None:
-                raise HTTPException(501, "chưa cấu hình merge cho ticket escalated")
+        if body.action in ("merge", "retry_push"):
+            handler = deps.merge_escalated if body.action == "merge" else deps.retry_push
+            if handler is None:
+                raise HTTPException(501, f"chưa cấu hình {body.action} cho ticket escalated")
             try:
-                return await deps.merge_escalated(ticket_id, body.actor, body.comment)
+                return await handler(ticket_id, body.actor, body.comment)
             except ValueError as exc:  # EscalationError
                 raise HTTPException(409, str(exc)) from None
         target = S.DONE if body.action == "close" else S.FAILED

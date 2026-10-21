@@ -56,6 +56,8 @@ def summarize_ticket(ticket: Ticket, events: list[Event]) -> dict[str, Any]:
             review_notes = _clip(str(data.get("review_notes") or ""))
         elif e.kind == "status" and e.to_status is S.ESCALATED:
             escalation = str(data.get("reason") or "")
+            if data.get("review_notes"):  # review cuối khi escalate vì hết vòng review
+                review_notes = _clip(str(data["review_notes"]))
         elif e.kind == "status" and e.to_status is S.FAILED:
             escalation = f"lỗi: {data.get('error') or 'không rõ'}"
         elif e.kind == "resume_requested":

@@ -120,7 +120,7 @@ Agent chỉ gọi tool qua tool bridge của aico, nên mọi lời gọi đi qu
 | POST | `/tickets` | Tạo ticket `{title, body, project?, labels?, budget_usd?}` |
 | GET | `/tickets`, `/tickets/{id}`, `/tickets/{id}/events` | Xem ticket và lịch sử |
 | POST | `/tickets/{id}/decisions` | Duyệt `{decision, actor, comment}`: kế hoạch `approved/revise/rejected`, merge `approved/changes_requested/rejected` |
-| POST | `/tickets/{id}/escalation` | Ticket escalated: `{action: close/fail, actor}` |
+| POST | `/tickets/{id}/escalation` | Ticket escalated: `{action, actor, comment}`; `close`/`fail` đóng ticket, `merge` cho merge_bot merge MR đã tự kiểm, `retry_push` đẩy lại code chưa đẩy được (lưu trong event escalated) và mở MR |
 | GET | `/internal/approvals/{id}?project&mr_iid` | Chỉ cho MCP server, cần token nội bộ |
 
 ## Cấu trúc
