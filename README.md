@@ -43,7 +43,7 @@ aico serve                    API (127.0.0.1:8000), model relay (127.0.0.1:8200)
 mcp-gitlab                    MCP server GitLab (Streamable HTTP, /mcp)
 ```
 
-Biến môi trường chính: `AICO_PLANNER` (`static` hoặc `llm`), `AICO_DATABASE_URL`, `AICO_COMPANY_DIR`, `AICO_MCP_GITLAB_URL`, `AICO_UPSTREAM_LLM_URL` và `AICO_UPSTREAM_LLM_KEY_FILE` (API trả theo lượng dùng, nếu có), `AICO_API_TOKEN_FILE`, `AICO_INTERNAL_TOKEN_FILE`, `AICO_INTAKE_PROJECTS`. Secret luôn đọc từ file. Xem `src/aico/settings.py` và `mcp_servers/gitlab/src/mcp_gitlab/server.py`.
+Biến môi trường chính: `AICO_PLANNER` (`static` hoặc `llm`), `AICO_DATABASE_URL`, `AICO_COMPANY_DIR`, `AICO_MCP_GITLAB_URL`, `AICO_UPSTREAM_LLM_URL` và `AICO_UPSTREAM_LLM_KEY_FILE` (API trả theo lượng dùng, nếu có), `AICO_API_TOKEN_FILE`, `AICO_INTERNAL_TOKEN_FILE`, `AICO_INTAKE_PROJECTS`, `AICO_SLOW_WORKERS` (mặc định `cursor`: phòng chạy chậm, việc găng như lập kế hoạch, review, đầu việc mà việc khác đang chờ được giao cho phòng khác trước). Secret luôn đọc từ file. Xem `src/aico/settings.py` và `mcp_servers/gitlab/src/mcp_gitlab/server.py`.
 
 ## Chạy bằng Docker Compose (sau khi có WSL2 + Docker)
 

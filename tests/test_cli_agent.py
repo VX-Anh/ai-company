@@ -685,3 +685,57 @@ async def test_dispatch_prefers_rooms_with_headroom(
     ticket = Ticket(id="T-1", title="x", project=PROJECT)
     assert await runner.run("tech_lead", ticket, "lập kế hoạch") == "xong"
     assert runs == [first]
+
+
+def test_worker_order_puts_slow_rooms_last_for_critical_work() -> None:
+    from aico.agents.cli_agent import worker_order
+
+    rotated = ("cursor", "claude", "codex")  # spread xoay Cursor lên đầu
+    even = {"claude": 0, "codex": 0, "cursor": 0}
+    assert worker_order(rotated, even) == rotated  # việc không găng: giữ thứ tự xoay
+    assert worker_order(rotated, even, ("cursor",)) == ("claude", "codex", "cursor")
+    # Hạn mức vẫn ưu tiên trước: Claude gần hết thì xuống sau cả Cursor.
+    tight = {"claude": 1, "codex": 0, "cursor": 0}
+    assert worker_order(rotated, tight, ("cursor",)) == ("codex", "cursor", "claude")
+
+
+def test_blocking_items_are_the_ones_others_wait_for() -> None:
+    from aico.agents.cli_agent import blocking_items
+    from aico.orchestrator.workplan import WorkItem
+
+    items = [
+        WorkItem("W1", "token", "coder", ("a.css",)),
+        WorkItem("W2", "hàm thuần", "coder", ("b.ts",)),
+        WorkItem("W3", "thanh bên", "coder", ("c.ts",), depends_on=("W2",)),
+        WorkItem("W6", "ghép", "coder", ("d.ts",), depends_on=("W1", "W3")),
+    ]
+    assert blocking_items(items) == {"W1", "W2", "W3"}
+
+
+@pytest.mark.parametrize(("critical", "first"), [(True, "claude"), (False, "cursor")])
+async def test_critical_job_skips_slow_room_first(
+    company: Company, critical: bool, first: str
+) -> None:
+    runs: list[str] = []
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"state": "idle", "usage": None})
+        runs.append(request.url.host)
+        return httpx.Response(200, json={"ok": True, "result": "xong"})
+
+    runner = CliAgentRunner(
+        company,
+        TaskTokens(),
+        CliSettings(
+            WORKERS,
+            "worker-secret",
+            "http://aico:8300/mcp",
+            http_client=httpx.AsyncClient(transport=httpx.MockTransport(handler)),
+            slow_workers=("cursor",),
+        ),
+    )
+    ticket = Ticket(id="T-1", title="x", project=PROJECT)
+    # spread=2 xoay Cursor lên đầu (coder khai báo claude, codex, cursor).
+    await runner.run_job("coder", ticket, "làm", mode="write", spread=2, critical=critical)
+    assert runs == [first]

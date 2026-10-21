@@ -51,6 +51,9 @@ class CliSettings:
     # Phòng có cửa sổ hạn mức dùng từ mức này (%) bị xếp sau phòng còn thoải mái.
     usage_tight_percent: float = 80
     status_ttl_seconds: float = 30
+    # Phòng chạy chậm (Cursor: một lượt thường 7–8 phút, Claude/Codex 2–4 phút): việc găng giao
+    # cho phòng khác trước, phòng chậm chỉ nhận khi các phòng kia đầy hoặc gần hết hạn mức.
+    slow_workers: tuple[str, ...] = ()
 
 
 class CliAgentRunner:
@@ -64,7 +67,8 @@ class CliAgentRunner:
     async def run(
         self, role_id: str, ticket: Ticket, instruction: str, *, mode: str = "read"
     ) -> str:
-        body = await self.run_job(role_id, ticket, instruction, mode=mode)
+        # Lập kế hoạch, retro: một job, ticket đứng chờ nó.
+        body = await self.run_job(role_id, ticket, instruction, mode=mode, critical=True)
         return str(body.get("result", "")).strip()
 
     async def run_job(
@@ -76,11 +80,13 @@ class CliAgentRunner:
         mode: str = "read",
         workspace: dict[str, Any] | None = None,
         spread: int = 0,
+        critical: bool = False,
     ) -> dict[str, Any]:
         """Giao việc cho một agent con ở phòng provider còn chỗ; trả nguyên kết quả của worker.
 
         workspace: mã nguồn (tar.gz base64) để agent sửa code tại chỗ (mode="write").
         spread: xoay thứ tự phòng ưu tiên, để các đầu việc song song rải sang nhiều phòng.
+        critical: việc găng (việc khác đang chờ nó): phòng chậm xếp sau các phòng cùng hạng.
         """
         role = self._company.role(role_id)
         if role.worker != "cli" or not role.workers:
@@ -107,7 +113,7 @@ class CliAgentRunner:
         k = spread % len(role.workers)
         order = (*role.workers[k:], *role.workers[:k])
         ranks = await self._room_ranks()
-        order = tuple(sorted(order, key=lambda name: ranks.get(name, 0)))  # sort ổn định
+        order = worker_order(order, ranks, self._settings.slow_workers if critical else ())
         try:
             while True:
                 errors: list[str] = []
@@ -192,6 +198,16 @@ class CliAgentRunner:
         return list(await asyncio.gather(*(one(n, u) for n, u in self._settings.workers.items())))
 
 
+def worker_order(
+    order: tuple[str, ...], ranks: Mapping[str, int], slow: tuple[str, ...] = ()
+) -> tuple[str, ...]:
+    """Thứ tự thử các phòng: hạng hạn mức trước, rồi phòng chậm (nếu có) xuống cuối hạng.
+
+    Sort ổn định nên thứ tự xoay (spread) giữ nguyên giữa các phòng cùng nhóm.
+    """
+    return tuple(sorted(order, key=lambda name: (ranks.get(name, 0), name in slow)))
+
+
 def room_rank(status: Mapping[str, Any], tight_percent: float) -> int:
     """0: còn thoải mái; 1: có cửa sổ hạn mức dùng từ tight_percent; 2: hết hạn mức hoặc mất kết
     nối. Phòng không công bố hạn mức (Cursor) tính là thoải mái cho tới khi báo hết."""
@@ -270,7 +286,12 @@ class CliCoder:
         if feedback:
             parts.append(f"Góp ý cần sửa thêm:\n<feedback>\n{feedback}\n</feedback>")
         body = await self._runner.run_job(
-            self._role, ticket, "\n\n".join(parts), mode="write", workspace=workspace
+            self._role,
+            ticket,
+            "\n\n".join(parts),
+            mode="write",
+            workspace=workspace,
+            critical=True,
         )
         changes = tuple(
             FileChange(path=c["path"], content=c.get("content", ""), action=c["action"])
@@ -301,6 +322,7 @@ class CliCoder:
         applied: dict[str, FileChange] = {}  # path -> thay đổi đã có, theo thứ tự xong
         pending = {item.id: item for item in items}
         running: dict[asyncio.Task[ItemResult], WorkItem] = {}
+        blocking = blocking_items(items)
         spread = 0
         while pending or running:
             for item_id, item in list(pending.items()):
@@ -311,13 +333,23 @@ class CliCoder:
                     )
                     del pending[item_id]
                 elif all(d is not None for d in deps):
+                    # Găng: có đầu việc khác chờ nó, hoặc nó là việc duy nhất đang chạy.
+                    critical = item.id in blocking or (len(pending) == 1 and not running)
                     workspace = {
                         **base,
                         "data": overlay_archive(base["data"], list(applied.values())),
                     }
                     task = asyncio.create_task(
                         self._run_item(
-                            ticket, project, plan, items, item, workspace, feedback, spread
+                            ticket,
+                            project,
+                            plan,
+                            items,
+                            item,
+                            workspace,
+                            feedback,
+                            spread,
+                            critical,
                         )
                     )
                     spread += 1
@@ -344,6 +376,7 @@ class CliCoder:
         workspace: dict[str, Any],
         feedback: str | None,
         spread: int,
+        critical: bool = False,
     ) -> ItemResult:
         others = [
             f"- {o.id} ({o.role}): {o.title}; sửa {', '.join(o.owns)}"
@@ -380,6 +413,7 @@ class CliCoder:
                 mode="write",
                 workspace=workspace,
                 spread=spread,
+                critical=critical,
             )
         except AgentUnavailable as exc:
             return ItemResult(item.id, item.title, "lỗi", error=str(exc))
@@ -403,6 +437,11 @@ class CliCoder:
             error="" if kept else "không sửa file nào trong phạm vi",
             rejected=tuple(rejected),
         )
+
+
+def blocking_items(items: list[WorkItem]) -> set[str]:
+    """Id các đầu việc mà đầu việc khác phụ thuộc vào (trực tiếp)."""
+    return {dep for item in items for dep in item.depends_on}
 
 
 def overlay_archive(archive_b64: str, changes: list[FileChange]) -> str:
@@ -562,7 +601,12 @@ class CliReviewer:
         ]
         workspace = {"format": head["format"], "data": head["data"], "ref": mr["source_branch"]}
         body = await self._runner.run_job(
-            self._role, ticket, "\n\n".join(parts), mode="review", workspace=workspace
+            self._role,
+            ticket,
+            "\n\n".join(parts),
+            mode="review",
+            workspace=workspace,
+            critical=True,
         )
         verdict = parse_verdict(str(body.get("result", "")))
         if verdict is None:

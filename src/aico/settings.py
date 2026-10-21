@@ -55,6 +55,8 @@ class Settings:
     bridge_url: str = "http://127.0.0.1:8300/mcp"  # địa chỉ worker dùng để gọi tool bridge
     # Phòng có cửa sổ hạn mức đã dùng từ mức này (%) được giao việc sau phòng còn thoải mái.
     usage_tight_percent: float = 80
+    # Phòng chạy chậm: đầu việc găng (đầu việc khác đang chờ) giao sau các phòng còn lại.
+    slow_workers: tuple[str, ...] = ("cursor",)
     # Máy build từ xa (deploy/remote): agent chạy build/test qua aico-remote, MR của các repo
     # trong preview_projects được dựng bản xem trước. Không đặt thì giữ cách cũ.
     remote_url: str | None = None
@@ -96,6 +98,9 @@ class Settings:
             bridge_port=int(env.get("AICO_BRIDGE_PORT", cls.bridge_port)),
             bridge_url=env.get("AICO_BRIDGE_URL", cls.bridge_url),
             usage_tight_percent=float(env.get("AICO_USAGE_TIGHT_PERCENT", cls.usage_tight_percent)),
+            slow_workers=(
+                _list("AICO_SLOW_WORKERS") if "AICO_SLOW_WORKERS" in env else cls.slow_workers
+            ),
             remote_url=env.get("AICO_REMOTE_URL") or None,
             preview_projects=_list("AICO_PREVIEW_PROJECTS"),
             cors_origins=_list("AICO_CORS_ORIGINS"),
