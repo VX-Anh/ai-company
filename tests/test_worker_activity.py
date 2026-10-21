@@ -270,7 +270,8 @@ def _write(path: Path, lines: list[dict[str, Any]]) -> None:
 def test_find_transcript_per_cli(tmp_path: Path) -> None:
     since = time.time()
     claude = tmp_path / ".claude/projects/-tmp-job--uffp4vl-repo/s1.jsonl"
-    cursor = tmp_path / ".cursor/projects/tmp-job--uffp4vl-repo/agent-transcripts/a/a.jsonl"
+    # Tên thư mục thật trong worker: Claude thay từng ký tự, Cursor gộp cả cụm ký tự lạ.
+    cursor = tmp_path / ".cursor/projects/tmp-job-uffp4vl-repo/agent-transcripts/a/a.jsonl"
     codex_other = tmp_path / ".codex/sessions/2026/10/21/rollout-a.jsonl"
     codex_mine = tmp_path / ".codex/sessions/2026/10/21/rollout-b.jsonl"
     _write(claude, CLAUDE_LINES[:1])
@@ -331,3 +332,10 @@ def test_codex_keeps_rollout_and_prunes_old(tmp_path: Path) -> None:
     os.utime(old, (week_ago, week_ago))
     ws.prune_codex_sessions(tmp_path)
     assert not old.exists() and new.exists()
+
+
+def test_transcript_dir_names_match_real_cli_folders() -> None:
+    """Tên thư mục lấy từ worker thật (21/10): cwd có '_' cạnh '/'."""
+    assert act._slug("/tmp/job-_uffp4vl/repo") == "-tmp-job--uffp4vl-repo"
+    assert act._cursor_slug("/tmp/job-62dl21n_/repo") == "tmp-job-62dl21n-repo"
+    assert act._cursor_slug("/tmp/job-rmgqa_20/repo") == "tmp-job-rmgqa-20-repo"

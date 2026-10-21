@@ -331,7 +331,13 @@ def _codex_command(item: dict[str, Any], cwd: str, at: str) -> dict[str, Any]:
 
 
 def _slug(cwd: str) -> str:
+    """Claude: mỗi ký tự lạ thành '-' (/tmp/job-_x/repo -> -tmp-job--x-repo)."""
     return re.sub(r"[^A-Za-z0-9]", "-", cwd)
+
+
+def _cursor_slug(cwd: str) -> str:
+    """Cursor: cụm ký tự lạ thành một '-', bỏ '-' hai đầu (/tmp/job-x_/repo -> tmp-job-x-repo)."""
+    return re.sub(r"[^A-Za-z0-9]+", "-", cwd).strip("-")
 
 
 def transcript_candidates(kind: str, home: Path, cwd: str) -> list[Path]:
@@ -339,7 +345,7 @@ def transcript_candidates(kind: str, home: Path, cwd: str) -> list[Path]:
     if kind == "claude":
         return sorted((home / ".claude" / "projects" / _slug(cwd)).glob("*.jsonl"))
     if kind == "cursor":
-        base = home / ".cursor" / "projects" / _slug(cwd).strip("-") / "agent-transcripts"
+        base = home / ".cursor" / "projects" / _cursor_slug(cwd) / "agent-transcripts"
         return sorted(base.glob("*/*.jsonl"))
     if kind == "codex":
         return sorted((home / ".codex" / "sessions").glob("*/*/*/rollout-*.jsonl"))
