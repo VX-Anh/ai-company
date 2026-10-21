@@ -207,7 +207,8 @@ def _todos(args: Any) -> list[dict[str, str]] | None:
     return out
 
 
-# ("activity", dict) | ("tasks", list) | ("tokens"/"tokens_total", (in, out)) | ("error", id)
+# ("activity", dict) | ("tasks", list) | ("tokens", (request, in, out, cached))
+# | ("tokens_total", (in, out, cached)) | ("error", id)
 Event = tuple[str, Any]
 
 
@@ -236,7 +237,12 @@ def _parse_claude_like(obj: dict[str, Any], cwd: str) -> list[Event]:
                 int(usage.get(k) or 0)
                 for k in ("input_tokens", "cache_creation_input_tokens", "cache_read_input_tokens")
             )
-            events.append(("tokens", (inp, int(usage.get("output_tokens") or 0))))
+            cached = int(usage.get("cache_read_input_tokens") or 0)
+            # Claude Code ghi một request API thành nhiều dòng (mỗi khối nội dung một dòng), dòng
+            # nào cũng chép cùng usage: đếm theo request (requestId / message.id), không theo dòng.
+            key = obj.get("requestId") or msg.get("id")
+            out = int(usage.get("output_tokens") or 0)
+            events.append(("tokens", (key, inp, out, cached)))
         for c in content if isinstance(content, list) else []:
             if not isinstance(c, dict):
                 continue
@@ -264,7 +270,11 @@ def _parse_codex(obj: dict[str, Any], cwd: str) -> list[Event]:
     if obj.get("type") == "event_msg" and p.get("type") == "token_count":
         total = (p.get("info") or {}).get("total_token_usage") or {}
         if isinstance(total, dict):
-            tokens = (int(total.get("input_tokens") or 0), int(total.get("output_tokens") or 0))
+            tokens = (
+                int(total.get("input_tokens") or 0),
+                int(total.get("output_tokens") or 0),
+                int(total.get("cached_input_tokens") or 0),
+            )
             return [("tokens_total", tokens)]
         return []
     if obj.get("type") == "response_item" and p.get("type") == "function_call":
@@ -389,9 +399,19 @@ class ActivityState:
         self.recent: list[dict[str, Any]] = []
         self.tasks: list[dict[str, str]] = []
         self.tool_calls = 0
-        self.tokens_in = 0
-        self.tokens_out = 0
+        # Token theo request (Claude/Cursor: cùng request ghi lại nhiều dòng thì dòng sau thay dòng
+        # trước); Codex báo sẵn tổng cả phiên trong _total.
+        self._requests: dict[str, tuple[int, int, int]] = {}
+        self._total: tuple[int, int, int] | None = None
         self.source = ""
+
+    @property
+    def tokens(self) -> tuple[int, int, int]:
+        """(vào, ra, vào đọc từ cache); "vào" đã gồm phần cache."""
+        if self._total is not None:
+            return self._total
+        rows = self._requests.values()
+        return (sum(r[0] for r in rows), sum(r[1] for r in rows), sum(r[2] for r in rows))
 
     def apply(self, events: Iterable[Event]) -> bool:
         changed = False
@@ -408,10 +428,10 @@ class ActivityState:
             elif name == "tasks":
                 self.tasks = [{**t, "title": mask(t["title"], self._secrets)} for t in value]
             elif name == "tokens":
-                self.tokens_in += value[0]
-                self.tokens_out += value[1]
+                key, inp, out, cached = value
+                self._requests[key or f"dòng-{len(self._requests)}"] = (inp, out, cached)
             elif name == "tokens_total":
-                self.tokens_in, self.tokens_out = value
+                self._total = value
             elif name == "error" and (last := self.activity) is not None:
                 failed: dict[str, Any] = {**last, "error": True}
                 self.activity = failed
@@ -428,8 +448,9 @@ class ActivityState:
             "tasks_done": done,
             "stats": {
                 "tool_calls": self.tool_calls,
-                "tokens_in": self.tokens_in,
-                "tokens_out": self.tokens_out,
+                "tokens_in": self.tokens[0],
+                "tokens_out": self.tokens[1],
+                "tokens_cached": self.tokens[2],
             },
             "activity_source": self.source or None,
         }

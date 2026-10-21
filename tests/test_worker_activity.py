@@ -222,7 +222,8 @@ def test_claude_transcript_activities() -> None:
         "completed",
         "in_progress",
     ]
-    assert snap["stats"] == {"tool_calls": 5, "tokens_in": 100, "tokens_out": 5}
+    stats = {"tool_calls": 5, "tokens_in": 100, "tokens_out": 5, "tokens_cached": 90}
+    assert snap["stats"] == stats
     test_run = next(a for a in snap["recent"] if a["kind"] == "test")
     assert test_run.get("error") is True  # tool_result lỗi đánh dấu lời gọi vừa rồi
 
@@ -339,3 +340,49 @@ def test_transcript_dir_names_match_real_cli_folders() -> None:
     assert act._slug("/tmp/job-_uffp4vl/repo") == "-tmp-job--uffp4vl-repo"
     assert act._cursor_slug("/tmp/job-62dl21n_/repo") == "tmp-job-62dl21n-repo"
     assert act._cursor_slug("/tmp/job-rmgqa_20/repo") == "tmp-job-rmgqa-20-repo"
+
+
+def test_claude_tokens_counted_once_per_request() -> None:
+    """Một request API ghi thành nhiều dòng (thinking, tool_use...) cùng usage: chỉ đếm một lần."""
+    usage = {
+        "input_tokens": 2,
+        "cache_creation_input_tokens": 1000,
+        "cache_read_input_tokens": 40000,
+        "output_tokens": 300,
+    }
+
+    def line(req: str, block: dict[str, Any]) -> dict[str, Any]:
+        message = {"content": [block], "usage": usage}
+        return {"type": "assistant", "requestId": req, "message": message}
+
+    lines = [
+        line("req_1", {"type": "thinking", "thinking": "..."}),
+        line("req_1", {"type": "tool_use", "name": "Read", "input": {"file_path": "a.ts"}}),
+        line("req_1", {"type": "tool_use", "name": "Read", "input": {"file_path": "b.ts"}}),
+        line("req_2", {"type": "text", "text": "Xong."}),
+    ]
+    state = act.ActivityState()
+    for obj in lines:
+        state.apply(act.parse_line("claude", obj, CWD))
+    stats = state.snapshot()["stats"]
+    assert stats["tokens_in"] == 2 * 41002 and stats["tokens_out"] == 600
+    assert stats["tokens_cached"] == 80000 and stats["tool_calls"] == 2
+
+
+def test_codex_tokens_include_cached() -> None:
+    line = {
+        "type": "event_msg",
+        "payload": {
+            "type": "token_count",
+            "info": {
+                "total_token_usage": {
+                    "input_tokens": 1200,
+                    "cached_input_tokens": 900,
+                    "output_tokens": 80,
+                }
+            },
+        },
+    }
+    state = act.ActivityState()
+    state.apply(act.parse_line("codex", line, CWD))
+    assert state.snapshot()["stats"]["tokens_cached"] == 900
