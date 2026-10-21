@@ -28,7 +28,8 @@ src/aico/governance     bản ghi duyệt, audit, kiểm tra duyệt merge
 src/aico/api            REST API cho người và GUI (/tickets, /workers)
 src/aico/llm_relay      model relay (token theo task, ngân sách)
 mcp_servers/gitlab      MCP server Git (GitHub backend mặc định, MR = PR)
-deploy/                 compose.yaml, Dockerfile, worker/worker_server.py (phòng provider), mcp-pixel/,
+deploy/                 compose.yaml, Dockerfile, worker/worker_server.py (phòng provider),
+                        worker/activity.py (hoạt động agent đọc từ transcript CLI), mcp-pixel/,
                         remote/ (máy build từ xa: remote_runner.py, lệnh aico-remote cho worker)
 tests/                  pytest; tests/harness.py dựng graph với agent giả
 ```

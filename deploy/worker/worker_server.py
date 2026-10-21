@@ -11,7 +11,9 @@ POST /run {prompt, system_prompt?, mcp_url, mcp_token, mode: read|write, timeout
            ticket_id?, role?}
 -> {ok, result, usage, duration_seconds} hoặc {ok: false, error, limited?}
 GET /status -> trạng thái (idle | working | limited), việc đang làm, lượt chạy, token, hạn mức
-  (`usage`: % đã dùng từng cửa sổ hạn mức, đọc từ chính CLI mỗi WORKER_USAGE_TTL giây)
+  (`usage`: % đã dùng từng cửa sổ hạn mức, đọc từ chính CLI mỗi WORKER_USAGE_TTL giây). Mỗi agent
+  con có thêm hoạt động hiện tại, hoạt động gần đây, task và số liệu, đọc từ transcript của CLI
+  (activity.py).
 """
 
 from __future__ import annotations
@@ -26,15 +28,21 @@ import re
 import shutil
 import signal
 import subprocess
+import sys
 import tarfile
 import tempfile
 import threading
 import time
+from collections.abc import Callable
 from datetime import UTC, datetime, timedelta
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+# activity.py nằm cạnh file này (/opt trong image), kể cả khi test nạp file theo đường dẫn.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from activity import ActivityTracker  # noqa: E402
 
 MCP_NAME = "aico"
 CLAUDE_READ_ONLY = "--tools="  # tắt mọi tool có sẵn, chỉ còn tool MCP của aico
@@ -97,7 +105,7 @@ def build_command(
             "codex",
             "exec",
             "--skip-git-repo-check",
-            "--ephemeral",
+            # Không --ephemeral: rollout trong ~/.codex/sessions là nguồn hoạt động chi tiết.
             "--sandbox",
             # Sandbox bubblewrap của Codex không tạo được namespace trong Docker. Ghi code và
             # review: container worker (không có secret của aico, thư mục job tạm) là lớp cô lập.
@@ -428,6 +436,12 @@ class WorkerStats:
             }
             return agent_id
 
+    def update(self, agent_id: str, activity: dict[str, Any]) -> None:
+        """Gộp hoạt động mới (ActivityTracker) vào agent đang chạy."""
+        with self._lock:
+            if agent_id in self.agents:
+                self.agents[agent_id] = {**self.agents[agent_id], **activity}
+
     def finish(
         self, agent_id: str, result: dict[str, Any], tokens: tuple[int, int], now: datetime
     ) -> None:
@@ -671,10 +685,26 @@ def run_agent(
             raise AgentStalled(f"agent không hoạt động {int(now - last_progress)} giây (treo)")
 
 
-def run_job(job: dict[str, Any], kind: str) -> dict[str, Any]:
+def prune_codex_sessions(home: Path, days: float = 7, now: float | None = None) -> None:
+    """Xoá rollout Codex cũ hơn `days` ngày (worker bỏ --ephemeral nên rollout tích lại)."""
+    cutoff = (now if now is not None else time.time()) - days * 86400
+    for path in (home / ".codex" / "sessions").glob("*/*/*/rollout-*.jsonl"):
+        with contextlib.suppress(OSError):
+            if path.stat().st_mtime < cutoff:
+                path.unlink()
+
+
+def run_job(
+    job: dict[str, Any],
+    kind: str,
+    on_activity: Callable[[dict[str, Any]], None] | None = None,
+    home: Path | None = None,
+) -> dict[str, Any]:
     workdir = Path(tempfile.mkdtemp(prefix="job-"))
     started = time.monotonic()
     repo: Path | None = None
+    tracker: ActivityTracker | None = None
+    home = home or Path.home()
     try:
         if job.get("workspace"):
             repo = workdir / "repo"
@@ -682,6 +712,17 @@ def run_job(job: dict[str, Any], kind: str) -> dict[str, Any]:
             snapshot_repo(repo)
         cmd, extra_env = build_command(job, kind, workdir, repo)
         heartbeat = workdir / ".heartbeat"
+        if on_activity is not None:
+            if kind == "codex":
+                prune_codex_sessions(home)
+            tracker = ActivityTracker(
+                kind,
+                home,
+                repo or workdir,
+                on_activity,
+                secrets=[job.get("mcp_token") or ""],
+                heartbeat=heartbeat,
+            ).start()
         returncode, stdout, stderr = run_agent(
             cmd,
             cwd=repo or workdir,
@@ -713,6 +754,8 @@ def run_job(job: dict[str, Any], kind: str) -> dict[str, Any]:
         error = f"chuẩn bị workspace lỗi: {detail}"[:500]
         return {"ok": False, "error": error, "result": "", "usage": {}, "tokens": (0, 0)}
     finally:
+        if tracker is not None:
+            tracker.stop()
         shutil.rmtree(workdir, ignore_errors=True)
 
 
@@ -770,7 +813,7 @@ class _Handler(BaseHTTPRequestHandler):
                 )
                 return
             agent_id = self.stats.start(job, _now())
-            result = run_job(job, self.kind)
+            result = run_job(job, self.kind, lambda a: self.stats.update(agent_id, a))
             self.stats.finish(agent_id, result, tuple(result.pop("tokens")), _now())
             self.usage.poke()
             self._reply(200, {**result, "agent_id": agent_id})
