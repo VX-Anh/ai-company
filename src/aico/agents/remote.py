@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 import httpx
@@ -37,7 +38,9 @@ SHOT_HINT = (
     "bằng tool đọc file/xem ảnh của bạn (Codex: view_image) và kiểm tra phần giao diện ticket "
     "yêu cầu có hiện đúng không, có vỡ bố cục, chồng chữ, chữ mất dấu tiếng Việt không; đọc cả "
     "lỗi console aico-shot in ra. Ghi trong nhận xét đã xem ảnh nào và thấy gì. aico-shot lỗi "
-    "hoặc không xem được ảnh thì ghi rõ, riêng điều đó không phải lý do CẦN SỬA."
+    "hoặc không xem được ảnh thì ghi rõ, riêng điều đó không phải lý do CẦN SỬA. Ảnh trong "
+    ".aico-shots/ (tối đa 16) được gắn vào ticket cho người duyệt xem: chụp đúng trạng thái "
+    "liên quan tới ticket."
 )
 
 
@@ -125,6 +128,37 @@ class RemotePreviewer:
                 ticket_id, Artifact(kind="preview", ref=branch, url=result["url"]), actor=self._role
             )
         return result
+
+    async def publish_shots(self, ticket_id: str, shots: list[dict[str, Any]]) -> None:
+        """Đưa ảnh review lên máy build (phục vụ cạnh bản xem trước), gắn artifact screenshot.
+
+        Mỗi lần review một thư mục riêng theo thời điểm; GUI hiện lần mới nhất (ref sắp theo
+        thời điểm), lần cũ vẫn xem được.
+        """
+        stamp = datetime.now(UTC).strftime("%Y%m%d-%H%M%S")
+        files = [
+            {"name": str(s.get("name", "")), "data": str(s.get("data", ""))}
+            for s in shots
+            if isinstance(s, dict)
+        ]
+        try:
+            resp = await self._s.http_client.post(
+                f"{self._s.url.rstrip('/')}/shots",
+                json={"name": f"img-{ticket_id}-{stamp}", "files": files},
+                headers={"Authorization": f"Bearer {self._s.token}"},
+                timeout=120,
+            )
+            result: dict[str, Any] = resp.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise PreviewError(f"máy build không nhận ảnh: {exc}") from exc
+        if resp.status_code != 200 or not result.get("ok"):
+            raise PreviewError(str(result.get("error") or f"HTTP {resp.status_code}"))
+        for item in result.get("files", []):
+            await self._tickets.add_artifact(
+                ticket_id,
+                Artifact(kind="screenshot", ref=f"{stamp}/{item['name']}", url=item["url"]),
+                actor="reviewer",
+            )
 
     def schedule(self, ticket_id: str, project: str, branch: str) -> None:
         """Dựng nền sau khi MR có code mới; review không phải chờ."""

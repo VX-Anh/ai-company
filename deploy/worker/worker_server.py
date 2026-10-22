@@ -59,6 +59,10 @@ def _mcp_servers(url: str, token: str) -> dict[str, Any]:
 CLAUDE_WRITE_TOOLS = "Read,Edit,Write,Glob,Grep,Bash"
 CLAUDE_REVIEW_TOOLS = "Read,Glob,Grep,Bash"  # review: đọc và chạy build/test, không sửa file
 MAX_CHANGED_FILE_BYTES = 1_000_000
+# Ảnh aico-shot của reviewer gửi về aico để gắn vào ticket (khớp giới hạn của remote runner).
+SHOT_DIR = ".aico-shots"
+MAX_SHOTS = 16
+MAX_SHOT_BYTES = 4 * 1024 * 1024
 # File cấu hình của worker trong thư mục repo: không tính là thay đổi của agent.
 LOCAL_EXCLUDES = (".cursor/", ".aico-shots/")  # .aico-shots: ảnh của aico-shot
 
@@ -576,6 +580,23 @@ class AgentStalled(RuntimeError):
     """Agent không dùng CPU và không đổi file trong IDLE_SECONDS: coi là treo."""
 
 
+def collect_shots(repo: Path) -> list[dict[str, str]]:
+    """Ảnh PNG agent chụp bằng aico-shot (mới nhất trước), base64; bỏ file quá lớn."""
+    shot_dir = repo / SHOT_DIR
+    if not shot_dir.is_dir():
+        return []
+    files = [p for p in shot_dir.glob("*.png") if p.is_file() and not p.is_symlink()]
+    files.sort(key=lambda p: (-p.stat().st_mtime, p.name))
+    shots: list[dict[str, str]] = []
+    for path in files:
+        if len(shots) >= MAX_SHOTS:
+            break
+        data = path.read_bytes()
+        if len(data) <= MAX_SHOT_BYTES:
+            shots.append({"name": path.name, "data": base64.b64encode(data).decode("ascii")})
+    return sorted(shots, key=lambda s: s["name"])
+
+
 def _tree_cpu_seconds(pid: int) -> float | None:
     """Tổng CPU (user + system) của tiến trình và mọi tiến trình con; None nếu không đọc được."""
     proc = Path("/proc")
@@ -765,6 +786,8 @@ def run_job(
         }
         if repo is not None and ok and job.get("mode") == "write":
             out["changes"], out["skipped"] = collect_changes(repo)
+        if repo is not None and ok and job.get("mode") == "review":
+            out["shots"] = collect_shots(repo)
         return out
     except subprocess.TimeoutExpired:
         return {"ok": False, "error": "hết thời gian", "result": "", "usage": {}, "tokens": (0, 0)}

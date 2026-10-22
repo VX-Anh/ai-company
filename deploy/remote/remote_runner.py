@@ -18,6 +18,7 @@ Biến môi trường:
 POST /exec {command, archive (tar.gz base64), strip?, image?, timeout_seconds?}
   -> {exit_code, output, truncated, duration_seconds}
 POST /preview {name, archive, strip?, image?, build?, output?, meta?} -> {url, output, ...}
+POST /shots {name: img-..., files: [{name: *.png, data: base64}]} -> {files: [{name, url}]}
 GET /preview/ (danh sách), GET /preview/<tên>/... (file tĩnh), GET /health
 """
 
@@ -48,6 +49,13 @@ from urllib.parse import urlsplit
 
 MAX_ARCHIVE_BYTES = 64 * 1024 * 1024
 MAX_OUTPUT_CHARS = 60_000
+# Ảnh chụp giao diện của reviewer (aico-shot), gắn vào ticket: giới hạn số lượng, cỡ và tuổi.
+MAX_SHOTS = 16
+MAX_SHOT_BYTES = 4 * 1024 * 1024
+SHOT_KEEP_SECONDS = 30 * 86400
+SHOT_PREFIX = "img-"
+SHOT_FILE_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,79}\.png$")
+PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 MAX_PREVIEW_BYTES = 200 * 1024 * 1024
 LOCAL_HOSTS = {"", "localhost", "127.0.0.1", "remote-runner"}
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
@@ -364,6 +372,49 @@ class Runner:
             return {"ok": False, "error": f"không giải nén được bản build: {exc}", "output": log}
         return {"ok": True, "url": f"{self.cfg.public_url}/preview/{name}/", "output": log, **meta}
 
+    def shots(self, job: dict[str, Any]) -> dict[str, Any]:
+        """Lưu ảnh PNG vào thư mục img-...; phục vụ như file tĩnh của bản xem trước.
+
+        Không có file .json nên không hiện trong danh sách bản xem trước. Mỗi lần ghi đè cả thư
+        mục; thư mục ảnh cũ hơn SHOT_KEEP_SECONDS bị xoá.
+        """
+        name = str(job.get("name") or "")
+        if not name.startswith(SHOT_PREFIX) or not NAME_RE.match(name):
+            raise ValueError(f"tên thư mục ảnh phải bắt đầu bằng {SHOT_PREFIX}")
+        files = job.get("files")
+        if not isinstance(files, list) or not files or len(files) > MAX_SHOTS:
+            raise ValueError(f"cần 1..{MAX_SHOTS} ảnh")
+        decoded: dict[str, bytes] = {}
+        for item in files:
+            file = str(dict(item).get("name") or "")
+            if not SHOT_FILE_RE.match(file):
+                raise ValueError(f"tên ảnh không hợp lệ: {file[:80]}")
+            try:
+                data = base64.b64decode(str(item.get("data") or ""), validate=True)
+            except ValueError as exc:
+                raise ValueError(f"ảnh {file} không phải base64") from exc
+            if not data.startswith(PNG_MAGIC) or len(data) > MAX_SHOT_BYTES:
+                raise ValueError(f"ảnh {file} không phải PNG hoặc quá lớn")
+            decoded[file] = data
+        self.cfg.preview_dir.mkdir(parents=True, exist_ok=True)
+        self._prune_shots()
+        staging = Path(tempfile.mkdtemp(prefix=f".{name}-", dir=self.cfg.preview_dir))
+        for file, data in decoded.items():
+            (staging / file).write_bytes(data)
+        with self._preview_lock:
+            final = self.cfg.preview_dir / name
+            shutil.rmtree(final, ignore_errors=True)
+            staging.rename(final)
+        base = f"{self.cfg.public_url}/preview/{name}/"
+        return {"ok": True, "files": [{"name": f, "url": base + f} for f in decoded]}
+
+    def _prune_shots(self) -> None:
+        cutoff = time.time() - SHOT_KEEP_SECONDS
+        for path in self.cfg.preview_dir.glob(f"{SHOT_PREFIX}*"):
+            with contextlib.suppress(OSError):
+                if path.is_dir() and path.stat().st_mtime < cutoff:
+                    shutil.rmtree(path)
+
     def previews(self) -> list[dict[str, Any]]:
         items: list[dict[str, Any]] = []
         if not self.cfg.preview_dir.is_dir():
@@ -485,6 +536,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, self.runner.exec(job))
             if self.path == "/preview":
                 return self._json(200, self.runner.preview(job))
+            if self.path == "/shots":
+                return self._json(200, self.runner.shots(job))
         except (ValueError, TypeError) as exc:
             return self._json(400, {"error": str(exc)})
         except RuntimeError as exc:

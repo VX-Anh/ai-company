@@ -67,7 +67,8 @@ class TicketSource(StrEnum):
 class Artifact(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    kind: Literal["branch", "merge_request", "report", "preview"]
+    # screenshot: ảnh giao diện reviewer chụp (ref = "<lần chụp>/<file>.png").
+    kind: Literal["branch", "merge_request", "report", "preview", "screenshot"]
     ref: str
     url: str | None = None
 

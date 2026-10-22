@@ -85,6 +85,9 @@ tạm: pha setup có mạng (giải nén, `npm ci` / `uv sync` theo lockfile, ca
   `shot-<ticket>`), Chromium headless trong worker chụp ở 1440x900 và 390x844 vào `.aico-shots/`,
   in mã HTTP, lỗi console/trang/request và FPS. Agent mở PNG bằng tool đọc ảnh của CLI rồi ghi
   nhận xét về giao diện. `--url` chụp thẳng một địa chỉ, `--size`/`--wait` đổi cỡ và thời gian chờ.
+  Xong review, worker gửi ảnh (tối đa 16 PNG, mỗi ảnh ≤ 4 MB) về aico; aico đưa lên máy build
+  (`POST /shots`, phục vụ ở `/preview/img-<ticket>-<thời điểm>/`, giữ 30 ngày) và gắn vào ticket
+  artifact `screenshot` (`ref` = `<thời điểm>/<file>.png`, `url`) để GUI hiện ảnh lần review mới nhất.
 
 Cài đặt: `ssh-keygen -t ed25519 -N "" -f secrets/remote_ssh_key`, thêm khoá công khai vào
 `~/.ssh/authorized_keys` của user trên server với tiền tố `restrict`, chép dòng host key của

@@ -275,6 +275,83 @@ def test_preview_is_built_and_served(server: tuple[str, list[dict[str, Any]]]) -
         urllib.request.urlopen(f"{url}/preview/T-1/../../T-1.json", timeout=5)
 
 
+PNG = rr.PNG_MAGIC + b"anh"
+
+
+def _png(name: str, data: bytes = PNG) -> dict[str, str]:
+    return {"name": name, "data": base64.b64encode(data).decode()}
+
+
+def test_runner_stores_and_serves_shots(
+    server: tuple[str, list[dict[str, Any]]], tmp_path: Path
+) -> None:
+    url, _ = server
+    body = {"name": "img-T-1-1", "files": [_png("1440x900.png"), _png("390x844.png")]}
+    status, result = _post(f"{url}/shots", body)
+    assert status == 200 and result["ok"]
+    assert result["files"][0] == {
+        "name": "1440x900.png",
+        "url": "http://localhost:8500/preview/img-T-1-1/1440x900.png",
+    }
+    with urllib.request.urlopen(f"{url}/preview/img-T-1-1/390x844.png", timeout=5) as resp:
+        assert resp.read() == PNG and resp.headers["Content-Type"] == "image/png"
+    # Không lẫn vào danh sách bản xem trước.
+    req = urllib.request.Request(f"{url}/preview/", headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req, timeout=5) as resp:
+        assert json.loads(resp.read())["previews"] == []
+    # Ghi lại thay cả thư mục.
+    assert _post(f"{url}/shots", {"name": "img-T-1-1", "files": [_png("a.png")]})[0] == 200
+    assert sorted(p.name for p in (tmp_path / "previews" / "img-T-1-1").iterdir()) == ["a.png"]
+
+    bad = [
+        {"name": "T-1", "files": [_png("a.png")]},  # thiếu tiền tố img-
+        {"name": "img-T-1", "files": []},
+        {"name": "img-T-1", "files": [_png("../a.png")]},
+        {"name": "img-T-1", "files": [_png("a.svg")]},
+        {"name": "img-T-1", "files": [_png("a.png", b"<svg/>")]},  # không phải PNG
+        {"name": "img-T-1", "files": [_png(f"{i}.png") for i in range(rr.MAX_SHOTS + 1)]},
+    ]
+    for item in bad:
+        assert _post(f"{url}/shots", item)[0] == 400, item
+    assert _post(f"{url}/shots", body, token="sai")[0] == 401
+
+
+def test_runner_prunes_old_shots(tmp_path: Path) -> None:
+    runner = rr.Runner(_config(tmp_path))
+    old = tmp_path / "previews" / "img-T-old"
+    keep = tmp_path / "previews" / "T-old"  # bản xem trước, không phải ảnh
+    for path in (old, keep):
+        path.mkdir(parents=True)
+        os.utime(path, (0, 0))
+    runner.shots({"name": "img-T-new", "files": [_png("a.png")]})
+    assert not old.exists() and keep.exists()
+    assert (tmp_path / "previews" / "img-T-new" / "a.png").read_bytes() == PNG
+
+
+async def test_publish_shots_attaches_screenshots(company: Company) -> None:
+    def runner(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/shots"
+        job = json.loads(request.content)
+        assert job["name"].startswith("img-T-1-") and job["files"][0]["name"] == "a.png"
+        base = f"http://localhost:8500/preview/{job['name']}/"
+        return httpx.Response(
+            200, json={"ok": True, "files": [{"name": "a.png", "url": base + "a.png"}]}
+        )
+
+    h = make_harness(company)
+    await h.new_ticket(labels=["low-risk"])
+    await _previewer(h, runner).publish_shots("T-1", [_png("a.png")])
+    shots = [a for a in (await h.tickets.get("T-1")).artifacts if a.kind == "screenshot"]
+    assert len(shots) == 1 and shots[0].ref.endswith("/a.png")
+    assert shots[0].url and shots[0].url.endswith("/a.png")
+
+    def broken(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(400, json={"error": "ảnh lỗi"})
+
+    with pytest.raises(PreviewError, match="ảnh lỗi"):
+        await _previewer(h, broken).publish_shots("T-1", [_png("b.png")])
+
+
 def test_preview_build_rejects_links_and_escapes(tmp_path: Path) -> None:
     link = tarfile.TarInfo("./evil")
     link.type = tarfile.SYMTYPE

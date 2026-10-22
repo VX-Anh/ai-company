@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import importlib.util
 import json
 import os
@@ -523,6 +524,12 @@ async def test_cli_reviewer_asks_gui_repo_to_take_screenshots(
     from aico.agents import SHOT_HINT, CliCoder, CliReviewer
 
     prompts: list[str] = []
+    shots = [{"name": "1440x900.png", "data": "iVBO"}]
+    sunk: list[tuple[str, list[dict[str, Any]]]] = []
+
+    async def sink(ticket_id: str, items: list[dict[str, Any]]) -> None:
+        sunk.append((ticket_id, items))
+        raise RuntimeError("máy build lỗi")  # lỗi lưu ảnh không chặn review
 
     async def worker(request: httpx.Request) -> httpx.Response:
         job = json.loads(request.content)
@@ -532,7 +539,8 @@ async def test_cli_reviewer_asks_gui_repo_to_take_screenshots(
                 200, json={"ok": True, "result": "TÓM TẮT: sửa", "changes": [change]}
             )
         prompts.append(job["prompt"])
-        return httpx.Response(200, json={"ok": True, "result": "Đã xem ảnh.\nKẾT LUẬN: ĐẠT"})
+        result = {"ok": True, "result": "Đã xem ảnh.\nKẾT LUẬN: ĐẠT", "shots": shots}
+        return httpx.Response(200, json=result)
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(worker))
     runner = CliAgentRunner(
@@ -542,7 +550,7 @@ async def test_cli_reviewer_asks_gui_repo_to_take_screenshots(
         company,
         coder=lambda gw: CliCoder(runner, gw, default_project=PROJECT),
         reviewer_agent=lambda gw: CliReviewer(
-            runner, gw, shot_hint=SHOT_HINT, shot_projects=shot_projects
+            runner, gw, shot_hint=SHOT_HINT, shot_projects=shot_projects, shot_sink=sink
         ),
     )
     h.gitlab.project(PROJECT).files["main"]["README.md"] = "# pilot\n"
@@ -551,6 +559,22 @@ async def test_cli_reviewer_asks_gui_repo_to_take_screenshots(
 
     assert len(prompts) == 1
     assert ("aico-shot" in prompts[0]) is (PROJECT in shot_projects)
+    assert sunk == [("T-1", shots)]
+    assert (await h.tickets.get("T-1")).status is TicketStatus.AWAITING_MERGE_APPROVAL
+
+
+def test_worker_collects_review_screenshots(tmp_path: Path) -> None:
+    ws = _load_worker_server()
+    assert ws.collect_shots(tmp_path) == []
+    shot_dir = tmp_path / ".aico-shots"
+    shot_dir.mkdir()
+    (shot_dir / "b.png").write_bytes(b"png-b")
+    (shot_dir / "a.png").write_bytes(b"png-a")
+    (shot_dir / "note.txt").write_text("x")
+    (shot_dir / "big.png").write_bytes(b"x" * (ws.MAX_SHOT_BYTES + 1))
+    shots = ws.collect_shots(tmp_path)
+    assert [s["name"] for s in shots] == ["a.png", "b.png"]
+    assert base64.b64decode(shots[0]["data"]) == b"png-a"
 
 
 def test_run_agent_stops_stalled_agent(tmp_path: Path) -> None:

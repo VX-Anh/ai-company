@@ -194,6 +194,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 # aico-shot dựng bản xem trước trên máy build: chỉ khi máy build sẵn sàng.
                 shot_hint=SHOT_HINT if remote else None,
                 shot_projects=settings.preview_projects,
+                shot_sink=previewer.publish_shots if previewer is not None else None,
             )
         deps = Deps(
             sop=sop,

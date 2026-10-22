@@ -13,7 +13,7 @@ import difflib
 import io
 import logging
 import tarfile
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from typing import Any
@@ -550,6 +550,10 @@ PLAN_RULE = (
 )
 
 
+# Nhận ảnh PNG reviewer chụp ({name, data base64}) để gắn vào ticket.
+ShotSink = Callable[[str, list[dict[str, Any]]], Awaitable[None]]
+
+
 class CliReviewer:
     """Reviewer thật: agent con (nên khác phòng với Coder) đọc diff, chạy build/test, kết luận."""
 
@@ -561,6 +565,7 @@ class CliReviewer:
         build_hint: str | None = None,
         shot_hint: str | None = None,
         shot_projects: tuple[str, ...] = (),
+        shot_sink: ShotSink | None = None,
     ) -> None:
         self._runner = runner
         self._gateway = gateway
@@ -569,6 +574,7 @@ class CliReviewer:
         # Chỉ repo có giao diện (dựng được bản xem trước) mới nhắc reviewer chụp ảnh.
         self._shot_hint = shot_hint
         self._shot_projects = shot_projects
+        self._shot_sink = shot_sink
 
     async def _archive(self, ticket: Ticket, project: str, ref: str) -> dict[str, Any]:
         try:
@@ -614,6 +620,13 @@ class CliReviewer:
             workspace=workspace,
             critical=True,
         )
+        shots = body.get("shots")
+        if self._shot_sink is not None and isinstance(shots, list) and shots:
+            # Ảnh là phụ: lỗi lưu ảnh chỉ ghi log, không chặn kết luận review.
+            try:
+                await self._shot_sink(ticket.id, shots)
+            except Exception:
+                log.exception("ticket %s: không gắn được ảnh review", ticket.id)
         verdict = parse_verdict(str(body.get("result", "")))
         if verdict is None:
             raise AgentUnavailable(f"agent {body.get('worker')} không đưa ra kết luận review")
