@@ -167,7 +167,7 @@ class HttpGitLabBackend:
 
 @dataclass
 class _FakeProject:
-    files: dict[str, dict[str, str]] = field(default_factory=lambda: {"main": {}})
+    files: dict[str, dict[str, str | bytes]] = field(default_factory=lambda: {"main": {}})
     commits: dict[str, list[dict[str, Any]]] = field(default_factory=lambda: {"main": []})
     issues: list[dict[str, Any]] = field(default_factory=list)
     mrs: list[dict[str, Any]] = field(default_factory=list)
@@ -187,9 +187,10 @@ class FakeGitLabBackend:
     async def get_file(self, project: str, path: str, ref: str) -> str:
         self.calls.append("get_file")
         try:
-            return self.project(project).files[ref][path]
+            content = self.project(project).files[ref][path]
         except KeyError:
             raise GitLabError(f"không có file {path}@{ref}", 404) from None
+        return content.decode("utf-8") if isinstance(content, bytes) else content
 
     async def archive(self, project: str, ref: str) -> bytes:
         self.calls.append("archive")
@@ -199,7 +200,7 @@ class FakeGitLabBackend:
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
             for path, content in files.items():
-                data = content.encode("utf-8")
+                data = content if isinstance(content, bytes) else content.encode("utf-8")
                 info = tarfile.TarInfo(f"{project.replace('/', '-')}-{ref}/{path}")
                 info.size = len(data)
                 tar.addfile(info, io.BytesIO(data))
@@ -229,6 +230,8 @@ class FakeGitLabBackend:
         for action in actions:
             if action["action"] == "delete":
                 files.pop(action["file_path"], None)
+            elif action.get("encoding") == "base64":
+                files[action["file_path"]] = base64.b64decode(action["content"])
             else:
                 files[action["file_path"]] = action["content"]
         sha = f"{len(self.calls):040x}"

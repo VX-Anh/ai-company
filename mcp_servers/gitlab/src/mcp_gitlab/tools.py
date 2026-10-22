@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+import binascii
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
@@ -130,14 +131,7 @@ class GitLabTools:
         for commit in await self._backend.recent_commits(project, branch):
             if trailer in commit.get("message", ""):
                 return {"commit": commit["id"], "created": False}
-        actions = [
-            {
-                "action": f.get("action", "update"),
-                "file_path": f["path"],
-                **({"content": f["content"]} if f.get("action") != "delete" else {}),
-            }
-            for f in files
-        ]
+        actions = [_action(f) for f in files]
         result = await self._backend.commit(
             project, branch, f"{commit_message}\n\n{trailer}", actions
         )
@@ -180,3 +174,21 @@ class GitLabTools:
         self._c.check_target(mr["target_branch"])
         merged = await self._backend.merge_mr(project, mr_iid)
         return {**_mr_view(merged), "merged_now": True}
+
+
+def _action(f: dict[str, Any]) -> dict[str, Any]:
+    """File của tool push -> action commit; file nhị phân đi kèm encoding = "base64"."""
+    action: dict[str, Any] = {"action": f.get("action", "update"), "file_path": f["path"]}
+    if action["action"] == "delete":
+        return action
+    action["content"] = f["content"]
+    encoding = f.get("encoding", "text")
+    if encoding not in ("text", "base64"):
+        raise ValueError(f"encoding '{encoding}' không hợp lệ (text | base64)")
+    if encoding == "base64":
+        try:
+            base64.b64decode(f["content"], validate=True)
+        except binascii.Error:
+            raise ValueError(f"{f['path']}: content không phải base64") from None
+        action["encoding"] = "base64"
+    return action

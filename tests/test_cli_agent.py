@@ -269,7 +269,13 @@ def test_workspace_changes_follow_gitignore(tmp_path: Path) -> None:
     assert by_path["src/new.ts"]["action"] == "create"
     assert by_path["old.ts"] == {"path": "old.ts", "action": "delete"}
     assert not any(p.startswith(("node_modules", ".cursor")) for p in by_path)
-    assert skipped == ["logo.png (file nhị phân)"]
+    assert by_path["logo.png"] == {
+        "path": "logo.png",
+        "action": "create",
+        "content": base64.b64encode(bytes(range(256))).decode(),
+        "encoding": "base64",
+    }
+    assert skipped == []
 
 
 def test_workspace_rejects_path_escape(tmp_path: Path) -> None:

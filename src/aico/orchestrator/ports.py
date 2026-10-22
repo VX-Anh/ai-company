@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -21,12 +22,25 @@ class FileChange:
     path: str
     content: str = ""
     action: str = "update"  # create | update | delete
+    encoding: str = "text"  # text | base64 (file nhị phân)
+
+    @classmethod
+    def from_arg(cls, arg: dict[str, Any]) -> FileChange:
+        encoding = "base64" if arg.get("encoding") == "base64" else "text"
+        return cls(arg["path"], arg.get("content", ""), arg["action"], encoding)
 
     def to_arg(self) -> dict[str, Any]:
         arg: dict[str, Any] = {"path": self.path, "action": self.action}
         if self.action != "delete":
             arg["content"] = self.content
+            if self.encoding == "base64":
+                arg["encoding"] = "base64"
         return arg
+
+    def data(self) -> bytes:
+        if self.encoding == "base64":
+            return base64.b64decode(self.content)
+        return self.content.encode("utf-8")
 
 
 @dataclass(frozen=True)

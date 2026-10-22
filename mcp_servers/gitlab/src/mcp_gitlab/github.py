@@ -141,12 +141,22 @@ class HttpGitHubBackend:
         repo = _repo(project)
         parent = await self._head_sha(project, branch)
         base_tree = (await self._request("GET", f"{repo}/git/commits/{parent}"))["tree"]["sha"]
-        tree = [
-            {"path": a["file_path"], "mode": "100644", "type": "blob", "sha": None}
-            if a["action"] == "delete"
-            else {"path": a["file_path"], "mode": "100644", "type": "blob", "content": a["content"]}
-            for a in actions
-        ]
+        tree: list[dict[str, Any]] = []
+        for a in actions:
+            entry: dict[str, Any] = {"path": a["file_path"], "mode": "100644", "type": "blob"}
+            if a["action"] == "delete":
+                entry["sha"] = None
+            elif a.get("encoding") == "base64":
+                # Tree chỉ nhận content UTF-8: file nhị phân phải tạo blob trước.
+                blob = await self._request(
+                    "POST",
+                    f"{repo}/git/blobs",
+                    json={"content": a["content"], "encoding": "base64"},
+                )
+                entry["sha"] = blob["sha"]
+            else:
+                entry["content"] = a["content"]
+            tree.append(entry)
         new_tree = await self._request(
             "POST", f"{repo}/git/trees", json={"base_tree": base_tree, "tree": tree}
         )

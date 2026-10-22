@@ -125,6 +125,8 @@ async def retry_push(
             f: dict[str, Any] = {"path": c["path"], "action": c.get("action", "update")}
             if f["action"] != "delete":
                 f["content"] = c.get("content", "")
+                if c.get("encoding") == "base64":
+                    f["encoding"] = "base64"
                 f["action"] = await _file_action(
                     gateway, code_role, ticket_id, project, target_branch, c["path"]
                 )

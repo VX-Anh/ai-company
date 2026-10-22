@@ -546,7 +546,10 @@ def snapshot_repo(repo: Path) -> None:
 
 
 def collect_changes(repo: Path) -> tuple[list[dict[str, Any]], list[str]]:
-    """Thay đổi so với commit gốc: [{path, action, content}] và danh sách file bỏ qua."""
+    """Thay đổi so với commit gốc: [{path, action, content[, encoding]}] và file bỏ qua.
+
+    File nhị phân (ảnh, font...) gửi dạng base64 kèm encoding = "base64".
+    """
     _git(repo, "add", "-A")
     changes: list[dict[str, Any]] = []
     skipped: list[str] = []
@@ -561,13 +564,15 @@ def collect_changes(repo: Path) -> tuple[list[dict[str, Any]], list[str]]:
         if file.stat().st_size > MAX_CHANGED_FILE_BYTES:
             skipped.append(f"{path} (quá lớn)")
             continue
-        try:
-            content = file.read_text(encoding="utf-8")
-        except UnicodeDecodeError:
-            skipped.append(f"{path} (file nhị phân)")
-            continue
         action = "create" if status.startswith("A") else "update"
-        changes.append({"path": path, "action": action, "content": content})
+        data = file.read_bytes()
+        try:
+            changes.append({"path": path, "action": action, "content": data.decode("utf-8")})
+        except UnicodeDecodeError:
+            content = base64.b64encode(data).decode("ascii")
+            changes.append(
+                {"path": path, "action": action, "content": content, "encoding": "base64"}
+            )
     return changes, skipped
 
 

@@ -136,6 +136,22 @@ def test_overlay_archive_applies_changes() -> None:
     assert overlay_archive(base, []) == base
 
 
+def test_overlay_archive_writes_binary_changes() -> None:
+    png = bytes([0x89, 0x50, 0xFF])
+    change = FileChange.from_arg(
+        {
+            "path": "img/a.png",
+            "action": "create",
+            "content": base64.b64encode(png).decode(),
+            "encoding": "base64",
+        }
+    )
+    assert change.to_arg()["encoding"] == "base64"
+    out = overlay_archive(_tar({"a.ts": "1"}), [change])
+    with tarfile.open(fileobj=io.BytesIO(base64.b64decode(out)), mode="r:gz") as tar:
+        assert tar.extractfile("repo-abc/img/a.png").read() == png  # type: ignore[union-attr]
+
+
 class _PlanText:
     def __init__(self, text: str) -> None:
         self.text = text

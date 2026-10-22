@@ -57,7 +57,12 @@ def build_server(tools: GitLabTools) -> MCPServer:
     async def create_branch(project: str, branch: str, ref: str = "main") -> dict[str, Any]:
         return await _anticipated(tools.create_branch(project, branch, ref))
 
-    @server.tool(description="Commit các file lên branch. Idempotent theo idempotency_key.")
+    @server.tool(
+        description=(
+            "Commit các file lên branch. Idempotent theo idempotency_key. "
+            'Mỗi file: {path, action, content}; file nhị phân thêm encoding="base64".'
+        )
+    )
     async def push(
         project: str,
         branch: str,

@@ -293,10 +293,7 @@ class CliCoder:
             workspace=workspace,
             critical=True,
         )
-        changes = tuple(
-            FileChange(path=c["path"], content=c.get("content", ""), action=c["action"])
-            for c in body.get("changes", [])
-        )
+        changes = tuple(FileChange.from_arg(c) for c in body.get("changes", []))
         if not changes:
             raise AgentUnavailable(f"agent {body.get('worker')} không sửa file nào")
         summary = _summary_line(str(body.get("result", "")), ticket.title)
@@ -421,7 +418,7 @@ class CliCoder:
         rejected: list[str] = []
         for c in body.get("changes", []):
             if item.allows(c["path"]):
-                kept.append(FileChange(c["path"], c.get("content", ""), c["action"]))
+                kept.append(FileChange.from_arg(c))
             else:
                 rejected.append(c["path"])
         if rejected:
@@ -464,15 +461,14 @@ def overlay_archive(archive_b64: str, changes: list[FileChange]) -> str:
                 data = src.extractfile(member) if member.isfile() else None
                 dst.addfile(member, data)
             elif change.action != "delete":
-                _add_text(dst, member.name, change.content)
+                _add_file(dst, member.name, change.data())
         for path, change in by_path.items():
             if change.action != "delete":
-                _add_text(dst, f"{root or 'repo'}/{path}", change.content)
+                _add_file(dst, f"{root or 'repo'}/{path}", change.data())
     return base64.b64encode(out.getvalue()).decode("ascii")
 
 
-def _add_text(tar: tarfile.TarFile, name: str, content: str) -> None:
-    data = content.encode("utf-8")
+def _add_file(tar: tarfile.TarFile, name: str, data: bytes) -> None:
     info = tarfile.TarInfo(name)
     info.size = len(data)
     info.mode = 0o644

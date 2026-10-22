@@ -30,7 +30,8 @@ class FakeGitHub:
         self.commits: dict[str, dict[str, Any]] = {
             root: {"message": "init", "files": {"README.md": "# pilot\n"}, "parents": []}
         }
-        self.trees: dict[str, dict[str, str]] = {}
+        self.trees: dict[str, dict[str, Any]] = {}
+        self.blobs: dict[str, bytes] = {}
         self.refs = {"main": root}
         self.pulls: list[dict[str, Any]] = []
         self.issues = [
@@ -88,10 +89,17 @@ class FakeGitHub:
             for e in body["tree"]:
                 if e.get("sha", "") is None:
                     files.pop(e["path"], None)
+                elif "sha" in e:
+                    files[e["path"]] = self.blobs[e["sha"]]
                 else:
                     files[e["path"]] = e["content"]
             sha = f"tree-new-{len(self.trees)}"
             self.trees[sha] = files
+            return httpx.Response(201, json={"sha": sha})
+        if m == "POST" and p == "/git/blobs":
+            assert body["encoding"] == "base64"
+            sha = f"blob-{len(self.blobs)}"
+            self.blobs[sha] = base64.b64decode(body["content"])
             return httpx.Response(201, json={"sha": sha})
         if m == "POST" and p == "/git/commits":
             sha = self.next_sha()
@@ -189,6 +197,20 @@ async def test_push_right_after_create_branch_survives_github_lag() -> None:
     assert (await tools.create_branch(REPO, "ai/T-2"))["created"]
     files = [{"path": "NOTES.md", "content": "x"}]
     assert (await tools.push(REPO, "ai/T-2", "Ghi chú", files, "T-2:code:1"))["created"]
+
+
+async def test_push_binary_file_creates_blob() -> None:
+    gh = FakeGitHub()
+    tools = _tools(gh)
+    await tools.create_branch(REPO, "ai/T-3")
+    png = base64.b64encode(bytes([0x89, 0x50, 0xFF])).decode()
+    files = [
+        {"path": "logo.png", "action": "create", "content": png, "encoding": "base64"},
+        {"path": "NOTES.md", "content": "x"},
+    ]
+    assert (await tools.push(REPO, "ai/T-3", "Thêm logo", files, "T-3:code:1"))["created"]
+    assert gh._files("ai/T-3")["logo.png"] == bytes([0x89, 0x50, 0xFF])  # noqa: SLF001
+    assert gh._files("ai/T-3")["NOTES.md"] == "x"  # noqa: SLF001
 
 
 async def test_missing_file_message_reaches_agent() -> None:

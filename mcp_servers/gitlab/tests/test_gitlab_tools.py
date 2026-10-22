@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+
 import pytest
 from mcp.client.client import Client
 
@@ -48,6 +50,18 @@ async def test_push_and_open_mr_are_idempotent() -> None:
     mr1 = await tools.open_merge_request(PROJECT, "ai/T-1", "T-1: Sửa lỗi")
     mr2 = await tools.open_merge_request(PROJECT, "ai/T-1", "T-1: Sửa lỗi")
     assert mr1["created"] and not mr2["created"] and mr1["iid"] == mr2["iid"]
+
+
+async def test_push_binary_files_as_base64() -> None:
+    tools, backend = _tools()
+    await tools.create_branch(PROJECT, "ai/T-3")
+    png = base64.b64encode(bytes([0x89, 0x50, 0xFF])).decode()
+    files = [{"path": "logo.png", "action": "create", "content": png, "encoding": "base64"}]
+    await tools.push(PROJECT, "ai/T-3", "Thêm logo", files, "T-3:code:1")
+    assert backend.project(PROJECT).files["ai/T-3"]["logo.png"] == bytes([0x89, 0x50, 0xFF])
+    for bad in ({"encoding": "hex"}, {"content": "không phải base64!"}):
+        with pytest.raises(ValueError):
+            await tools.push(PROJECT, "ai/T-3", "x", [{**files[0], **bad}], "T-3:code:2")
 
 
 async def test_merge_requires_server_side_approval_check() -> None:
