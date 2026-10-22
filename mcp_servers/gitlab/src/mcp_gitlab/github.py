@@ -11,12 +11,15 @@ from __future__ import annotations
 import asyncio
 import base64
 import contextlib
+import re
 from typing import Any
 from urllib.parse import quote
 
 import httpx
 
 from mcp_gitlab.backend import GitLabError
+
+SHA_RE = re.compile("[0-9a-f]{40}")
 
 
 def _repo(project: str) -> str:
@@ -96,6 +99,14 @@ class HttpGitHubBackend:
         return base64.b64decode(data["content"]).decode("utf-8")
 
     async def archive(self, project: str, ref: str) -> bytes:
+        # Tarball theo tên branch có thể trả bản cũ vài giây sau push (codeload cache):
+        # đổi branch ra SHA trước. ref không phải branch (tag, SHA) thì dùng nguyên.
+        if not SHA_RE.fullmatch(ref):
+            try:
+                ref = await self._head_sha(project, ref)
+            except GitLabError as exc:
+                if exc.status != 404:
+                    raise
         path = f"{_repo(project)}/tarball/{quote(ref, safe='/')}"
         # GitHub chuyển hướng sang codeload (URL đã kèm quyền tạm cho repo private).
         resp = await self._client.get(self._api + path, follow_redirects=True)

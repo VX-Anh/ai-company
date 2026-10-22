@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import base64
+import io
 import itertools
 import json
 import re
+import tarfile
 from typing import Any
 
 import httpx
@@ -32,6 +34,7 @@ class FakeGitHub:
         }
         self.trees: dict[str, dict[str, Any]] = {}
         self.blobs: dict[str, bytes] = {}
+        self.tarball_cache: dict[str, str] = {}
         self.refs = {"main": root}
         self.pulls: list[dict[str, Any]] = []
         self.issues = [
@@ -73,6 +76,21 @@ class FakeGitHub:
             self.refs[name] = body["sha"]
             self._lagging[name] = self.ref_lag
             return httpx.Response(201, json={})
+        if m == "GET" and (g := re.fullmatch(r"/tarball/(.+)", p)):
+            # codeload cache: theo tên branch trả commit lúc tải lần đầu, theo SHA thì luôn đúng.
+            sha = (
+                g[1]
+                if g[1] in self.commits
+                else self.tarball_cache.setdefault(g[1], self.refs[g[1]])
+            )
+            buf = io.BytesIO()
+            with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+                for name, content in self.commits[sha]["files"].items():
+                    data = content if isinstance(content, bytes) else content.encode()
+                    info = tarfile.TarInfo(f"repo-{sha[:7]}/{name}")
+                    info.size = len(data)
+                    tar.addfile(info, io.BytesIO(data))
+            return httpx.Response(200, content=buf.getvalue())
         if m == "GET" and p == "/commits":
             sha, out = self.refs[request.url.params["sha"]], []
             while sha:
@@ -211,6 +229,25 @@ async def test_push_binary_file_creates_blob() -> None:
     assert (await tools.push(REPO, "ai/T-3", "Thêm logo", files, "T-3:code:1"))["created"]
     assert gh._files("ai/T-3")["logo.png"] == bytes([0x89, 0x50, 0xFF])  # noqa: SLF001
     assert gh._files("ai/T-3")["NOTES.md"] == "x"  # noqa: SLF001
+
+
+async def test_archive_after_push_is_fresh_despite_codeload_cache() -> None:
+    gh = FakeGitHub()
+    tools = _tools(gh)
+    await tools.create_branch(REPO, "ai/T-4")
+
+    async def readme() -> str:
+        archive = await tools.download_archive(REPO, "ai/T-4")
+        raw = base64.b64decode(archive["data"])
+        with tarfile.open(fileobj=io.BytesIO(raw), mode="r:gz") as tar:
+            member = next(m for m in tar.getmembers() if m.name.endswith("/README.md"))
+            return tar.extractfile(member).read().decode()  # type: ignore[union-attr]
+
+    assert await readme() == "# pilot\n"
+    files = [{"path": "README.md", "content": "# v2\n"}]
+    await tools.push(REPO, "ai/T-4", "Sửa", files, "T-4:code:1")
+    assert await readme() == "# v2\n"  # tải theo tên branch sẽ trả bản cũ trong cache
+    assert gh.tarball_cache == {}
 
 
 async def test_missing_file_message_reaches_agent() -> None:
