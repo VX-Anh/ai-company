@@ -23,7 +23,16 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
-EXCLUDE_DIRS = {".git", "node_modules", "dist", ".venv", "__pycache__", ".cursor", ".pytest_cache"}
+EXCLUDE_DIRS = {
+    ".git",
+    "node_modules",
+    "dist",
+    ".venv",
+    "__pycache__",
+    ".cursor",
+    ".pytest_cache",
+    ".aico-shots",
+}
 EXIT_UNAVAILABLE = 3
 
 

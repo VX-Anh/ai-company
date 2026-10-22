@@ -515,6 +515,44 @@ async def test_cli_reviewer_requests_changes_then_passes(company: Company) -> No
     assert merge.data["review_notes"] == "[review bởi codex]\nĐã ổn."
 
 
+@pytest.mark.parametrize("shot_projects", [(PROJECT,), ("group/khac",)])
+async def test_cli_reviewer_asks_gui_repo_to_take_screenshots(
+    company: Company, shot_projects: tuple[str, ...]
+) -> None:
+    """Repo có giao diện (có bản xem trước): reviewer được nhắc chụp ảnh bằng aico-shot."""
+    from aico.agents import SHOT_HINT, CliCoder, CliReviewer
+
+    prompts: list[str] = []
+
+    async def worker(request: httpx.Request) -> httpx.Response:
+        job = json.loads(request.content)
+        if job["role"] == "coder":
+            change = {"path": "README.md", "action": "update", "content": "# pilot v1\n"}
+            return httpx.Response(
+                200, json={"ok": True, "result": "TÓM TẮT: sửa", "changes": [change]}
+            )
+        prompts.append(job["prompt"])
+        return httpx.Response(200, json={"ok": True, "result": "Đã xem ảnh.\nKẾT LUẬN: ĐẠT"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(worker))
+    runner = CliAgentRunner(
+        company, TaskTokens(), CliSettings(WORKERS, "worker-secret", "u", 0.01, client)
+    )
+    h = make_harness(
+        company,
+        coder=lambda gw: CliCoder(runner, gw, default_project=PROJECT),
+        reviewer_agent=lambda gw: CliReviewer(
+            runner, gw, shot_hint=SHOT_HINT, shot_projects=shot_projects
+        ),
+    )
+    h.gitlab.project(PROJECT).files["main"]["README.md"] = "# pilot\n"
+    await h.new_ticket(labels=["small-fix"])
+    await h.runner.run_until_idle()
+
+    assert len(prompts) == 1
+    assert ("aico-shot" in prompts[0]) is (PROJECT in shot_projects)
+
+
 def test_run_agent_stops_stalled_agent(tmp_path: Path) -> None:
     import sys
 

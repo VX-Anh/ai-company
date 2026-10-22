@@ -559,11 +559,16 @@ class CliReviewer:
         gateway: ToolGateway,
         role_id: str = "reviewer",
         build_hint: str | None = None,
+        shot_hint: str | None = None,
+        shot_projects: tuple[str, ...] = (),
     ) -> None:
         self._runner = runner
         self._gateway = gateway
         self._role = role_id
         self._build_hint = (build_hint,) if build_hint else ()
+        # Chỉ repo có giao diện (dựng được bản xem trước) mới nhắc reviewer chụp ảnh.
+        self._shot_hint = shot_hint
+        self._shot_projects = shot_projects
 
     async def _archive(self, ticket: Ticket, project: str, ref: str) -> dict[str, Any]:
         try:
@@ -590,6 +595,7 @@ class CliReviewer:
             "Thư mục hiện tại là mã nguồn của branch cần review. Chạy build/test nếu có thể. "
             "Không sửa file: thay đổi của bạn sẽ bị bỏ.",
             *self._build_hint,
+            *([self._shot_hint] if self._shot_hint and project in self._shot_projects else []),
             "Kiểm tra: đúng yêu cầu của ticket, lỗi logic, phạm vi thay đổi, build/test.",
             *([PLAN_RULE] if plan else []),
             f"Viết nhận xét cụ thể, rồi kết thúc bằng đúng một dòng: '{VERDICT_PREFIX} ĐẠT' hoặc "

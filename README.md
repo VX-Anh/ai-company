@@ -80,6 +80,11 @@ tạm: pha setup có mạng (giải nén, `npm ci` / `uv sync` theo lockfile, ca
   qua MCP gitlab, server build (`npm run build -- --base=./`) rồi trả `dist` về PC. Bản xem trước ở
   `http://localhost:8500/preview/<ticket>/`, gắn vào ticket dạng artifact `preview`; dựng lại
   bằng `POST /tickets/{id}/preview`. Danh sách: `http://localhost:8500/preview/`.
+- **Reviewer tự xem giao diện**: với repo trong `AICO_PREVIEW_PROJECTS`, Reviewer được nhắc chạy
+  `aico-shot --query hour=11 ...` trong worker: dựng bản xem trước của thư mục hiện tại (tên
+  `shot-<ticket>`), Chromium headless trong worker chụp ở 1440x900 và 390x844 vào `.aico-shots/`,
+  in mã HTTP, lỗi console/trang/request và FPS. Agent mở PNG bằng tool đọc ảnh của CLI rồi ghi
+  nhận xét về giao diện. `--url` chụp thẳng một địa chỉ, `--size`/`--wait` đổi cỡ và thời gian chờ.
 
 Cài đặt: `ssh-keygen -t ed25519 -N "" -f secrets/remote_ssh_key`, thêm khoá công khai vào
 `~/.ssh/authorized_keys` của user trên server với tiền tố `restrict`, chép dòng host key của

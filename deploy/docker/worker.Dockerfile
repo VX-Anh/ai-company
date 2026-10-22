@@ -3,9 +3,10 @@
 FROM node:22-bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-       ca-certificates curl git ripgrep bash bubblewrap python3 tzdata \
+       ca-certificates curl git ripgrep bash bubblewrap python3 tzdata        chromium fonts-noto-core fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
-RUN npm install -g @anthropic-ai/claude-code @openai/codex && npm cache clean --force
+# playwright-core + chromium của Debian: aico-shot chụp giao diện (không tải trình duyệt riêng).
+RUN npm install -g @anthropic-ai/claude-code @openai/codex playwright-core && npm cache clean --force
 RUN useradd --uid 10003 --create-home --shell /bin/bash worker
 USER worker
 WORKDIR /home/worker
@@ -16,8 +17,8 @@ RUN cp -a /home/worker/.local/share/cursor-agent /opt/cursor-agent \
     && ln -s "$(readlink -f /home/worker/.local/bin/cursor-agent | sed 's#/home/worker/.local/share/cursor-agent#/opt/cursor-agent#')" /usr/local/bin/cursor-agent \
     && rm -rf /home/worker/.local
 COPY deploy/worker/worker_server.py deploy/worker/activity.py /opt/
-COPY deploy/remote/aico_remote.py /opt/aico_remote.py
-RUN ln -s /opt/aico_remote.py /usr/local/bin/aico-remote && chmod 755 /opt/aico_remote.py
+COPY deploy/remote/aico_remote.py deploy/remote/aico_shot.py deploy/remote/aico_shot.cjs /opt/
+RUN ln -s /opt/aico_remote.py /usr/local/bin/aico-remote && chmod 755 /opt/aico_remote.py     && ln -s /opt/aico_shot.py /usr/local/bin/aico-shot && chmod 755 /opt/aico_shot.py
 USER worker
 ENV PYTHONUNBUFFERED=1
 CMD ["python3", "/opt/worker_server.py"]

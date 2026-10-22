@@ -27,6 +27,18 @@ REMOTE_BUILD_HINT = (
     "chạy không có mạng. Không cài dependency trong thư mục hiện tại. Nếu aico-remote báo máy "
     "build không dùng được, ghi rõ trong phần tóm tắt."
 )
+# Reviewer của repo có giao diện tự xem giao diện thật, không chỉ đọc diff (3 ticket GUI gần đây
+# reviewer bắt lỗi logic nhưng không thấy cảnh bị nhỏ hay chữ mất dấu).
+SHOT_HINT = (
+    "Repo này có giao diện: sau build/test, tự xem giao diện bằng `aico-shot` (dựng bản xem "
+    "trước của thư mục hiện tại trên máy build, chụp bằng Chromium headless ở 1440x900 và "
+    "390x844, ảnh PNG lưu trong .aico-shots/). Thêm `--query` cho trạng thái cần xem, vd "
+    "`aico-shot --query hour=11 --query hour=21`; `aico-shot --help` xem tuỳ chọn. Mở từng PNG "
+    "bằng tool đọc file/xem ảnh của bạn (Codex: view_image) và kiểm tra phần giao diện ticket "
+    "yêu cầu có hiện đúng không, có vỡ bố cục, chồng chữ, chữ mất dấu tiếng Việt không; đọc cả "
+    "lỗi console aico-shot in ra. Ghi trong nhận xét đã xem ảnh nào và thấy gì. aico-shot lỗi "
+    "hoặc không xem được ảnh thì ghi rõ, riêng điều đó không phải lý do CẦN SỬA."
+)
 
 
 def site_name(project: str) -> str:

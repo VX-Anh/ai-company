@@ -14,6 +14,7 @@ from aico.agents.llm_agent import (
 )
 from aico.agents.remote import (
     REMOTE_BUILD_HINT,
+    SHOT_HINT,
     PreviewError,
     PreviewSettings,
     RemotePreviewer,
@@ -32,6 +33,7 @@ __all__ = [
     "PreviewError",
     "PreviewSettings",
     "REMOTE_BUILD_HINT",
+    "SHOT_HINT",
     "RemotePreviewer",
     "RETRO_LABEL",
     "RetroPlanner",

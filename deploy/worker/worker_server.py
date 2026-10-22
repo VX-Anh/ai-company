@@ -60,7 +60,7 @@ CLAUDE_WRITE_TOOLS = "Read,Edit,Write,Glob,Grep,Bash"
 CLAUDE_REVIEW_TOOLS = "Read,Glob,Grep,Bash"  # review: đọc và chạy build/test, không sửa file
 MAX_CHANGED_FILE_BYTES = 1_000_000
 # File cấu hình của worker trong thư mục repo: không tính là thay đổi của agent.
-LOCAL_EXCLUDES = (".cursor/",)
+LOCAL_EXCLUDES = (".cursor/", ".aico-shots/")  # .aico-shots: ảnh của aico-shot
 
 
 def build_command(
@@ -740,7 +740,13 @@ def run_job(
         returncode, stdout, stderr = run_agent(
             cmd,
             cwd=repo or workdir,
-            env={**os.environ, **extra_env, "AICO_HEARTBEAT_FILE": str(heartbeat)},
+            env={
+                **os.environ,
+                **extra_env,
+                "AICO_HEARTBEAT_FILE": str(heartbeat),
+                # aico-shot đặt tên bản xem trước theo ticket (dựng lại thì ghi đè).
+                "AICO_TICKET_ID": str(job.get("ticket_id") or ""),
+            },
             timeout=float(job.get("timeout_seconds", 1800)),
             heartbeat=heartbeat,
             stdin=prompt_input(job, kind),

@@ -39,6 +39,7 @@ def _load(name: str, rel: str) -> Any:
 
 rr = _load("remote_runner", "deploy/remote/remote_runner.py")
 ar = _load("aico_remote", "deploy/remote/aico_remote.py")
+shot = _load("aico_shot", "deploy/remote/aico_shot.py")
 
 
 def _tar_gz(files: dict[str, str], extra: list[tarfile.TarInfo] | None = None) -> bytes:
@@ -163,6 +164,82 @@ def test_aico_remote_sends_workspace_and_returns_exit_code(
     assert ar.main(["npm test"]) == ar.EXIT_UNAVAILABLE
     monkeypatch.delenv("AICO_REMOTE_URL")
     assert ar.main(["npm test"]) == ar.EXIT_UNAVAILABLE
+
+
+def test_aico_shot_plans_names_and_sizes(tmp_path: Path) -> None:
+    shots = shot.plan_shots(
+        "http://r/preview/shot-T-1/",
+        [(1440, 900), (390, 844)],
+        ["?hour=11", "hour=21&x=1"],
+        tmp_path,
+    )
+    assert [(s["url"], Path(s["path"]).name) for s in shots] == [
+        ("http://r/preview/shot-T-1/?hour=11", "1440x900-hour-11.png"),
+        ("http://r/preview/shot-T-1/?hour=11", "390x844-hour-11.png"),
+        ("http://r/preview/shot-T-1/?hour=21&x=1", "1440x900-hour-21-x-1.png"),
+        ("http://r/preview/shot-T-1/?hour=21&x=1", "390x844-hour-21-x-1.png"),
+    ]
+    assert shot.plan_shots("http://a/?demo", [(10, 20)], [], tmp_path)[0]["url"] == "http://a/?demo"
+    assert shot.plan_shots("http://a/?demo", [(10, 20)], ["h=1"], tmp_path)[0]["url"] == (
+        "http://a/?demo&h=1"
+    )
+    assert shot.preview_name("T-1") == "shot-T-1"
+    assert shot.preview_name("../x y").startswith("shot-x-y")
+    assert rr.NAME_RE.match(shot.preview_name("")) and rr.NAME_RE.match(shot.preview_name("é" * 99))
+    with pytest.raises(Exception, match="RỘNGxCAO"):
+        shot.parse_size("big")
+
+
+def test_aico_shot_builds_preview_then_shoots_internal_url(
+    server: tuple[str, list[dict[str, Any]]],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    url, calls = server
+    repo = tmp_path / "repo"
+    for rel in ("package.json", "src/a.ts", ".aico-shots/old.png"):
+        (repo / rel).parent.mkdir(parents=True, exist_ok=True)
+        (repo / rel).write_text("x")
+    secret = tmp_path / "token"
+    secret.write_text(TOKEN)
+    monkeypatch.chdir(repo)
+    monkeypatch.setenv("AICO_REMOTE_URL", url)
+    monkeypatch.setenv("AICO_REMOTE_AUTH_FILE", str(secret))
+    monkeypatch.setenv("AICO_TICKET_ID", "T-9")
+    shot_calls: list[list[dict[str, Any]]] = []
+
+    def fake_take(shots: list[dict[str, Any]], wait_ms: int) -> list[dict[str, Any]]:
+        shot_calls.append(shots)
+        # Chromium thật mở được bản xem trước qua địa chỉ nội bộ của runner.
+        with urllib.request.urlopen(shots[0]["url"], timeout=5) as resp:
+            assert resp.read() == b"<h1>preview</h1>"
+        return [{**s, "status": 200, "fps": 60, "errors": []} for s in shots]
+
+    monkeypatch.setattr(shot, "take_shots", fake_take)
+    assert shot.main(["--query", "hour=11", "--size", "800x600"]) == 0
+    assert calls[-1]["names"] == ["package.json", "src/a.ts"]  # không gửi ảnh cũ lên máy build
+    assert shot_calls[-1][0]["url"] == f"{url}/preview/shot-T-9/?hour=11"
+    assert shot_calls[-1][0]["path"] == str(repo / ".aico-shots" / "800x600-hour-11.png")
+    out = capsys.readouterr().out
+    assert "~60 FPS" in out and "không có lỗi" in out
+
+    # --url: không dựng, chụp thẳng; ảnh lỗi -> exit 1 và báo lỗi.
+    built = len(calls)
+    monkeypatch.setattr(
+        shot,
+        "take_shots",
+        lambda shots, wait: [
+            {**s, "status": None, "errors": [], "error": "timeout"} for s in shots
+        ],
+    )
+    assert shot.main(["--url", "http://x/"]) == 1
+    assert len(calls) == built and "[LỖI]" in capsys.readouterr().out
+
+    secret.write_text("sai")
+    assert shot.main([]) == ar.EXIT_UNAVAILABLE
+    monkeypatch.delenv("AICO_REMOTE_URL")
+    assert shot.main([]) == ar.EXIT_UNAVAILABLE
 
 
 def test_runner_rejects_bad_requests(server: tuple[str, list[dict[str, Any]]]) -> None:

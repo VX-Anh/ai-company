@@ -470,14 +470,17 @@ class Handler(BaseHTTPRequestHandler):
     def do_POST(self) -> None:  # noqa: N802
         if self._host() in self.runner.cfg.public_hosts:
             return self._json(403, {"error": "chỉ gọi được từ mạng nội bộ"})
-        auth = self.headers.get("Authorization", "")
-        if not self.token or not hmac.compare_digest(auth, f"Bearer {self.token}"):
-            return self._json(401, {"error": "sai token"})
         length = int(self.headers.get("Content-Length") or 0)
         if length > MAX_ARCHIVE_BYTES * 2:
             return self._json(413, {"error": "yêu cầu quá lớn"})
+        # Đọc hết body trước khi trả lỗi: đóng kết nối khi client còn gửi làm client nhận
+        # ConnectionAborted thay vì mã 401 (gặp trên Windows).
+        body = self.rfile.read(length)
+        auth = self.headers.get("Authorization", "")
+        if not self.token or not hmac.compare_digest(auth, f"Bearer {self.token}"):
+            return self._json(401, {"error": "sai token"})
         try:
-            job = json.loads(self.rfile.read(length) or b"{}")
+            job = json.loads(body or b"{}")
             if self.path == "/exec":
                 return self._json(200, self.runner.exec(job))
             if self.path == "/preview":

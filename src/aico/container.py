@@ -18,6 +18,7 @@ from starlette.applications import Starlette
 from aico.agents import (
     REMOTE_BUILD_HINT,
     RETRO_LABEL,
+    SHOT_HINT,
     CliAgentRunner,
     CliCoder,
     CliReviewer,
@@ -186,7 +187,13 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
         reviewer: Reviewer = ScriptedReviewer()
         if settings.reviewer == "cli" and cli_agents is not None:
             reviewer = CliReviewer(
-                cli_agents, gateway, role_id=sop.steps["review"], build_hint=build_hint
+                cli_agents,
+                gateway,
+                role_id=sop.steps["review"],
+                build_hint=build_hint,
+                # aico-shot dựng bản xem trước trên máy build: chỉ khi máy build sẵn sàng.
+                shot_hint=SHOT_HINT if remote else None,
+                shot_projects=settings.preview_projects,
             )
         deps = Deps(
             sop=sop,
