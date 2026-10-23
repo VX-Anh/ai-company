@@ -70,7 +70,7 @@ import sys, json
 for e in json.load(sys.stdin)[-12:]:
     d = e.get("data") or {}
     note = d.get("review_notes") or d.get("reason") or d.get("note") or d.get("summary") or ""
-    move = e["from_status"] + " -> " + e["to_status"] if e.get("to_status") else e["kind"]
+    move = str(e.get("from_status") or "-") + " -> " + e["to_status"] if e.get("to_status") else e["kind"]
     print(e["at"][:19], move, e.get("actor"), "|", str(note)[:200].replace("\n", " "))'
 }
 
