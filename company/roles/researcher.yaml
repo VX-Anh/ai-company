@@ -3,15 +3,17 @@ department: engineering
 reports_to: tech_lead
 worker: cli
 # Hồi cứu nội bộ (ticket nhãn retro): đọc lịch sử ticket do aico gom sẵn, đề xuất quy tắc mới.
-# Chỉ đọc repo; mọi thay đổi đi qua Coder, Reviewer và người duyệt.
-workers: [claude, codex, cursor]
+# Ticket tài liệu (nhãn docs): nghiên cứu trên web, viết vào docs/research/ của repo.
+# Không tự push: thay đổi đi qua Reviewer và người duyệt. Cursor chưa có tìm kiếm web headless.
+workers: [claude, codex]
+web: true
 prompt: prompts/researcher.md
 tools:
   - server: gitlab
     allow: [read_file]
     constraints:
-      repos: [VX-Anh/aico-office]
+      repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien]
 max_risk: L0
 limits:
   max_iterations: 40
-  timeout_minutes: 30
+  timeout_minutes: 45

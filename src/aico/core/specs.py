@@ -51,6 +51,8 @@ class RoleSpec(_Spec):
     worker: Literal["llm", "cli", "openhands", "system"]
     # worker: cli — các worker subscription (claude, codex, cursor) theo thứ tự ưu tiên.
     workers: tuple[str, ...] = ()
+    # Cho agent CLI dùng tìm kiếm/đọc web có sẵn của CLI (Researcher nghiên cứu thị trường).
+    web: bool = False
     model: str | None = None
     allowed_models: tuple[str, ...] = ()
     prompt: str | None = None

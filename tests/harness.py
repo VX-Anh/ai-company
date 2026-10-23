@@ -69,6 +69,8 @@ def make_harness(
     previewer: Previewer | None = None,
     analyst: Analyst | None = None,
     tester: Reviewer | None = None,
+    label_item_roles: dict[str, tuple[str, ...]] | None = None,
+    test_skip_labels: tuple[str, ...] = (),
 ) -> Harness:
     tickets = tickets or InMemoryTicketStore()
     approvals = approvals or InMemoryApprovalStore()
@@ -100,8 +102,10 @@ def make_harness(
         previewer=previewer,
         git_retry_delays=(0.0,),  # test không chờ giữa các lần thử lại Git
         analyst=analyst,
-        analyze_skip_labels=("retro",),
+        analyze_skip_labels=("retro", "docs"),
         tester=tester,
+        label_item_roles=label_item_roles or {},
+        test_skip_labels=test_skip_labels,
     )
     graph = build_fix_ticket(deps).compile(checkpointer=checkpointer or InMemorySaver())
     runner = Runner(graph, tickets, owner=owner, lease_seconds=lease_seconds)

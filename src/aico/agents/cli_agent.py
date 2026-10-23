@@ -105,6 +105,7 @@ class CliAgentRunner:
             "timeout_seconds": timeout,
             "ticket_id": ticket.id,  # chỉ để worker báo trạng thái
             "role": role_id,
+            "web": role.web,
         }
         if workspace is not None:
             job["workspace"] = workspace
@@ -581,11 +582,14 @@ class CliReviewer:
         shot_sink: ShotSink | None = None,
         brief: tuple[str, ...] = REVIEW_BRIEF,
         label: str = "review",
+        label_briefs: Mapping[str, tuple[str, ...]] | None = None,
     ) -> None:
         self._runner = runner
         self._gateway = gateway
         self._role = role_id
         self._brief = brief
+        # Ticket mang nhãn này chấm theo tiêu chí riêng (vd `docs`: chấm tài liệu, không chấm code).
+        self._label_briefs = {k.lower(): v for k, v in (label_briefs or {}).items()}
         self._label = label
         self._build_hint = (build_hint,) if build_hint else ()
         # Chỉ repo có giao diện (dựng được bản xem trước) mới nhắc reviewer chụp ảnh.
@@ -614,6 +618,14 @@ class CliReviewer:
         head = await self._archive(ticket, project, mr["source_branch"])
         base = await self._archive(ticket, project, mr["target_branch"])
         diff = archive_diff(base["data"], head["data"])
+        brief = next(
+            (
+                self._label_briefs[x.lower()]
+                for x in ticket.labels
+                if x.lower() in self._label_briefs
+            ),
+            self._brief,
+        )
         parts = [
             f"{self._label.capitalize()} merge request {project}!{mr['iid']} "
             f"({mr['source_branch']} -> {mr['target_branch']}).",
@@ -621,7 +633,7 @@ class CliReviewer:
             "Không sửa file: thay đổi của bạn sẽ bị bỏ.",
             *self._build_hint,
             *([self._shot_hint] if self._shot_hint and project in self._shot_projects else []),
-            *self._brief,
+            *brief,
             *([PLAN_RULE] if plan else []),
             f"Viết nhận xét cụ thể, rồi kết thúc bằng đúng một dòng: '{VERDICT_PREFIX} ĐẠT' hoặc "
             f"'{VERDICT_PREFIX} CẦN SỬA'. Nếu cần sửa, nêu rõ phải sửa gì.",

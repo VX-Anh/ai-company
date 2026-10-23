@@ -16,6 +16,9 @@ from psycopg_pool import AsyncConnectionPool
 from starlette.applications import Starlette
 
 from aico.agents import (
+    DOCS_LABEL,
+    DOCS_REVIEW_BRIEF,
+    DOCS_ROLES,
     REMOTE_BUILD_HINT,
     RETRO_LABEL,
     SHOT_HINT,
@@ -24,6 +27,7 @@ from aico.agents import (
     CliCoder,
     CliReviewer,
     CliSettings,
+    DocsPlanner,
     LlmAgentRunner,
     LlmAnalyst,
     LlmPlanner,
@@ -161,9 +165,16 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
         analyst: Analyst | None = None
         if settings.planner == "cli" and cli_agents is not None and "analyze" in sop.steps:
             analyst = LlmAnalyst(cli_agents, role_id=sop.steps["analyze"])
+        by_label: dict[str, Planner] = {}
         if cli_agents is not None and "researcher" in company.roles:
             # Ticket gắn nhãn retro: Researcher hồi cứu lịch sử thay Tech Lead lập kế hoạch.
-            planner = LabelPlanner(planner, {RETRO_LABEL: RetroPlanner(cli_agents, tickets)})
+            by_label[RETRO_LABEL] = RetroPlanner(cli_agents, tickets)
+        # Ticket tài liệu: Tech Lead chia việc cho researcher, ba, tech_lead (đủ vai trò mới bật).
+        docs_on = cli_agents is not None and all(r in company.roles for r in DOCS_ROLES)
+        if docs_on and cli_agents is not None:
+            by_label[DOCS_LABEL] = DocsPlanner(cli_agents, role_id=sop.steps["plan"])
+        if by_label:
+            planner = LabelPlanner(planner, by_label)
         remote = await _remote_ready(settings) if settings.worker_token else False
         build_hint = REMOTE_BUILD_HINT if remote else None
         previewer: RemotePreviewer | None = None
@@ -201,6 +212,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 shot_hint=SHOT_HINT if remote else None,
                 shot_projects=settings.preview_projects,
                 shot_sink=previewer.publish_shots if previewer is not None else None,
+                label_briefs={DOCS_LABEL: DOCS_REVIEW_BRIEF} if docs_on else None,
             )
         # Tester đi cùng Reviewer thật: không có Reviewer CLI thì không có gì để kiểm thử.
         tester: Reviewer | None = None
@@ -229,8 +241,10 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             item_roles=("coder", "designer"),
             previewer=previewer,
             analyst=analyst,
-            analyze_skip_labels=(RETRO_LABEL,),
+            analyze_skip_labels=(RETRO_LABEL, DOCS_LABEL),
             tester=tester,
+            label_item_roles={DOCS_LABEL: DOCS_ROLES} if docs_on else {},
+            test_skip_labels=(DOCS_LABEL,),
         )
 
         async def preview_ticket(ticket_id: str, site: bool) -> dict[str, Any]:

@@ -30,6 +30,9 @@ risk_rules:
   # Hồi cứu sửa quy tắc của agent: luôn cần người duyệt kế hoạch.
   - risk: medium
     labels: [retro]
+  # Tài liệu nghiên cứu/kế hoạch định hướng cả dự án: luôn cần người duyệt kế hoạch.
+  - risk: medium
+    labels: [docs]
   - risk: high
     labels: [security, data, infra]
     keywords: [auth, permission, migration, phân quyền, xác thực]

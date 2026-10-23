@@ -22,6 +22,7 @@ class TicketState(TypedDict):
     review_rounds: int
     review_passed: bool
     review_notes: str
+    skip_test: bool  # ticket mang nhãn bỏ bước test (vd docs)
     test_rounds: int
     test_passed: bool
     test_notes: str

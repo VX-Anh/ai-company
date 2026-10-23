@@ -23,7 +23,9 @@ src/aico/tickets        ticket store Postgres, bảng chuyển trạng thái
 src/aico/orchestrator   graph LangGraph của SOP (builder), runner, state, workplan (chia đầu việc)
 src/aico/agents         cli_agent: giao việc cho worker (CliAgentRunner, CliCoder, CliReviewer, cũng là
                         Tester với TEST_BRIEF); llm_agent (LlmPlanner, LlmAnalyst = BA);
-                        retro (Researcher); remote (bản xem trước MR trên máy build từ xa)
+                        retro (Researcher hồi cứu); docs (ticket nhãn docs: Researcher web, BA,
+                        Tech Lead viết tài liệu, Reviewer chấm tài liệu, bỏ Tester);
+                        remote (bản xem trước MR trên máy build từ xa)
 src/aico/tools          guard, gateway (audit), bridge (MCP cho worker, token theo task)
 src/aico/governance     bản ghi duyệt, audit, kiểm tra duyệt merge
 src/aico/api            REST API cho người và GUI (/tickets, /workers)

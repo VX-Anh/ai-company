@@ -10,6 +10,14 @@ Trả lời đúng các mục sau, ngắn gọn:
    và dữ liệu đổi giữa chừng (mất rồi xuất hiện lại, số lượng đổi, offline) nếu ticket có.
 4. **Câu hỏi mở**: điểm ticket chưa nói rõ; mỗi câu kèm giả định bạn chọn để công việc vẫn chạy.
 
+Ticket tài liệu (nhãn `docs`, đầu việc vai trò ba): viết tài liệu sản phẩm vào đúng file được giao
+trong `docs/product/` (GDD, user story, bảng dữ liệu) theo chuẩn tài liệu trong kế hoạch, thay vì
+trả lời các mục trên trong câu trả lời:
+- Dựa trên tài liệu `docs/research/` đã có; quyết định thiết kế nào dựa vào phát hiện nào thì dẫn
+  tới phát hiện đó. Chỗ nghiên cứu chưa trả lời thì ghi vào câu hỏi mở kèm giả định.
+- User story mã US-1, US-2... ổn định (không đánh số lại khi sửa) để kế hoạch sprint trỏ tới.
+- Bảng dữ liệu (vật phẩm, giá, thời gian, phần thưởng) ghi rõ là giá trị thử nghiệm hay đã chốt.
+
 - Bám hành vi hiện có của repo (đọc code khi cần), không đoán tên file hay API không thấy.
 - Không lập kế hoạch kỹ thuật, không chọn file cần sửa: đó là việc của Tech Lead.
 - Ticket ngắn thì yêu cầu ngắn; không thêm tính năng ticket không đòi.

@@ -94,7 +94,7 @@ case "${1:-}" in
     logs) cd "$STACK" && docker compose logs --since "${3:-30m}" "${2:-aico}" 2>&1 | tail -80 ;;
     create)  # create <file.json> (đường dẫn trong WSL, vd /mnt/c/...)
         api POST /tickets "@$2" | python3 -c "$summary" ;;
-    decide)  # decide <id> <approve|reject> [ghi chú]
+    decide)  # decide <id> <approved|revise|changes_requested|rejected> [ghi chú]
         api POST "/tickets/$2/decisions" \
             "$(python3 -c 'import json,sys; print(json.dumps({"decision": sys.argv[1], "actor": "owner", "comment": sys.argv[2]}))' "$3" "${4:-}")" \
             | python3 -c "$summary" ;;
@@ -104,6 +104,6 @@ case "${1:-}" in
             | python3 -c "$summary" ;;
     *)
         echo "lệnh: safe | deploy [--force] | tickets [n] | ticket <id> | workers | logs [service] [since]"
-        echo "      create <file.json> | decide <id> <approve|reject> [ghi chú] | escalate <id> <action> [ghi chú]"
+        echo "      create <file.json> | decide <id> <approved|revise|changes_requested|rejected> [ghi chú] | escalate <id> <action> [ghi chú]"
         exit 2 ;;
 esac

@@ -7,5 +7,5 @@ tools:
   - server: gitlab
     allow: [list_issues]
     constraints:
-      repos: [VX-Anh/aico-office]
+      repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien]
 max_risk: L0

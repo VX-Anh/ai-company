@@ -213,10 +213,10 @@ def _replace(item: WorkItem, **changes: Any) -> WorkItem:
     return replace(item, **changes)
 
 
-def fix_item(feedback: str) -> WorkItem:
-    """Vòng sửa sau review: một đầu việc coder sửa được mọi file, dựa trên góp ý."""
+def fix_item(feedback: str, role: str = "coder") -> WorkItem:
+    """Vòng sửa sau review: một đầu việc sửa được mọi file, dựa trên góp ý."""
     title = feedback.strip().splitlines()[0][:80] if feedback.strip() else "Sửa theo góp ý"
-    return WorkItem("FIX", f"Sửa theo góp ý: {title}", "coder", (ALL_FILES,))
+    return WorkItem("FIX", f"Sửa theo góp ý: {title}", role, (ALL_FILES,))
 
 
 def plan_doc_path(ticket_id: str) -> str:

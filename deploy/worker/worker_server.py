@@ -58,6 +58,7 @@ def _mcp_servers(url: str, token: str) -> dict[str, Any]:
 
 CLAUDE_WRITE_TOOLS = "Read,Edit,Write,Glob,Grep,Bash"
 CLAUDE_REVIEW_TOOLS = "Read,Glob,Grep,Bash"  # review: đọc và chạy build/test, không sửa file
+CLAUDE_WEB_TOOLS = "WebSearch,WebFetch"  # job web=true (Researcher): tìm và đọc trang web
 MAX_CHANGED_FILE_BYTES = 1_000_000
 # Ảnh aico-shot của reviewer gửi về aico để gắn vào ticket (khớp giới hạn của remote runner).
 SHOT_DIR = ".aico-shots"
@@ -78,9 +79,12 @@ def build_command(
     system = job.get("system_prompt") or ""
     mode = job.get("mode", "read")  # read | write | review
     read_only = mode == "read"
+    web = bool(job.get("web"))
     url, token = job["mcp_url"], job["mcp_token"]
     if kind == "claude":
         extra = {"read": "", "write": CLAUDE_WRITE_TOOLS, "review": CLAUDE_REVIEW_TOOLS}[mode]
+        if web:
+            extra = f"{extra},{CLAUDE_WEB_TOOLS}" if extra else CLAUDE_WEB_TOOLS
         allowed = f"mcp__{MCP_NAME}" + (f",{extra}" if extra else "")
         cmd = [
             "claude",
@@ -97,7 +101,8 @@ def build_command(
             "dontAsk",
         ]
         if read_only:
-            cmd.append(CLAUDE_READ_ONLY)
+            # Chỉ đọc mà có web: chỉ mở hai tool web trong bộ có sẵn, không mở Read/Bash.
+            cmd.append(f"--tools={CLAUDE_WEB_TOOLS}" if web else CLAUDE_READ_ONLY)
         if system:
             cmd += ["--append-system-prompt", system]
         return cmd, {}
@@ -121,6 +126,9 @@ def build_command(
             # Tool của aico đã qua guard + audit: không cần Codex hỏi duyệt từng lời gọi.
             f'mcp_servers.{MCP_NAME}.default_tools_approval_mode="approve"',
         ]
+        if web:
+            # Mặc định Codex chỉ tra bản cache khi sandbox read-only; job web cần trang mới nhất.
+            cmd += ["-c", 'web_search="live"']
         return cmd, {"AICO_TASK_TOKEN": token}  # không có PROMPT: Codex đọc stdin
     if kind == "cursor":
         cursor_dir = (cwd or workdir) / ".cursor"

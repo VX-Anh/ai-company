@@ -6,6 +6,7 @@ from aico.agents.cli_agent import (
     CliSettings,
     WorkerUnavailable,
 )
+from aico.agents.docs import DOCS_LABEL, DOCS_REVIEW_BRIEF, DOCS_ROLES, DocsPlanner
 from aico.agents.llm_agent import (
     AgentRunner,
     LlmAgentRunner,
@@ -29,6 +30,10 @@ __all__ = [
     "CliCoder",
     "CliReviewer",
     "CliSettings",
+    "DOCS_LABEL",
+    "DOCS_REVIEW_BRIEF",
+    "DOCS_ROLES",
+    "DocsPlanner",
     "LlmAgentRunner",
     "LlmAnalyst",
     "LlmPlanner",
