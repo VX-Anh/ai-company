@@ -26,6 +26,14 @@ def test_sample_company_loads(company: Company) -> None:
     assert "Coder" in company.prompt_text("coder")
 
 
+def test_untestable_checks_go_to_human_not_back_to_coder(company: Company) -> None:
+    # Reviewer từng trả MR nhiều vòng vì đòi ảnh favicon trên thanh tab,
+    # việc agent headless không làm được.
+    for role in ("tech_lead", "reviewer", "tester"):
+        assert "Người duyệt tự kiểm" in company.prompt_text(role), role
+    assert "không thử được" in company.prompt_text("coder")
+
+
 def test_unknown_field_is_rejected(company_copy: Path) -> None:
     _edit(company_copy / "roles" / "coder.yaml", maxrisk="L2")
     with pytest.raises(RegistryError) as exc:
