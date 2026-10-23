@@ -45,6 +45,7 @@ from aico.tools import ToolError, ToolGateway
 
 S = TicketStatus
 GITLAB = "gitlab"
+APPROVAL_NOTE_HEADING = "## Ghi chú của người duyệt (ưu tiên hơn kế hoạch khi mâu thuẫn)"
 
 
 @dataclass(frozen=True)
@@ -183,7 +184,12 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             actor=actor,
             comment=comment,
         )
-        return {"plan_decision": decision.value, "plan_feedback": comment}
+        update: dict[str, Any] = {"plan_decision": decision.value, "plan_feedback": comment}
+        # Ghi chú kèm lệnh duyệt là chỉnh sửa nhỏ của người duyệt: gắn vào kế hoạch để Coder,
+        # Reviewer, Tester và tài liệu kế hoạch đều thấy, thay vì chỉ nằm trong bản ghi duyệt.
+        if decision is Decision.APPROVED and comment.strip():
+            update["plan"] = f"{s['plan']}\n\n{APPROVAL_NOTE_HEADING}\n\n{comment.strip()}"
+        return update
 
     async def file_action(tid: str, project: str, branch: str, path: str) -> str:
         """create | update cho file docs (GitLab phân biệt hai loại; GitHub thì không)."""

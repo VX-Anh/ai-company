@@ -7,6 +7,7 @@ import pytest
 
 from aico.core import ApprovalKind, Decision, Ticket, TicketStatus, utcnow
 from aico.orchestrator import ReviewResult, ScriptedReviewer, expire_overdue_approvals
+from aico.orchestrator.builder import APPROVAL_NOTE_HEADING
 from aico.registry import Company
 from aico.tools import ApprovalRequired, ToolClient, ToolDenied, ToolError, ToolSpec
 from harness import PROJECT, make_harness
@@ -254,6 +255,46 @@ async def test_reviewer_gets_approved_plan(company: Company) -> None:
     await h.new_ticket(labels=["low-risk"])
     await h.runner.run_until_idle()
     assert seen and seen[0].strip()
+
+
+async def test_approval_note_reaches_coder_and_reviewer(company: Company) -> None:
+    seen: list[str] = []
+
+    class Recording:
+        async def review(
+            self, ticket: Ticket, mr: dict[str, Any], plan: str = "", requirements: str = ""
+        ) -> ReviewResult:
+            seen.append(plan)
+            return ReviewResult(True, "đạt")
+
+    h = make_harness(company, reviewer_agent=lambda _: Recording())
+    await h.new_ticket()
+    await h.runner.run_until_idle()
+    await h.decide("T-1", "approved", "Researcher dùng màu ô liu #8c8f3a")
+    await h.runner.run_until_idle()
+
+    assert APPROVAL_NOTE_HEADING in seen[0] and "ô liu #8c8f3a" in seen[0]
+    # Tài liệu kế hoạch commit vào branch (đầu vào của Coder và của người đọc MR) cũng có ghi chú.
+    files = h.gitlab.project(PROJECT).files["ai/T-1"]
+    assert any(isinstance(v, str) and "ô liu #8c8f3a" in v for v in files.values())
+
+
+async def test_approval_without_note_keeps_plan(company: Company) -> None:
+    seen: list[str] = []
+
+    class Recording:
+        async def review(
+            self, ticket: Ticket, mr: dict[str, Any], plan: str = "", requirements: str = ""
+        ) -> ReviewResult:
+            seen.append(plan)
+            return ReviewResult(True, "đạt")
+
+    h = make_harness(company, reviewer_agent=lambda _: Recording())
+    await h.new_ticket()
+    await h.runner.run_until_idle()
+    await h.decide("T-1", "approved")
+    await h.runner.run_until_idle()
+    assert seen and APPROVAL_NOTE_HEADING not in seen[0]
 
 
 async def test_retry_push_then_merge_escalated_ticket(company: Company) -> None:
