@@ -244,7 +244,9 @@ async def test_reviewer_gets_approved_plan(company: Company) -> None:
     seen: list[str] = []
 
     class Recording:
-        async def review(self, ticket: Ticket, mr: dict[str, Any], plan: str = "") -> ReviewResult:
+        async def review(
+            self, ticket: Ticket, mr: dict[str, Any], plan: str = "", requirements: str = ""
+        ) -> ReviewResult:
             seen.append(plan)
             return ReviewResult(True, "đạt")
 

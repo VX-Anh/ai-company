@@ -85,6 +85,7 @@ class OrgSpec(_Spec):
 class SopLimits(_Spec):
     max_plan_rounds: int = Field(default=2, ge=1)
     max_review_rounds: int = Field(default=3, ge=1)
+    max_test_rounds: int = Field(default=2, ge=1)
     max_merge_attempts: int = Field(default=2, ge=1)
     approval_deadline_hours: float = Field(default=48, gt=0)
 

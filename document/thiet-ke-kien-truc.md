@@ -134,7 +134,7 @@ Có chín thành phần, mỗi cái một package trong `src/aico/`. Ticket và 
 ### Ticket service
 
 - **Trường chính:** `id`, `title`, `body`, `source` (gitlab/jira/api), `department`, `owner_role`, `status`, `risk` (rủi ro ticket `low`/`medium`/`high`, xem mục Bảo mật), `budget_usd`, `spent_usd`, `parent_id`, `artifacts` (link MR, báo cáo), `trace_id`, `lease_owner`, `lease_until`.
-- **Trạng thái:** `new`, `triaged`, `planned`, `awaiting_plan_approval`, `in_progress`, `in_review`, `awaiting_merge_approval`, `merging`, `done`; hai trạng thái dừng ngoài luồng chính là `escalated` và `failed`.
+- **Trạng thái:** `new`, `triaged`, `planned`, `awaiting_plan_approval`, `in_progress`, `in_review`, `in_testing`, `awaiting_merge_approval`, `merging`, `done`; hai trạng thái dừng ngoài luồng chính là `escalated` và `failed`.
 - Lưu Postgres; mỗi lần chuyển trạng thái ghi một event để làm audit log.
 
 Mỗi node của graph ứng với một trạng thái ticket; chuyển tiếp có điều kiện như bảng dưới. Bộ đếm vòng nằm trong state của graph.

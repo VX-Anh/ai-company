@@ -20,7 +20,7 @@ from aico.orchestrator import (
     StaticPlanner,
     build_fix_ticket,
 )
-from aico.orchestrator.ports import Coder, Planner, Previewer, Reviewer
+from aico.orchestrator.ports import Analyst, Coder, Planner, Previewer, Reviewer
 from aico.registry import Company
 from aico.tickets import InMemoryTicketStore, TicketStore
 from aico.tools import Guard, McpToolClient, ToolClient, ToolGateway
@@ -67,6 +67,8 @@ def make_harness(
     coder: Callable[[ToolGateway], Coder] | None = None,
     reviewer_agent: Callable[[ToolGateway], Reviewer] | None = None,
     previewer: Previewer | None = None,
+    analyst: Analyst | None = None,
+    tester: Reviewer | None = None,
 ) -> Harness:
     tickets = tickets or InMemoryTicketStore()
     approvals = approvals or InMemoryApprovalStore()
@@ -97,6 +99,9 @@ def make_harness(
         item_roles=("coder", "designer"),
         previewer=previewer,
         git_retry_delays=(0.0,),  # test không chờ giữa các lần thử lại Git
+        analyst=analyst,
+        analyze_skip_labels=("retro",),
+        tester=tester,
     )
     graph = build_fix_ticket(deps).compile(checkpointer=checkpointer or InMemorySaver())
     runner = Runner(graph, tickets, owner=owner, lease_seconds=lease_seconds)

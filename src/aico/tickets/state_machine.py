@@ -13,7 +13,8 @@ TRANSITIONS: dict[TicketStatus, frozenset[TicketStatus]] = {
     S.AWAITING_PLAN_APPROVAL: frozenset({S.IN_PROGRESS, S.PLANNED, S.ESCALATED}),
     # Hết ngân sách giữa chừng cũng phải dừng và hỏi người.
     S.IN_PROGRESS: frozenset({S.IN_REVIEW, S.ESCALATED}),
-    S.IN_REVIEW: frozenset({S.AWAITING_MERGE_APPROVAL, S.IN_PROGRESS, S.ESCALATED}),
+    S.IN_REVIEW: frozenset({S.IN_TESTING, S.AWAITING_MERGE_APPROVAL, S.IN_PROGRESS, S.ESCALATED}),
+    S.IN_TESTING: frozenset({S.AWAITING_MERGE_APPROVAL, S.IN_PROGRESS, S.ESCALATED}),
     S.AWAITING_MERGE_APPROVAL: frozenset({S.MERGING, S.IN_PROGRESS, S.ESCALATED}),
     S.MERGING: frozenset({S.DONE, S.IN_PROGRESS, S.ESCALATED}),
     # Người nhận ticket escalate có thể xử lý tay, cho chạy lại hoặc đóng.

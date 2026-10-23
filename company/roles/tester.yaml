@@ -1,0 +1,16 @@
+id: tester
+department: engineering
+reports_to: tech_lead
+worker: cli
+# Kiểm thử MR sau khi review đạt, theo tiêu chí nghiệm thu của BA. Không sửa file.
+workers: [codex, claude, cursor]
+prompt: prompts/tester.md
+tools:
+  - server: gitlab
+    allow: [read_file, download_archive, get_merge_request]
+    constraints:
+      repos: [VX-Anh/aico-office]
+max_risk: L0
+limits:
+  max_iterations: 40
+  timeout_minutes: 30

@@ -1,0 +1,16 @@
+id: ba
+department: office
+reports_to: chief_of_staff
+worker: cli
+# Phân tích yêu cầu trước Tech Lead: user story, tiêu chí nghiệm thu, trường hợp biên. Chỉ đọc repo.
+workers: [claude, codex, cursor]
+prompt: prompts/ba.md
+tools:
+  - server: gitlab
+    allow: [read_file]
+    constraints:
+      repos: [VX-Anh/aico-office]
+max_risk: L0
+limits:
+  max_iterations: 40
+  timeout_minutes: 20

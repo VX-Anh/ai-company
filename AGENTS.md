@@ -21,7 +21,8 @@ src/aico/core           model dữ liệu chung (Ticket, Event, spec của role/
 src/aico/registry       nạp + kiểm tra company/
 src/aico/tickets        ticket store Postgres, bảng chuyển trạng thái
 src/aico/orchestrator   graph LangGraph của SOP (builder), runner, state, workplan (chia đầu việc)
-src/aico/agents         cli_agent: giao việc cho worker (CliAgentRunner, CliCoder, CliReviewer); llm_agent;
+src/aico/agents         cli_agent: giao việc cho worker (CliAgentRunner, CliCoder, CliReviewer, cũng là
+                        Tester với TEST_BRIEF); llm_agent (LlmPlanner, LlmAnalyst = BA);
                         retro (Researcher); remote (bản xem trước MR trên máy build từ xa)
 src/aico/tools          guard, gateway (audit), bridge (MCP cho worker, token theo task)
 src/aico/governance     bản ghi duyệt, audit, kiểm tra duyệt merge
@@ -53,9 +54,12 @@ tests/                  pytest; tests/harness.py dựng graph với agent giả
 
 ## Triển khai (PC, WSL Ubuntu)
 
-Stack chạy ở `~/ai-company/deploy` trong WSL. Đồng bộ code bằng tar từ `/mnt/d/TVPL/Marshy/ai-company`
-(bỏ `.git`, `.venv`, `deploy/secrets`, `deploy/.env`) rồi `docker compose up -d --build`.
+Stack chạy ở `~/ai-company/deploy` trong WSL. Vận hành bằng `deploy/aico-ops.sh` (deploy, xem
+ticket/worker/log, duyệt, escalation):
+`wsl -d Ubuntu -u aico -- bash /mnt/d/TVPL/Marshy/ai-company/deploy/aico-ops.sh` (không tham số: in danh sách lệnh).
+`deploy` đồng bộ code bằng tar rồi `docker compose up -d --build`, và từ chối khi đang có job chạy.
 Không chạy `git checkout`/`git pull` trong bản sao WSL: nó từng đưa file về commit cũ.
+Deploy, duyệt và escalation chỉ làm khi người dùng yêu cầu.
 
 ## Làm song song
 

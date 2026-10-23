@@ -138,7 +138,8 @@ class RetroPlanner:
         self._tickets = tickets
         self._role = role_id
 
-    async def plan(self, ticket: Ticket, feedback: str | None) -> str:
+    async def plan(self, ticket: Ticket, feedback: str | None, requirements: str = "") -> str:
+        # Ticket hồi cứu không qua BA (Researcher tự phân tích lịch sử): requirements luôn rỗng.
         history = await collect_history(self._tickets, exclude=ticket.id)
         parts = [
             "Hồi cứu các ticket đã chạy để agent sau làm tốt hơn.",

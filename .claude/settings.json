@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "deny": [
+      "Read(./deploy/secrets/**)",
+      "Read(./deploy/.env)",
+      "Read(./.ssh/**)",
+      "Read(//d/TVPL/Marshy/.env)",
+      "Read(//d/TVPL/Marshy/cloudflare_tunnel_token.txt)"
+    ]
+  }
+}

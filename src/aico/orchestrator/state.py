@@ -8,6 +8,7 @@ class TicketState(TypedDict):
 
     ticket_id: str
     risk: str
+    requirements: str  # yêu cầu + tiêu chí nghiệm thu do BA viết; rỗng nếu bỏ qua bước phân tích
     plan: str
     work_items: list[dict[str, Any]]  # đầu việc đọc từ kế hoạch (WorkItem.to_dict)
     architecture: str  # sơ đồ Mermaid Tech Lead cập nhật, ghi vào docs/architecture.md
@@ -21,6 +22,9 @@ class TicketState(TypedDict):
     review_rounds: int
     review_passed: bool
     review_notes: str
+    test_rounds: int
+    test_passed: bool
+    test_notes: str
     merge_approval_rounds: int
     merge_decision: str
     merge_approval_id: str

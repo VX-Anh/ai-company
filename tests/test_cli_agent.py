@@ -330,6 +330,8 @@ async def test_workers_endpoint_reports_status_and_roles(company: Company) -> No
         "reviewer",
         "designer",
         "researcher",
+        "ba",
+        "tester",
     }
     assert by_name["cursor"]["state"] == "offline"
 

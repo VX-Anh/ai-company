@@ -156,7 +156,7 @@ class _PlanText:
     def __init__(self, text: str) -> None:
         self.text = text
 
-    async def plan(self, ticket: Ticket, feedback: str | None) -> str:
+    async def plan(self, ticket: Ticket, feedback: str | None, requirements: str = "") -> str:
         return self.text
 
 
@@ -271,7 +271,7 @@ async def test_runners_process_tickets_concurrently(company: Company) -> None:
     peak = 0
 
     class SlowPlanner:
-        async def plan(self, ticket: Ticket, feedback: str | None) -> str:
+        async def plan(self, ticket: Ticket, feedback: str | None, requirements: str = "") -> str:
             nonlocal active, peak
             active += 1
             peak = max(peak, active)

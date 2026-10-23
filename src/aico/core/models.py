@@ -20,6 +20,7 @@ class TicketStatus(StrEnum):
     AWAITING_PLAN_APPROVAL = "awaiting_plan_approval"
     IN_PROGRESS = "in_progress"
     IN_REVIEW = "in_review"
+    IN_TESTING = "in_testing"
     AWAITING_MERGE_APPROVAL = "awaiting_merge_approval"
     MERGING = "merging"
     DONE = "done"

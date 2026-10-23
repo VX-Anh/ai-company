@@ -1,5 +1,6 @@
 from aico.orchestrator.builder import Deps, build_fix_ticket
 from aico.orchestrator.ports import (
+    Analyst,
     BudgetExhausted,
     CodeResult,
     FileChange,
@@ -15,6 +16,7 @@ from aico.orchestrator.runner import Runner, expire_overdue_approvals
 from aico.orchestrator.state import TicketState
 
 __all__ = [
+    "Analyst",
     "BudgetExhausted",
     "CodeResult",
     "Deps",

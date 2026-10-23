@@ -19,11 +19,13 @@ from aico.agents import (
     REMOTE_BUILD_HINT,
     RETRO_LABEL,
     SHOT_HINT,
+    TEST_BRIEF,
     CliAgentRunner,
     CliCoder,
     CliReviewer,
     CliSettings,
     LlmAgentRunner,
+    LlmAnalyst,
     LlmPlanner,
     LlmSettings,
     PreviewSettings,
@@ -48,7 +50,7 @@ from aico.orchestrator import (
     build_fix_ticket,
 )
 from aico.orchestrator.escalation import merge_escalated, retry_push
-from aico.orchestrator.ports import Coder, Planner, Reviewer
+from aico.orchestrator.ports import Analyst, Coder, Planner, Reviewer
 from aico.registry import Company, load_company
 from aico.settings import Settings
 from aico.tickets.postgres import PostgresTicketStore
@@ -155,6 +157,10 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 LlmSettings(relay_url="http://relay/v1", http_client=relay_client),
             )
             planner = LlmPlanner(agents, role_id=sop.steps["plan"])
+        # BA phân tích yêu cầu bằng cùng loại worker với Tech Lead.
+        analyst: Analyst | None = None
+        if settings.planner == "cli" and cli_agents is not None and "analyze" in sop.steps:
+            analyst = LlmAnalyst(cli_agents, role_id=sop.steps["analyze"])
         if cli_agents is not None and "researcher" in company.roles:
             # Ticket gắn nhãn retro: Researcher hồi cứu lịch sử thay Tech Lead lập kế hoạch.
             planner = LabelPlanner(planner, {RETRO_LABEL: RetroPlanner(cli_agents, tickets)})
@@ -196,6 +202,20 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 shot_projects=settings.preview_projects,
                 shot_sink=previewer.publish_shots if previewer is not None else None,
             )
+        # Tester đi cùng Reviewer thật: không có Reviewer CLI thì không có gì để kiểm thử.
+        tester: Reviewer | None = None
+        if settings.reviewer == "cli" and cli_agents is not None and "test" in sop.steps:
+            tester = CliReviewer(
+                cli_agents,
+                gateway,
+                role_id=sop.steps["test"],
+                build_hint=build_hint,
+                shot_hint=SHOT_HINT if remote else None,
+                shot_projects=settings.preview_projects,
+                shot_sink=previewer.publish_shots if previewer is not None else None,
+                brief=TEST_BRIEF,
+                label="kiểm thử",
+            )
         deps = Deps(
             sop=sop,
             tickets=tickets,
@@ -208,6 +228,9 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             default_project=settings.default_project or "group/pilot-repo",
             item_roles=("coder", "designer"),
             previewer=previewer,
+            analyst=analyst,
+            analyze_skip_labels=(RETRO_LABEL,),
+            tester=tester,
         )
 
         async def preview_ticket(ticket_id: str, site: bool) -> dict[str, Any]:

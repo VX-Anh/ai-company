@@ -104,8 +104,8 @@ class Runner:
         for item in result.get("__interrupt__", ()):
             value = item.value
             data = {"kind": value["kind"], "round": value["round"]}
-            # Người duyệt đọc kế hoạch / ghi chú review qua /events.
-            for key in ("plan", "work_items", "review_notes"):
+            # Người duyệt đọc yêu cầu, kế hoạch, ghi chú review / kiểm thử qua /events.
+            for key in ("requirements", "plan", "work_items", "review_notes", "test_notes"):
                 if value.get(key):
                     data[key] = value[key]
             await self._tickets.transition(

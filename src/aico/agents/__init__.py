@@ -1,4 +1,5 @@
 from aico.agents.cli_agent import (
+    TEST_BRIEF,
     CliAgentRunner,
     CliCoder,
     CliReviewer,
@@ -8,6 +9,7 @@ from aico.agents.cli_agent import (
 from aico.agents.llm_agent import (
     AgentRunner,
     LlmAgentRunner,
+    LlmAnalyst,
     LlmPlanner,
     LlmSettings,
     ticket_block,
@@ -28,12 +30,14 @@ __all__ = [
     "CliReviewer",
     "CliSettings",
     "LlmAgentRunner",
+    "LlmAnalyst",
     "LlmPlanner",
     "LlmSettings",
     "PreviewError",
     "PreviewSettings",
     "REMOTE_BUILD_HINT",
     "SHOT_HINT",
+    "TEST_BRIEF",
     "RemotePreviewer",
     "RETRO_LABEL",
     "RetroPlanner",

@@ -90,8 +90,14 @@ class Triage(Protocol):
     async def triage(self, ticket: Ticket) -> TriageResult: ...
 
 
+class Analyst(Protocol):
+    async def analyze(self, ticket: Ticket) -> str:
+        """Yêu cầu và tiêu chí nghiệm thu (BA) để Tech Lead lập kế hoạch, Tester kiểm thử."""
+        ...
+
+
 class Planner(Protocol):
-    async def plan(self, ticket: Ticket, feedback: str | None) -> str: ...
+    async def plan(self, ticket: Ticket, feedback: str | None, requirements: str = "") -> str: ...
 
 
 class Coder(Protocol):
@@ -108,8 +114,14 @@ class ItemCoder(Protocol):
 
 
 class Reviewer(Protocol):
-    async def review(self, ticket: Ticket, mr: dict[str, Any], plan: str = "") -> ReviewResult:
-        """plan: kế hoạch đã duyệt, là chuẩn để chấm (yêu cầu ngoài kế hoạch chỉ là gợi ý)."""
+    async def review(
+        self, ticket: Ticket, mr: dict[str, Any], plan: str = "", requirements: str = ""
+    ) -> ReviewResult:
+        """plan: kế hoạch đã duyệt, là chuẩn để chấm (yêu cầu ngoài kế hoạch chỉ là gợi ý).
+
+        requirements: tiêu chí nghiệm thu của BA (rỗng nếu ticket không qua bước phân tích).
+        Reviewer và Tester dùng chung cổng này, khác nhau ở vai trò và chỉ dẫn.
+        """
         ...
 
 
@@ -152,13 +164,15 @@ class LabelPlanner:
                 return planner
         return self._default
 
-    async def plan(self, ticket: Ticket, feedback: str | None) -> str:
-        return await self.pick(ticket).plan(ticket, feedback)
+    async def plan(self, ticket: Ticket, feedback: str | None, requirements: str = "") -> str:
+        return await self.pick(ticket).plan(ticket, feedback, requirements)
 
 
 class StaticPlanner:
-    async def plan(self, ticket: Ticket, feedback: str | None) -> str:
+    async def plan(self, ticket: Ticket, feedback: str | None, requirements: str = "") -> str:
         lines = [f"Kế hoạch cho {ticket.id}: {ticket.title}", "1. Sửa code", "2. Chạy test"]
+        if requirements:
+            lines.append(f"Theo yêu cầu: {requirements}")
         if feedback:
             lines.append(f"Đã tính tới góp ý: {feedback}")
         return "\n".join(lines)
@@ -180,8 +194,12 @@ class ScriptedReviewer:
     """Reviewer giả: trả lần lượt các kết quả cho trước, hết thì luôn đạt."""
 
     results: list[ReviewResult] = field(default_factory=list)
+    requirements_seen: list[str] = field(default_factory=list)
 
-    async def review(self, ticket: Ticket, mr: dict[str, Any], plan: str = "") -> ReviewResult:
+    async def review(
+        self, ticket: Ticket, mr: dict[str, Any], plan: str = "", requirements: str = ""
+    ) -> ReviewResult:
+        self.requirements_seen.append(requirements)
         if self.results:
             return self.results.pop(0)
         return ReviewResult(passed=True, notes="đạt")

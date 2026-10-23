@@ -20,6 +20,7 @@ from aico.core import ApprovalKind, Artifact, Decision, SopSpec, Ticket, TicketS
 from aico.governance import ApprovalStore
 from aico.orchestrator.ports import (
     AgentUnavailable,
+    Analyst,
     BudgetExhausted,
     Coder,
     FileChange,
@@ -64,6 +65,12 @@ class Deps:
     previewer: Previewer | None = None
     # Chờ giữa các lần thử lại tool Git ở bước code (giây); hết lượt thì escalate.
     git_retry_delays: tuple[float, ...] = (2.0, 5.0)
+    # BA phân tích yêu cầu trước khi lập kế hoạch (bước `analyze` của SOP); None thì bỏ qua.
+    analyst: Analyst | None = None
+    # Ticket mang nhãn này không qua BA (vd `retro`: Researcher tự phân tích lịch sử).
+    analyze_skip_labels: tuple[str, ...] = ()
+    # Tester kiểm thử MR sau khi review đạt (bước `test` của SOP); None thì bỏ qua.
+    tester: Reviewer | None = None
 
     def role(self, step: str) -> str:
         return self.sop.steps[step]
@@ -106,17 +113,40 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             "plan_rounds": 0,
             "code_attempts": 0,
             "review_rounds": 0,
+            "test_rounds": 0,
             "merge_approval_rounds": 0,
             "merge_attempts": 0,
             "merged": False,
         }
 
+    async def analyze(s: TicketState) -> dict[str, Any]:
+        # Ticket rủi ro thấp (sửa nhỏ, không chờ duyệt kế hoạch) không cần BA.
+        ticket = await deps.tickets.get(s["ticket_id"])
+        skip = {label.lower() for label in deps.analyze_skip_labels}
+        if (
+            deps.analyst is None
+            or "analyze" not in deps.sop.steps
+            or s["risk"] == "low"
+            or skip & {label.lower() for label in ticket.labels}
+        ):
+            return {"requirements": ""}
+        try:
+            text = await deps.analyst.analyze(ticket)
+        except BudgetExhausted as exc:
+            return {"escalation_reason": f"phân tích yêu cầu hết ngân sách: {exc}"}
+        except AgentUnavailable as exc:
+            return {"escalation_reason": f"phân tích yêu cầu: không worker nào làm được: {exc}"}
+        return {"requirements": text}
+
     async def plan(s: TicketState) -> dict[str, Any]:
         tid = s["ticket_id"]
-        await deps.tickets.transition(tid, S.PLANNED, actor=deps.role("plan"))
+        requirements = s.get("requirements", "")
+        # Yêu cầu của BA hiện trên /events một lần, ở lần lập kế hoạch đầu.
+        data = {"requirements": requirements} if requirements and not s["plan_rounds"] else None
+        await deps.tickets.transition(tid, S.PLANNED, actor=deps.role("plan"), data=data)
         ticket = await deps.tickets.get(tid)
         try:
-            text = await deps.planner.plan(ticket, s.get("plan_feedback") or None)
+            text = await deps.planner.plan(ticket, s.get("plan_feedback") or None, requirements)
         except BudgetExhausted as exc:
             return {"escalation_reason": f"lập kế hoạch hết ngân sách: {exc}"}
         except AgentUnavailable as exc:
@@ -139,6 +169,7 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
                 "ticket_id": s["ticket_id"],
                 "round": s["plan_rounds"],
                 "plan": s["plan"],
+                "requirements": s.get("requirements", ""),
                 "work_items": s.get("work_items", []),
                 "deadline_hours": limits.approval_deadline_hours,
             }
@@ -360,7 +391,9 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             ticket_id=tid,
         )
         try:
-            result = await deps.reviewer.review(await deps.tickets.get(tid), mr, s.get("plan", ""))
+            result = await deps.reviewer.review(
+                await deps.tickets.get(tid), mr, s.get("plan", ""), s.get("requirements", "")
+            )
         except BudgetExhausted as exc:
             return {"escalation_reason": f"review hết ngân sách: {exc}"}
         except AgentUnavailable as exc:
@@ -372,6 +405,34 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             "review_rounds": rounds,
         }
 
+    async def test(s: TicketState) -> dict[str, Any]:
+        tid = s["ticket_id"]
+        role = deps.sop.steps["test"]
+        tester = cast(Reviewer, deps.tester)
+        await deps.tickets.transition(tid, S.IN_TESTING, actor=role)
+        project = await project_of(tid)
+        mr = await deps.gateway.call(
+            role,
+            GITLAB,
+            "get_merge_request",
+            {"project": project, "mr_iid": s["mr_iid"]},
+            ticket_id=tid,
+        )
+        try:
+            result = await tester.review(
+                await deps.tickets.get(tid), mr, s.get("plan", ""), s.get("requirements", "")
+            )
+        except BudgetExhausted as exc:
+            return {"escalation_reason": f"kiểm thử hết ngân sách: {exc}"}
+        except AgentUnavailable as exc:
+            return {"escalation_reason": f"kiểm thử: {exc}"}
+        update: dict[str, Any] = {"test_passed": result.passed, "test_notes": result.notes}
+        if not result.passed:
+            # Coder đọc góp ý từ review_notes; lần review sau sẽ ghi đè.
+            update["test_rounds"] = s.get("test_rounds", 0) + 1
+            update["review_notes"] = result.notes
+        return update
+
     async def approve_merge(s: TicketState) -> dict[str, Any]:
         round_ = s.get("merge_approval_rounds", 0) + 1
         raw = interrupt(
@@ -382,6 +443,7 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
                 "round": round_,
                 "mr_iid": s["mr_iid"],
                 "review_notes": s.get("review_notes", ""),
+                "test_notes": s.get("test_notes", ""),
                 "deadline_hours": limits.approval_deadline_hours,
             }
         )
@@ -442,6 +504,9 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         if s.get("review_notes"):
             data["review_notes"] = s["review_notes"]
             data["review_rounds"] = s.get("review_rounds", 0)
+        if s.get("test_notes"):
+            data["test_notes"] = s["test_notes"]
+            data["test_rounds"] = s.get("test_rounds", 0)
         if s.get("unpushed_changes"):
             data["unpushed_changes"] = s["unpushed_changes"]
         await deps.tickets.transition(s["ticket_id"], S.ESCALATED, actor="orchestrator", data=data)
@@ -450,6 +515,9 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
     async def finish(s: TicketState) -> dict[str, Any]:
         await deps.tickets.transition(s["ticket_id"], S.DONE, actor="orchestrator")
         return {}
+
+    def route_analyze(s: TicketState) -> str:
+        return "escalate" if s.get("escalation_reason") else "plan"
 
     def route_plan(s: TicketState) -> str:
         if s.get("escalation_reason"):
@@ -470,8 +538,17 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         if s.get("escalation_reason"):
             return "escalate"
         if s["review_passed"]:
-            return "approve_merge"
+            return (
+                "test" if deps.tester is not None and "test" in deps.sop.steps else "approve_merge"
+            )
         return "code" if s["review_rounds"] < limits.max_review_rounds else "escalate"
+
+    def route_test(s: TicketState) -> str:
+        if s.get("escalation_reason"):
+            return "escalate"
+        if s["test_passed"]:
+            return "approve_merge"
+        return "code" if s["test_rounds"] < limits.max_test_rounds else "escalate"
 
     def route_merge_approval(s: TicketState) -> str:
         if s["merge_decision"] == Decision.APPROVED:
@@ -491,10 +568,12 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
     g: StateGraph[TicketState] = StateGraph(TicketState)
     for name, fn in (
         ("triage", triage),
+        ("analyze", analyze),
         ("plan", plan),
         ("approve_plan", approve_plan),
         ("code", code),
         ("review", review),
+        ("test", test),
         ("approve_merge", approve_merge),
         ("merge", merge),
         ("escalate", escalate),
@@ -502,11 +581,13 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
     ):
         g.add_node(name, fn)  # type: ignore[call-overload]
     g.add_edge(START, "triage")
-    g.add_edge("triage", "plan")
+    g.add_edge("triage", "analyze")
+    g.add_conditional_edges("analyze", route_analyze, ["plan", "escalate"])
     g.add_conditional_edges("plan", route_plan, ["code", "approve_plan", "escalate"])
     g.add_conditional_edges("approve_plan", route_plan_approval, ["code", "plan", "escalate"])
     g.add_conditional_edges("code", route_code, ["review", "escalate"])
-    g.add_conditional_edges("review", route_review, ["approve_merge", "code", "escalate"])
+    g.add_conditional_edges("review", route_review, ["test", "approve_merge", "code", "escalate"])
+    g.add_conditional_edges("test", route_test, ["approve_merge", "code", "escalate"])
     g.add_conditional_edges("approve_merge", route_merge_approval, ["merge", "code", "escalate"])
     g.add_conditional_edges("merge", route_merge, ["finish", "code", "escalate"])
     g.add_edge("escalate", END)
@@ -523,4 +604,6 @@ def _escalation_reason(s: TicketState, sop: SopSpec) -> str:
         return f"merge: {s['merge_decision']}"
     if s.get("merge_attempts", 0) >= sop.limits.max_merge_attempts:
         return f"merge lỗi {s['merge_attempts']} lần: {s.get('merge_error', '')}"
+    if s.get("review_passed") and s.get("test_rounds", 0) >= sop.limits.max_test_rounds:
+        return f"kiểm thử chưa đạt sau {s['test_rounds']} vòng"
     return f"review chưa đạt sau {s.get('review_rounds', 0)} vòng"
