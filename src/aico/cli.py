@@ -87,6 +87,10 @@ async def _serve(settings: Settings) -> None:
             tasks.append(
                 asyncio.create_task(c.poller.run_forever(settings.poll_seconds), name="intake")
             )
+        if c.jira_sync is not None:
+            tasks.append(
+                asyncio.create_task(c.jira_sync.run_forever(settings.poll_seconds), name="jira")
+            )
         log.info(
             "aico chạy: API %s:%d, relay %s:%d, tool bridge %s:%d, %d runner, planner %s",
             settings.api_host,
@@ -117,7 +121,7 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser("migrate", help="áp migration và tạo bảng checkpoint")
     check = sub.add_parser("check-config", help="kiểm tra thư mục company/")
     check.add_argument("path", nargs="?", default="company")
-    sub.add_parser("serve", help="chạy API, model relay, runner, intake")
+    sub.add_parser("serve", help="chạy API, model relay, runner, intake, đồng bộ Jira")
     args = parser.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):
         if isinstance(stream, io.TextIOWrapper):

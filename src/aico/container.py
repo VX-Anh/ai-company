@@ -41,6 +41,7 @@ from aico.core import Ticket
 from aico.db import create_pool
 from aico.governance import PostgresApprovalStore, PostgresAuditLog
 from aico.intake import GitLabIssuePoller
+from aico.jira import HttpJiraClient, JiraSync
 from aico.llm_relay import PostgresBudgetLedger, RelayDeps, TaskTokens, create_relay_app
 from aico.observability import LoggingTraceSink
 from aico.orchestrator import (
@@ -58,7 +59,7 @@ from aico.orchestrator.ports import Analyst, Coder, Planner, Reviewer
 from aico.registry import Company, load_company
 from aico.settings import Settings
 from aico.tickets.postgres import PostgresTicketStore
-from aico.tools import Guard, McpToolClient, ToolGateway
+from aico.tools import Guard, McpToolClient, ToolError, ToolGateway
 from aico.tools.bridge import ToolBridge, create_tool_bridge_app
 
 log = logging.getLogger(__name__)
@@ -72,6 +73,7 @@ class Container:
     # Nhiều vòng runner, mỗi vòng giữ một ticket: các ticket chạy song song ở các phòng provider.
     runners: tuple[Runner, ...]
     poller: GitLabIssuePoller | None
+    jira_sync: JiraSync | None
     api: ApiDeps
     relay_app: FastAPI
     bridge_app: Starlette
@@ -306,12 +308,44 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             if settings.intake_projects
             else None
         )
+        jira_sync = None
+        if settings.jira_enabled:
+            assert settings.jira_url and settings.jira_email and settings.jira_token
+            jira_client = HttpJiraClient(
+                settings.jira_url, settings.jira_email, settings.jira_token
+            )
+            exit_stack.push_async_callback(jira_client.aclose)
+
+            async def read_repo_file(project: str, path: str) -> str | None:
+                try:
+                    result = await gateway.call(
+                        "intake",
+                        "gitlab",
+                        "read_file",
+                        {"project": project, "path": path},
+                        ticket_id=None,
+                    )
+                except ToolError as exc:
+                    if "404" in str(exc) or "không có file" in str(exc):
+                        return None
+                    raise
+                return str(result.get("content", ""))
+
+            jira_sync = JiraSync(
+                jira_client,
+                tickets,
+                settings.jira_projects,
+                since=settings.jira_since,
+                read_file=read_repo_file,
+                intake_label=settings.intake_label,
+            )
         yield Container(
             settings=settings,
             company=company,
             runner=runner,
             runners=runners,
             poller=poller,
+            jira_sync=jira_sync,
             api=ApiDeps(
                 tickets=tickets,
                 approvals=approvals,

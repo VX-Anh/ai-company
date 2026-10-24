@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 
 
@@ -61,9 +62,20 @@ class Settings:
     # trong preview_projects được dựng bản xem trước. Không đặt thì giữ cách cũ.
     remote_url: str | None = None
     preview_projects: tuple[str, ...] = ()
+    # Đồng bộ ticket sang Jira (một chiều). Bật khi đủ URL, email, token và ánh xạ
+    # repo -> project Jira (`VX-Anh/linh-hoa-vien=LHV`). Ticket cập nhật trước jira_since bỏ qua.
+    jira_url: str | None = None
+    jira_email: str | None = None
+    jira_token: str | None = None
+    jira_projects: dict[str, str] = field(default_factory=dict)
+    jira_since: datetime | None = None
     cors_origins: tuple[str, ...] = ()  # GUI web, ví dụ http://localhost:5173
     # Mặc định cho GUI chạy ở mọi cổng trên máy này (dev server tự đổi cổng khi bị chiếm).
     cors_origin_regex: str | None = r"^http://(localhost|127\.0\.0\.1)(:\d+)?$"
+
+    @property
+    def jira_enabled(self) -> bool:
+        return bool(self.jira_url and self.jira_email and self.jira_token and self.jira_projects)
 
     @classmethod
     def from_env(cls) -> Settings:
@@ -103,6 +115,15 @@ class Settings:
             ),
             remote_url=env.get("AICO_REMOTE_URL") or None,
             preview_projects=_list("AICO_PREVIEW_PROJECTS"),
+            jira_url=env.get("AICO_JIRA_URL") or None,
+            jira_email=env.get("AICO_JIRA_EMAIL") or None,
+            jira_token=_secret("AICO_JIRA_TOKEN_FILE"),
+            jira_projects=_mapping("AICO_JIRA_PROJECTS"),
+            jira_since=(
+                datetime.fromisoformat(env["AICO_JIRA_SINCE"])
+                if env.get("AICO_JIRA_SINCE")
+                else None
+            ),
             cors_origins=_list("AICO_CORS_ORIGINS"),
             cors_origin_regex=env.get("AICO_CORS_ORIGIN_REGEX", cls.cors_origin_regex) or None,
         )

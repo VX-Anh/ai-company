@@ -1,11 +1,12 @@
-# Vai trò hệ thống: polling issue mới từ GitLab. Không gọi model.
+# Vai trò hệ thống: polling issue mới từ GitLab; đọc tài liệu sprint để lập backlog Jira.
+# Không gọi model.
 id: intake
 department: office
 reports_to: chief_of_staff
 worker: system
 tools:
   - server: gitlab
-    allow: [list_issues]
+    allow: [list_issues, read_file]
     constraints:
       repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien]
 max_risk: L0

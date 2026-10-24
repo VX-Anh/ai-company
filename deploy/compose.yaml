@@ -63,7 +63,13 @@ services:
       # AICO_PREVIEW_PROJECTS được dựng bản xem trước. Để trống REMOTE_SSH_TARGET thì tắt.
       AICO_REMOTE_URL: ${AICO_REMOTE_URL:-http://remote-runner:8500}
       AICO_PREVIEW_PROJECTS: ${AICO_PREVIEW_PROJECTS:-}
-    secrets: [aico_api_token, aico_internal_token, worker_token]
+      # Đồng bộ ticket sang Jira: tắt khi thiếu URL/email/ánh xạ hoặc secrets/jira_token rỗng.
+      AICO_JIRA_URL: ${AICO_JIRA_URL:-}
+      AICO_JIRA_EMAIL: ${AICO_JIRA_EMAIL:-}
+      AICO_JIRA_PROJECTS: ${AICO_JIRA_PROJECTS:-}   # repo=KEY, ví dụ VX-Anh/linh-hoa-vien=LHV
+      AICO_JIRA_SINCE: ${AICO_JIRA_SINCE:-}         # ISO 8601; ticket cũ hơn không đẩy sang
+      AICO_JIRA_TOKEN_FILE: /run/secrets/jira_token
+    secrets: [aico_api_token, aico_internal_token, worker_token, jira_token]
     group_add: ["${SECRETS_GID:-10100}"]  # file secret mode 640, nhóm SECRETS_GID
     ports:
       - "127.0.0.1:8000:8000"   # API và console chỉ mở cho máy này
@@ -221,3 +227,4 @@ secrets:
   remote_ssh_key: {file: ./secrets/remote_ssh_key}
   remote_known_hosts: {file: ./secrets/remote_known_hosts}
   cloudflare_tunnel_token: {file: ./secrets/cloudflare_tunnel_token}
+  jira_token: {file: ./secrets/jira_token}   # API token Atlassian; để rỗng thì tắt sync

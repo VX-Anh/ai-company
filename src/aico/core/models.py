@@ -69,7 +69,8 @@ class Artifact(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     # screenshot: ảnh giao diện reviewer chụp (ref = "<lần chụp>/<file>.png").
-    kind: Literal["branch", "merge_request", "report", "preview", "screenshot"]
+    # jira: issue Jira đồng bộ với ticket (ref = khoá issue, ví dụ LHV-14).
+    kind: Literal["branch", "merge_request", "report", "preview", "screenshot", "jira"]
     ref: str
     url: str | None = None
 
