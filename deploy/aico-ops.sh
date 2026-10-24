@@ -19,7 +19,8 @@ safe() {
     busy_tickets=$(api GET /tickets | python3 -c '
 import sys, json
 print(sum(1 for t in json.load(sys.stdin)
-          if t["status"] in ("new", "triaged", "planned", "in_progress", "in_review", "in_testing")))')
+          if t["status"] in ("new", "triaged", "planned", "in_progress", "in_review", "in_testing", "merging")
+          or t.get("pending_resume")))')
     busy_agents=$(api GET /workers | python3 -c '
 import sys, json
 print(sum(len(w.get("agents") or []) for w in json.load(sys.stdin)))')
