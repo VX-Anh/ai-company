@@ -98,6 +98,8 @@ case "${1:-}" in
         api POST "/tickets/$2/decisions" \
             "$(python3 -c 'import json,sys; print(json.dumps({"decision": sys.argv[1], "actor": "owner", "comment": sys.argv[2]}))' "$3" "${4:-}")" \
             | python3 -c "$summary" ;;
+    remote-image)  # dựng image build mặc định (Node + thư viện Chromium) trên server
+        cd "$STACK" && docker compose exec -T remote-runner             python3 /opt/remote_runner.py build-image aico/node-playwright:22             < "$STACK/remote/node-playwright.Dockerfile" ;;
     escalate)  # escalate <id> <merge|retry_push|...> [ghi chú]
         api POST "/tickets/$2/escalation" \
             "$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "actor": "owner", "comment": sys.argv[2]}))' "$3" "${4:-}")" \
@@ -105,5 +107,6 @@ case "${1:-}" in
     *)
         echo "lệnh: safe | deploy [--force] | tickets [n] | ticket <id> | workers | logs [service] [since]"
         echo "      create <file.json> | decide <id> <approved|revise|changes_requested|rejected> [ghi chú] | escalate <id> <action> [ghi chú]"
+        echo "      remote-image (dựng image Node + Chromium trên máy build, chạy lại khi sửa node-playwright.Dockerfile)"
         exit 2 ;;
 esac

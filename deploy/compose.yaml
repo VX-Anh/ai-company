@@ -117,7 +117,7 @@ services:
       REMOTE_SSH_KEY_FILE: /run/secrets/remote_ssh_key
       REMOTE_KNOWN_HOSTS_FILE: /run/secrets/remote_known_hosts
       RUNNER_TOKEN_FILE: /run/secrets/worker_token
-      REMOTE_IMAGES: ${REMOTE_IMAGES:-node=node:22-bookworm-slim,python=ghcr.io/astral-sh/uv:python3.12-bookworm-slim}
+      REMOTE_IMAGES: ${REMOTE_IMAGES:-node=aico/node-playwright:22,python=ghcr.io/astral-sh/uv:python3.12-bookworm-slim}
       REMOTE_CPUS: ${REMOTE_CPUS:-}   # trống: Docker rootless trên server chưa có controller cpu
       REMOTE_MEMORY: ${REMOTE_MEMORY:-6g}
       REMOTE_CONCURRENCY: ${REMOTE_CONCURRENCY:-4}

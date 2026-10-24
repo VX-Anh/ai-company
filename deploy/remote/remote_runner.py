@@ -4,7 +4,7 @@ Chạy trên PC (chỉ thư viện chuẩn + ssh). Server chỉ làm compute: nh
 ssh, chạy trong container dùng một lần, không nhận secret nào. Mỗi lần chạy có hai pha trên
 cùng một volume tạm:
 - setup (có mạng): giải nén, cài dependency theo lockfile (npm ci, uv sync);
-- run (không mạng): lệnh build/test của agent, hoặc lệnh build bản xem trước.
+- run (mạng --internal riêng, không ra Internet): lệnh build/test của agent hoặc bản xem trước.
 
 Biến môi trường:
 - REMOTE_SSH_TARGET (vd aico@14.161.5.155), REMOTE_SSH_KEY_FILE, REMOTE_KNOWN_HOSTS_FILE
@@ -35,6 +35,7 @@ import re
 import shlex
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import threading
@@ -60,11 +61,18 @@ MAX_PREVIEW_BYTES = 200 * 1024 * 1024
 LOCAL_HOSTS = {"", "localhost", "127.0.0.1", "remote-runner"}
 NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")
 DEFAULT_BUILD = "npm run build -- --base=./"
+# Trình duyệt Playwright dùng chung giữa các lần chạy, nằm trong volume cache.
+BROWSERS_PATH = "/cache/ms-playwright"
+DEFAULT_IMAGES = "node=aico/node-playwright:22,python=ghcr.io/astral-sh/uv:python3.12-bookworm-slim"
 # Cài dependency theo lockfile có sẵn; repo không có lockfile thì bỏ qua.
 SETUP_SCRIPT = (
     "set -e; tar xzf - --no-same-owner {strip}; "
     "if [ -f package-lock.json ] && command -v npm >/dev/null; then "
     "npm ci --no-audit --no-fund; fi; "
+    # Repo có Playwright: tải Chromium headless khớp phiên bản vào cache (lần sau dùng lại),
+    # để e2e chạy được ở pha run không mạng. Thư viện hệ thống nằm sẵn trong image.
+    "if [ -x node_modules/.bin/playwright ]; then "
+    "node_modules/.bin/playwright install --only-shell chromium; fi; "
     "if [ -f uv.lock ] && command -v uv >/dev/null; then uv sync --frozen; fi"
 )
 
@@ -89,7 +97,7 @@ class Config:
         self.target = env.get("REMOTE_SSH_TARGET", "")
         self.key_file = env.get("REMOTE_SSH_KEY_FILE", "")
         self.known_hosts = env.get("REMOTE_KNOWN_HOSTS_FILE", "")
-        self.images = parse_images(env.get("REMOTE_IMAGES", "node=node:22-bookworm-slim"))
+        self.images = parse_images(env.get("REMOTE_IMAGES", DEFAULT_IMAGES))
         # Docker rootless chỉ giới hạn được CPU khi systemd giao controller cpu; trống = không đặt.
         self.cpus = env.get("REMOTE_CPUS", "")
         self.memory = env.get("REMOTE_MEMORY", "6g")
@@ -127,6 +135,11 @@ def container_flags(cfg: Config, name: str, volume: str) -> list[str]:
         "npm_config_cache=/cache/npm",
         "-e",
         "UV_CACHE_DIR=/cache/uv",
+        "-e",
+        f"PLAYWRIGHT_BROWSERS_PATH={BROWSERS_PATH}",
+        # Chromium cần /dev/shm lớn hơn mặc định 64 MB của Docker, nếu không tab dễ crash.
+        "--shm-size",
+        "1g",
         "-e",
         "CI=1",
         "-w",
@@ -171,8 +184,10 @@ def remote_script(
         [
             "docker",
             "run",
+            # Mạng --internal riêng của lần chạy: không ra Internet, không thấy job khác, nhưng
+            # có card mạng nên trình duyệt coi là online (--network none làm navigator.onLine sai).
             "--network",
-            "none",
+            f"aico-net-{run_id}",
             *container_flags(cfg, f"aico-run-{run_id}", volume),
             image,
             "sh",
@@ -184,8 +199,9 @@ def remote_script(
     redirect = " 1>&2" if preview_output is not None else ""
     merge = "exec 2>&1; " if preview_output is None else ""
     return (
-        f"{merge}v={volume}; docker volume create $v >/dev/null || exit 125; "
-        "trap 'docker volume rm -f $v >/dev/null 2>&1' EXIT; "
+        f"{merge}v={volume}; n=aico-net-{run_id}; docker volume create $v >/dev/null || exit 125; "
+        "trap 'docker volume rm -f $v >/dev/null 2>&1; docker network rm $n >/dev/null 2>&1' EXIT; "
+        "docker network create --internal $n >/dev/null || exit 125; "
         f"{setup_cmd}{redirect} || exit $?; "
         f"{run_cmd} </dev/null"
     )
@@ -218,7 +234,8 @@ def _cleanup(cfg: Config, run_id: str) -> None:
     names = [f"aico-setup-{run_id}", f"aico-run-{run_id}"]
     script = (
         f"docker rm -f {' '.join(names)} >/dev/null 2>&1; "
-        f"docker volume rm -f aico-ws-{run_id} >/dev/null 2>&1; true"
+        f"docker volume rm -f aico-ws-{run_id} >/dev/null 2>&1; "
+        f"docker network rm aico-net-{run_id} >/dev/null 2>&1; true"
     )
     with contextlib.suppress(subprocess.SubprocessError, OSError):
         subprocess.run(ssh_command(cfg, script), capture_output=True, timeout=60, check=False)
@@ -560,9 +577,27 @@ def prepare_key(src: str) -> str:
     return dest
 
 
+IMAGE_TAG_RE = re.compile(r"^[a-z0-9][a-z0-9._/-]{0,127}:[A-Za-z0-9._-]{1,64}$")
+
+
+def build_image_script(tag: str) -> str:
+    """Dựng image trên server từ Dockerfile gửi qua stdin (không có build context)."""
+    if not IMAGE_TAG_RE.match(tag):
+        raise ValueError(f"tên image không hợp lệ: {tag!r}")
+    return f"exec 2>&1; docker build --pull -t {shlex.quote(tag)} -"
+
+
+def build_image(cfg: Config, tag: str, dockerfile: bytes) -> int:
+    proc = subprocess.run(ssh_command(cfg, build_image_script(tag)), input=dockerfile, check=False)
+    return proc.returncode
+
+
 def main() -> None:
     cfg = Config()
     cfg.key_file = prepare_key(cfg.key_file)
+    # build-image <tag>: Dockerfile từ stdin, dựng trên server (aico-ops.sh remote-image).
+    if sys.argv[1:2] == ["build-image"] and len(sys.argv) == 3:
+        raise SystemExit(build_image(cfg, sys.argv[2], sys.stdin.buffer.read()))
     Handler.runner = Runner(cfg, int(os.environ.get("REMOTE_CONCURRENCY", "4")))
     Handler.token = _env_file("RUNNER_TOKEN_FILE")
     port = int(os.environ.get("RUNNER_PORT", "8500"))

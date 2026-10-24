@@ -71,16 +71,36 @@ def test_remote_script_runs_command_without_network(tmp_path: Path) -> None:
     setup, run = script.split("|| exit $?;")
     # Pha setup có mạng (npm ci), lệnh của agent chạy với --network none.
     assert "--network" not in setup and "npm ci" in setup and "--strip-components=1" in setup
-    assert "--network none" in run and "npm test" in run
+    assert "--network aico-net-abc" in run and "npm test" in run
+    assert "docker network create --internal $n" in script and "n=aico-net-abc" in script
+    assert "docker network rm $n" in script.split("trap", 1)[1].split("EXIT", 1)[0]
     for part in (setup, run):
         assert "--cap-drop ALL" in part and "no-new-privileges" in part and "aico-ws-abc:/w" in part
         assert "--memory 6g" in part and "--cpus" not in part
     assert script.startswith("exec 2>&1;")  # log giữ đúng thứ tự
+    # Chromium của Playwright tải ở pha setup (có mạng) vào cache, pha run dùng lại khi không mạng.
+    assert "playwright install --only-shell chromium" in setup
+    assert "playwright install" not in run
+    for part in (setup, run):
+        assert f"PLAYWRIGHT_BROWSERS_PATH={rr.BROWSERS_PATH}" in part and "--shm-size 1g" in part
     preview = rr.remote_script(
         _config(tmp_path), "abc", "node:22", "npm run build", 0, preview_output="dist"
     )
     assert "exec 2>&1" not in preview and "tar czf - -C dist ." in preview
     assert "--strip-components" not in preview
+
+
+def test_default_node_image_has_chromium_deps_and_build_script_checks_tag() -> None:
+    assert rr.Config({}).images["node"] == "aico/node-playwright:22"
+    dockerfile = (Path(rr.__file__).parent / "node-playwright.Dockerfile").read_text(
+        encoding="utf-8"
+    )
+    assert "FROM node:22-bookworm-slim" in dockerfile and "install-deps chromium" in dockerfile
+    script = rr.build_image_script("aico/node-playwright:22")
+    assert script.endswith("docker build --pull -t aico/node-playwright:22 -")
+    for bad in ("x; rm -rf /", "Aico:1", "aico/node", "aico:$(id)"):
+        with pytest.raises(ValueError):
+            rr.build_image_script(bad)
 
 
 def test_ssh_command_pins_host_key(tmp_path: Path) -> None:
