@@ -77,6 +77,10 @@ def test_remote_script_runs_command_without_network(tmp_path: Path) -> None:
     for part in (setup, run):
         assert "--cap-drop ALL" in part and "no-new-privileges" in part and "aico-ws-abc:/w" in part
         assert "--memory 6g" in part and "--cpus" not in part
+    # Chỉ pha run được đổi user (setpriv xuống nobody cho PostgreSQL); setup không có cap nào.
+    assert "--cap-add" not in setup
+    assert "--cap-add SETUID --cap-add SETGID" in run
+    assert run.count("--cap-add") == 2
     assert script.startswith("exec 2>&1;")  # log giữ đúng thứ tự
     # Chromium của Playwright tải ở pha setup (có mạng) vào cache, pha run dùng lại khi không mạng.
     assert "playwright install --only-shell chromium" in setup

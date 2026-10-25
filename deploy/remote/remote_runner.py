@@ -112,14 +112,23 @@ class Config:
         self.public_hosts = set(self.hosts) | ({public} if public not in LOCAL_HOSTS else set())
 
 
-def container_flags(cfg: Config, name: str, volume: str) -> list[str]:
-    """Giới hạn chung của container trên server: không quyền đặc biệt, có trần tài nguyên."""
+# Pha run được đổi sang user khác (vd. PostgreSQL thật cho test tích hợp không chạy bằng root,
+# test hạ xuống nobody bằng setpriv). no-new-privileges vẫn giữ, nên không leo quyền được.
+RUN_CAPS = ("SETUID", "SETGID")
+
+
+def container_flags(cfg: Config, name: str, volume: str, caps: tuple[str, ...] = ()) -> list[str]:
+    """Giới hạn chung của container trên server: không quyền đặc biệt, có trần tài nguyên.
+
+    caps: capability thêm lại sau --cap-drop ALL (chỉ pha run dùng RUN_CAPS).
+    """
     return [
         "--rm",
         "--name",
         name,
         "--cap-drop",
         "ALL",
+        *(flag for cap in caps for flag in ("--cap-add", cap)),
         "--security-opt",
         "no-new-privileges",
         "--pids-limit",
@@ -188,7 +197,7 @@ def remote_script(
             # có card mạng nên trình duyệt coi là online (--network none làm navigator.onLine sai).
             "--network",
             f"aico-net-{run_id}",
-            *container_flags(cfg, f"aico-run-{run_id}", volume),
+            *container_flags(cfg, f"aico-run-{run_id}", volume, RUN_CAPS),
             image,
             "sh",
             "-c",
