@@ -20,7 +20,7 @@ from aico.orchestrator.ports import FileChange
 from aico.orchestrator.workplan import owns_overlap, parse_work_plan
 from aico.registry import Company
 from aico.tools import ToolGateway
-from harness import PROJECT, make_harness
+from harness import PROJECT, make_harness, text_files
 
 WORKERS = {
     "claude": "http://claude:8400",
@@ -221,7 +221,7 @@ async def test_items_run_in_parallel_across_rooms_and_write_docs(company: Compan
     assert jobs["W3"]["files"]["src/a.ts"] == "a2\n"
     assert jobs["W3"]["files"]["art/hero.pixel.json"] == "{}\n"
 
-    branch = repo.files["ai/T-1"]
+    branch = text_files(repo.files["ai/T-1"])
     assert branch["src/a.ts"] == "a2\n" and branch["src/main.ts"] == "main2\n"
     commits = [c["message"].split("\n")[0] for c in repo.commits["ai/T-1"]]
     assert set(commits[-4:-2]) == {"T-1/W1: làm W1", "T-1/W2: làm W2"}
@@ -260,10 +260,47 @@ async def test_failed_item_skips_dependents(company: Company) -> None:
     await h.new_ticket(labels=["small-fix"])
     await h.runner.run_until_idle()
 
-    doc = h.gitlab.project(PROJECT).files["ai/T-1"]["docs/plans/T-1.md"]
+    doc = text_files(h.gitlab.project(PROJECT).files["ai/T-1"])["docs/plans/T-1.md"]
     assert "| W1 |" in doc and "lỗi" in doc
     assert "bỏ qua: đầu việc trước lỗi" in doc  # W3 phụ thuộc W1
     assert "docs/architecture.md" not in h.gitlab.project(PROJECT).files["ai/T-1"]
+
+
+async def _run_with_existing_architecture(company: Company, labels: list[str]) -> str:
+    async def worker(request: httpx.Request) -> httpx.Response:
+        change = {"path": "src/a.ts", "action": "update", "content": "a2\n"}
+        result = "Xong.\nTÓM TẮT: sửa a"
+        return httpx.Response(200, json={"ok": True, "result": result, "changes": [change]})
+
+    plan_text = _plan([{"id": "W1", "owns": ["src/a.ts"]}], mermaid="graph TD\n  moi --> rut_gon")
+
+    def coder_factory(gateway: ToolGateway) -> CliCoder:
+        client = httpx.AsyncClient(transport=httpx.MockTransport(worker))
+        runner = CliAgentRunner(
+            company, TaskTokens(), CliSettings(WORKERS, "worker-secret", "u", 0.01, client)
+        )
+        return CliCoder(runner, gateway, default_project=PROJECT)
+
+    h = make_harness(company, planner=lambda gw: _PlanText(plan_text), coder=coder_factory)
+    repo = h.gitlab.project(PROJECT)
+    repo.files["main"].update({"src/a.ts": "a1\n", "docs/architecture.md": "# Bản đồ chung\n"})
+    await h.new_ticket(labels=labels)
+    await h.runner.run_until_idle()
+    await h.decide("T-1", "approved")
+    await h.runner.run_until_idle()
+    branch = text_files(repo.files["ai/T-1"])
+    assert branch["src/a.ts"] == "a2\n" and "docs/plans/T-1.md" in branch
+    return branch["docs/architecture.md"]
+
+
+async def test_existing_architecture_kept_for_ordinary_ticket(company: Company) -> None:
+    # Sơ đồ rút gọn của một task lẻ không được xóa bản đồ chung repo đã có.
+    assert await _run_with_existing_architecture(company, []) == "# Bản đồ chung\n"
+
+
+async def test_architecture_label_overwrites_existing_map(company: Company) -> None:
+    doc = await _run_with_existing_architecture(company, ["architecture"])
+    assert "graph TD\n  moi --> rut_gon" in doc
 
 
 async def test_runners_process_tickets_concurrently(company: Company) -> None:

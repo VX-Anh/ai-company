@@ -33,6 +33,7 @@ from aico.orchestrator.ports import (
 from aico.orchestrator.state import TicketState
 from aico.orchestrator.workplan import (
     ARCHITECTURE_DOC,
+    ARCHITECTURE_LABEL,
     WorkItem,
     fix_item,
     parse_work_plan,
@@ -221,6 +222,12 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             return "create"
         return "update"
 
+    async def architecture_writable(tid: str, ticket: Ticket, project: str) -> bool:
+        """Ghi sơ đồ khi ticket có nhãn architecture hoặc nhánh đích chưa có file kiến trúc."""
+        if ARCHITECTURE_LABEL in ticket.labels:
+            return True
+        return await file_action(tid, project, deps.target_branch, ARCHITECTURE_DOC) == "create"
+
     async def git(tid: str, tool: str, args: dict[str, Any]) -> Any:
         """Gọi tool Git của bước code, thử lại khi lỗi (GitHub trễ ref, mạng chập chờn).
 
@@ -362,7 +369,7 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             notes=list(s.get("plan_notes") or []),
         )
         docs = [(plan_doc_path(tid), doc)]
-        if s.get("architecture"):
+        if s.get("architecture") and await architecture_writable(tid, ticket, project):
             docs.append((ARCHITECTURE_DOC, render_architecture_doc(s["architecture"], tid)))
         return await publish(
             tid, ticket, project, branch, attempt, commits, description=doc, docs=docs

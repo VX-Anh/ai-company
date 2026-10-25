@@ -18,6 +18,9 @@ ALL_FILES = "**"
 MAX_ITEMS = 6
 PLAN_DOC_DIR = "docs/plans"
 ARCHITECTURE_DOC = "docs/architecture.md"
+# Ticket mang nhãn này (vd. task ghép nối cuối sprint) được ghi sơ đồ đè lên docs/architecture.md.
+# Ticket khác chỉ ghi khi repo chưa có file: sơ đồ rút gọn của task lẻ không xóa bản đồ chung.
+ARCHITECTURE_LABEL = "architecture"
 
 _ID = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,15}$")
 _FENCE = re.compile(r"```([A-Za-z0-9_-]*)[ \t]*\n(.*?)```", re.DOTALL)

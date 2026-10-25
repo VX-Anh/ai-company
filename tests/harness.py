@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -110,3 +110,8 @@ def make_harness(
     graph = build_fix_ticket(deps).compile(checkpointer=checkpointer or InMemorySaver())
     runner = Runner(graph, tickets, owner=owner, lease_seconds=lease_seconds)
     return Harness(company, tickets, approvals, audit, gitlab, reviewer, gateway, runner)
+
+
+def text_files(files: Mapping[str, str | bytes]) -> dict[str, str]:
+    """Bản text các file một branch của backend giả (file nhị phân giải mã utf-8)."""
+    return {path: c.decode("utf-8") if isinstance(c, bytes) else c for path, c in files.items()}

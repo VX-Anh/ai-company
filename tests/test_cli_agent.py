@@ -18,7 +18,7 @@ from aico.llm_relay import TaskTokens
 from aico.registry import Company
 from aico.tools import ToolGateway
 from aico.tools.bridge import ToolBridge, create_tool_bridge_app
-from harness import PROJECT, make_harness
+from harness import PROJECT, make_harness, text_files
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKERS = {
@@ -406,7 +406,7 @@ async def test_cli_coder_edits_workspace_and_opens_mr(company: Company) -> None:
     assert (await h.tickets.get("T-1")).status is TicketStatus.AWAITING_MERGE_APPROVAL
     assert jobs[0]["mode"] == "write" and jobs[0]["role"] == "coder"
     assert jobs[0]["workspace"]["ref"] == "main"  # chưa có branch ai/T-1
-    files = h.gitlab.project(PROJECT).files["ai/T-1"]
+    files = text_files(h.gitlab.project(PROJECT).files["ai/T-1"])
     assert files["README.md"].endswith("## Cài đặt\n") and files["docs/setup.md"] == "npm ci\n"
     commits = [c["message"] for c in h.gitlab.project(PROJECT).commits["ai/T-1"]]
     assert commits[-2].startswith("T-1/W1: Thêm hướng dẫn cài đặt vào README")

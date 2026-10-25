@@ -10,7 +10,7 @@ from aico.orchestrator import ReviewResult, ScriptedReviewer, expire_overdue_app
 from aico.orchestrator.builder import APPROVAL_NOTE_HEADING
 from aico.registry import Company
 from aico.tools import ApprovalRequired, ToolClient, ToolDenied, ToolError, ToolSpec
-from harness import PROJECT, make_harness
+from harness import PROJECT, make_harness, text_files
 
 S = TicketStatus
 
@@ -59,7 +59,7 @@ async def test_medium_risk_waits_for_plan_approval(company: Company) -> None:
     await h.decide("T-1", "approved")
     await h.runner.run_until_idle()
     assert (await h.tickets.get("T-1")).status is S.AWAITING_MERGE_APPROVAL
-    content = h.gitlab.project(PROJECT).files["ai/T-1"]["notes/T-1.md"]
+    content = text_files(h.gitlab.project(PROJECT).files["ai/T-1"])["notes/T-1.md"]
     assert "thêm test" in content
 
 
