@@ -43,6 +43,7 @@ services:
       AICO_RELAY_HOST: 0.0.0.0
       AICO_MCP_GITLAB_URL: http://mcp-gitlab:8101/mcp
       AICO_MCP_PIXEL_URL: http://mcp-pixel:8102/mcp
+      AICO_MCP_REA_URL: http://mcp-rea:8103/mcp
       AICO_API_TOKEN_FILE: /run/secrets/aico_api_token
       AICO_INTERNAL_TOKEN_FILE: /run/secrets/aico_internal_token
       AICO_INTAKE_PROJECTS: ${GITLAB_PROJECTS:-}
@@ -97,6 +98,18 @@ services:
       APPROVAL_VERIFY_TOKEN_FILE: /run/secrets/aico_internal_token
     secrets: [gitlab_token, gitlab_merge_token, aico_internal_token]
     group_add: ["${SECRETS_GID:-10100}"]
+    networks: [core]
+    restart: unless-stopped
+
+  # REA: phân tích ngược tĩnh cho agent, sau cầu nối stdio -> HTTP (mỗi lần gọi một tiến trình,
+  # không giữ phiên). Không có secret; chỉ ở mạng core. File cần phân tích: targets chỉ đọc.
+  mcp-rea:
+    build:
+      context: ..
+      dockerfile: deploy/docker/mcp-rea.Dockerfile
+    volumes:
+      - ${REA_TARGETS_DIR:-/mnt/d/TVPL/Marshy/rea-targets}:/targets:ro
+      - rea-data:/data
     networks: [core]
     restart: unless-stopped
 
@@ -216,6 +229,7 @@ volumes:
   worker-codex-home: {}
   worker-cursor-home: {}
   pixel-data: {}
+  rea-data: {}
   previews: {}
 
 secrets:

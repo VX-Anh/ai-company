@@ -34,6 +34,17 @@ def test_untestable_checks_go_to_human_not_back_to_coder(company: Company) -> No
     assert "không thử được" in company.prompt_text("coder")
 
 
+def test_rea_tools_are_static_only(company: Company) -> None:
+    # REA có cả tool chạy code lạ (Frida, GDB, Rizin, scenario, adb): chỉ mở tool đọc tĩnh, L0.
+    grant = company.role("researcher").grant_for("rea")
+    assert grant is not None
+    for tool in grant.allow:
+        assert company.policy.level_of("rea", tool) is ActionLevel.L0, tool
+    dynamic = ("frida", "gdb", "rizin", "scenario", "adb", "observe", "cutter")
+    rea_tools = [k for k in company.policy.tool_levels if k.startswith("rea.")]
+    assert not [k for k in rea_tools if any(d in k for d in dynamic)]
+
+
 def test_unknown_field_is_rejected(company_copy: Path) -> None:
     _edit(company_copy / "roles" / "coder.yaml", maxrisk="L2")
     with pytest.raises(RegistryError) as exc:

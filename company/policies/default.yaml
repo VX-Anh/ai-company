@@ -17,6 +17,21 @@ tool_levels:
   pixel.pixel_compile: L1
   pixel.pixel_scene: L1
   pixel.pixel_import: L1
+  # REA: chỉ tool phân tích tĩnh theo đường dẫn file, không chạy target, không ghi file.
+  # Tool chạy code lạ (Frida, GDB, Rizin, process/browser scenario, adb) không khai báo: guard chặn.
+  rea.inspect_pe_resources: L0
+  rea.inspect_managed_artifact: L0
+  rea.inspect_managed_members: L0
+  rea.inspect_managed_native_boundaries: L0
+  rea.inspect_with_objdump: L0
+  rea.inspect_go_binary: L0
+  rea.inspect_rust_binary: L0
+  rea.inspect_electron_fuses: L0
+  rea.analyze_javascript_application: L0
+  rea.identify_flutter_build: L0
+  rea.inspect_plist: L0
+  rea.inspect_sqlite_database: L0
+  rea.demangle_swift: L0
 
 # Giá quy đổi ra USD (giá trị ví dụ) cho model gọi qua API. Worker subscription không tính tiền theo token.
 model_prices:

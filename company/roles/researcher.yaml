@@ -9,6 +9,12 @@ workers: [claude, codex]
 web: true
 prompt: prompts/researcher.md
 tools:
+  # Phân tích ngược tĩnh file trong /targets (game/app tham khảo), chỉ đọc.
+  - server: rea
+    allow: [inspect_pe_resources, inspect_managed_artifact, inspect_managed_members,
+            inspect_managed_native_boundaries, inspect_with_objdump, inspect_go_binary,
+            inspect_rust_binary, inspect_electron_fuses, analyze_javascript_application,
+            identify_flutter_build, inspect_plist, inspect_sqlite_database, demangle_swift]
   - server: gitlab
     allow: [read_file]
     constraints:

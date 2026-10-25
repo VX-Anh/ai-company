@@ -34,6 +34,7 @@ src/aico/llm_relay      model relay (token theo task, ngân sách)
 mcp_servers/gitlab      MCP server Git (GitHub backend mặc định, MR = PR)
 deploy/                 compose.yaml, Dockerfile, worker/worker_server.py (phòng provider),
                         worker/activity.py (hoạt động agent đọc từ transcript CLI), mcp-pixel/,
+                        docker/mcp-rea.Dockerfile (REA phân tích ngược tĩnh, file ở rea-targets/),
                         remote/ (máy build từ xa: remote_runner.py, lệnh aico-remote và aico-shot cho worker)
 tests/                  pytest; tests/harness.py dựng graph với agent giả
 ```

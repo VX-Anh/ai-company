@@ -111,6 +111,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             McpToolClient(
                 {"gitlab": settings.mcp_gitlab_url}
                 | ({"pixel": settings.mcp_pixel_url} if settings.mcp_pixel_url else {})
+                | ({"rea": settings.mcp_rea_url} if settings.mcp_rea_url else {})
             ),
             PostgresAuditLog(pool),
         )
