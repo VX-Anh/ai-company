@@ -102,6 +102,10 @@ class Config:
         self.cpus = env.get("REMOTE_CPUS", "")
         self.memory = env.get("REMOTE_MEMORY", "6g")
         self.max_timeout = float(env.get("REMOTE_MAX_TIMEOUT", "1200"))
+        # PostgreSQL dùng chung cho test (container có sẵn trên server): pha run thấy nó ở tên "pg"
+        # trong mạng riêng của lần chạy. URL quản trị nằm trong file trên server, PC không giữ.
+        self.test_pg = env.get("REMOTE_TEST_PG", "")
+        self.test_pg_url_file = env.get("REMOTE_TEST_PG_URL_FILE", "")
         self.preview_dir = Path(env.get("PREVIEW_DIR", "/data/previews"))
         self.public_url = env.get("PREVIEW_PUBLIC_URL", "http://localhost:8500").rstrip("/")
         self.hosts = {
@@ -115,6 +119,8 @@ class Config:
 # Pha run được đổi sang user khác (vd. PostgreSQL thật cho test tích hợp không chạy bằng root,
 # test hạ xuống nobody bằng setpriv). no-new-privileges vẫn giữ, nên không leo quyền được.
 RUN_CAPS = ("SETUID", "SETGID")
+# Biến môi trường pha run nhận URL quản trị PostgreSQL dùng chung (xem Config.test_pg).
+TEST_PG_ENV = "LHV_PG_ADMIN_URL"
 
 
 def container_flags(cfg: Config, name: str, volume: str, caps: tuple[str, ...] = ()) -> list[str]:
@@ -197,6 +203,7 @@ def remote_script(
             # có card mạng nên trình duyệt coi là online (--network none làm navigator.onLine sai).
             "--network",
             f"aico-net-{run_id}",
+            *(["-e", TEST_PG_ENV] if cfg.test_pg else []),
             *container_flags(cfg, f"aico-run-{run_id}", volume, RUN_CAPS),
             image,
             "sh",
@@ -207,12 +214,24 @@ def remote_script(
     # Chạy lệnh: gộp stderr vào stdout để log giữ đúng thứ tự. Xem trước: stdout dành cho tar.
     redirect = " 1>&2" if preview_output is not None else ""
     merge = "exec 2>&1; " if preview_output is None else ""
+    pg, attach = "", ""
+    if cfg.test_pg:
+        # Gỡ container PostgreSQL khỏi mạng trước khi xóa mạng; thiếu container hay file URL thì
+        # biến môi trường trống và test tự dựng PostgreSQL riêng như cũ.
+        name = shlex.quote(cfg.test_pg)
+        pg = f"docker network disconnect -f $n {name} >/dev/null 2>&1; "
+        attach = (
+            f"docker network connect --alias pg $n {name} >/dev/null 2>&1 && "
+            f"{TEST_PG_ENV}=$(cat {shlex.quote(cfg.test_pg_url_file)} 2>/dev/null) && "
+            f"export {TEST_PG_ENV}; "
+        )
     return (
         f"{merge}v={volume}; n=aico-net-{run_id}; docker volume create $v >/dev/null || exit 125; "
-        "trap 'docker volume rm -f $v >/dev/null 2>&1; docker network rm $n >/dev/null 2>&1' EXIT; "
+        f"trap '{pg}docker volume rm -f $v >/dev/null 2>&1; "
+        "docker network rm $n >/dev/null 2>&1' EXIT; "
         "docker network create --internal $n >/dev/null || exit 125; "
         f"{setup_cmd}{redirect} || exit $?; "
-        f"{run_cmd} </dev/null"
+        f"{attach}{run_cmd} </dev/null"
     )
 
 

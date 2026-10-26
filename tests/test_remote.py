@@ -94,6 +94,31 @@ def test_remote_script_runs_command_without_network(tmp_path: Path) -> None:
     assert "--strip-components" not in preview
 
 
+def test_remote_script_attaches_shared_test_postgres(tmp_path: Path) -> None:
+    # Mặc định tắt: không gắn container nào, không truyền biến.
+    plain = rr.remote_script(_config(tmp_path), "abc", "node:22", "npm test", 1)
+    assert "network connect" not in plain and rr.TEST_PG_ENV not in plain
+    cfg = rr.Config(
+        {
+            "REMOTE_SSH_TARGET": "aico@server",
+            "REMOTE_TEST_PG": "aico-test-pg",
+            "REMOTE_TEST_PG_URL_FILE": ".config/aico/test-pg.url",
+            "PREVIEW_DIR": str(tmp_path / "previews"),
+        }
+    )
+    script = rr.remote_script(cfg, "abc", "node:22", "npm test", 1)
+    setup, run = script.split("|| exit $?;")
+    # Chỉ pha run thấy PostgreSQL, ở tên "pg" trong mạng --internal riêng của lần chạy.
+    assert "network connect" not in setup and rr.TEST_PG_ENV not in setup
+    assert "docker network connect --alias pg $n aico-test-pg" in run
+    # URL đọc từ file trên server và đi vào container qua môi trường, không nằm trong lệnh.
+    assert f"{rr.TEST_PG_ENV}=$(cat .config/aico/test-pg.url 2>/dev/null)" in run
+    assert f"-e {rr.TEST_PG_ENV} " in run
+    # Dọn: gỡ container khỏi mạng trước khi xóa mạng.
+    trap = script.split("trap", 1)[1].split("EXIT", 1)[0]
+    assert trap.index("network disconnect -f $n aico-test-pg") < trap.index("docker network rm $n")
+
+
 def test_default_node_image_has_chromium_deps_and_build_script_checks_tag() -> None:
     assert rr.Config({}).images["node"] == "aico/node-playwright:22"
     dockerfile = (Path(rr.__file__).parent / "node-playwright.Dockerfile").read_text(

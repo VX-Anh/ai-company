@@ -140,6 +140,9 @@ services:
       REMOTE_CPUS: ${REMOTE_CPUS:-}   # trống: Docker rootless trên server chưa có controller cpu
       REMOTE_MEMORY: ${REMOTE_MEMORY:-6g}
       REMOTE_CONCURRENCY: ${REMOTE_CONCURRENCY:-4}
+      # PostgreSQL dùng chung cho test trên server; URL quản trị đọc từ file trên server, không từ PC.
+      REMOTE_TEST_PG: ${REMOTE_TEST_PG:-aico-test-pg}
+      REMOTE_TEST_PG_URL_FILE: ${REMOTE_TEST_PG_URL_FILE:-.config/aico/test-pg.url}
       PREVIEW_PUBLIC_URL: ${PREVIEW_PUBLIC_URL:-http://localhost:8500}
       PREVIEW_HOSTS: ${PREVIEW_HOSTS:-}   # vd office.aico.io.vn=aico-office (bản main ở gốc "/")
     secrets: [remote_ssh_key, remote_known_hosts, worker_token]
