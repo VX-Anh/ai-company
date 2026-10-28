@@ -8,6 +8,7 @@ from dataclasses import dataclass
 from typing import Any, Protocol
 
 from mcp.client.client import Client
+from mcp.client.streamable_http import streamable_http_client
 from mcp.server.mcpserver import MCPServer
 from mcp.types import CallToolResult, ImageContent, TextContent
 
@@ -80,6 +81,17 @@ def without_images(result: dict[str, Any]) -> dict[str, Any]:
     }
 
 
+# Một sự kiện SSE mang trọn kết quả tool. download_archive trả repo tới 25 MB (base64 ~33 MB),
+# mặc định 1 MB của thư viện mcp làm hỏng bước review khi server trả qua SSE.
+MAX_SSE_EVENT_BYTES = 48 * 1024 * 1024
+
+
+def _client(target: str | MCPServer) -> Client:
+    if isinstance(target, str):
+        return Client(streamable_http_client(target, max_sse_event_size=MAX_SSE_EVENT_BYTES))
+    return Client(target)
+
+
 class McpToolClient:
     """Gọi MCP server qua Streamable HTTP (URL) hoặc trong cùng tiến trình (MCPServer, khi test)."""
 
@@ -90,7 +102,7 @@ class McpToolClient:
         target = self._servers.get(server)
         if target is None:
             raise ToolError(f"không có MCP server '{server}'")
-        async with Client(target) as client:
+        async with _client(target) as client:
             result = await client.call_tool(tool, args)
         return _result_to_dict(result)
 
@@ -98,7 +110,7 @@ class McpToolClient:
         target = self._servers.get(server)
         if target is None:
             raise ToolError(f"không có MCP server '{server}'")
-        async with Client(target) as client:
+        async with _client(target) as client:
             listed = await client.list_tools()
         return [
             ToolSpec(server, t.name, t.description or "", dict(t.input_schema))

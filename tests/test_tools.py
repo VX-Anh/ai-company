@@ -153,3 +153,40 @@ async def test_audit_masks_secrets(company: Company) -> None:
 
     masked = mask_secrets({"project": PROJECT, "api_token": "abc", "nested": {"password": "x"}})
     assert masked == {"project": PROJECT, "api_token": "***", "nested": {"password": "***"}}
+
+
+async def test_mcp_client_nhan_ket_qua_lon_hon_1mb_qua_sse(monkeypatch: pytest.MonkeyPatch) -> None:
+    # download_archive trả trọn repo trong một sự kiện SSE; mặc định 1 MB của mcp làm hỏng review.
+    # Ép giao thức legacy (nhánh SSE) như lúc lỗi thật ở T-9e5c8432.
+    import functools
+
+    import anyio
+    import uvicorn
+    from mcp.client.client import Client
+    from mcp.server.mcpserver import MCPServer
+
+    monkeypatch.setattr("aico.tools.gateway.Client", functools.partial(Client, mode="legacy"))
+
+    mcp = MCPServer("lon")
+
+    @mcp.tool()
+    def lon() -> dict[str, str]:
+        return {"data": "x" * 2_000_000}
+
+    server = uvicorn.Server(
+        uvicorn.Config(mcp.streamable_http_app(), host="127.0.0.1", port=0, log_level="warning")
+    )
+    result: dict[str, object] = {}
+    async with anyio.create_task_group() as tg:
+        tg.start_soon(server.serve)
+        with anyio.fail_after(10):
+            while not server.started:  # noqa: ASYNC110 — uvicorn không có event báo đã sẵn sàng
+                await anyio.sleep(0.05)
+        port = server.servers[0].sockets[0].getsockname()[1]
+        try:
+            result = await McpToolClient({"lon": f"http://127.0.0.1:{port}/mcp"}).call(
+                "lon", "lon", {}
+            )
+        finally:
+            server.should_exit = True
+    assert len(str(result["data"])) == 2_000_000
