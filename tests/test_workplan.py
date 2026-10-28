@@ -215,7 +215,10 @@ async def test_items_run_in_parallel_across_rooms_and_write_docs(company: Compan
     await h.runner.run_until_idle()
 
     assert (await h.tickets.get("T-1")).status is TicketStatus.AWAITING_MERGE_APPROVAL
-    assert jobs["W1"]["room"] != jobs["W2"]["room"]  # rải sang phòng khác
+    # Rải phòng: đầu việc thứ k xoay danh sách worker của vai trò k nấc (W2 là đầu việc thứ hai).
+    designer = company.role("designer").workers
+    assert jobs["W1"]["room"] == company.role("coder").workers[0]
+    assert jobs["W2"]["room"] == designer[1 % len(designer)]
     assert jobs["W2"]["role"] == "designer"
     # W3 thấy kết quả của W1 và W2 (W2 sửa ngoài phạm vi bị bỏ).
     assert jobs["W3"]["files"]["src/a.ts"] == "a2\n"

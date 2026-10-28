@@ -3,7 +3,9 @@ department: engineering
 reports_to: tech_lead
 worker: cli
 # Vẽ sprite, animation pixel cho repo GUI (aico-office) bằng Pixelbolt.
-workers: [claude, codex, cursor]
+# codex đứng đầu: Codex CLI có công cụ sinh ảnh dựng sẵn ($imagegen, gói ChatGPT), dùng cho
+# quy trình vẽ của linh-hoa-vien (docs/research/art-tools.md K-ART-1).
+workers: [codex, claude, cursor]
 prompt: prompts/designer.md
 tools:
   - server: pixel
