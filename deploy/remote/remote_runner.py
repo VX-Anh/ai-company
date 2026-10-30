@@ -69,6 +69,10 @@ SETUP_SCRIPT = (
     "set -e; tar xzf - --no-same-owner {strip}; "
     "if [ -f package-lock.json ] && command -v npm >/dev/null; then "
     "npm ci --no-audit --no-fund; fi; "
+    # Repo pnpm: corepack tải đúng bản pnpm ghi ở packageManager vào COREPACK_HOME (cache dùng
+    # chung) để pha run không mạng vẫn gọi được pnpm.
+    "if [ -f pnpm-lock.yaml ] && command -v corepack >/dev/null; then "
+    "corepack enable && pnpm install --frozen-lockfile; fi; "
     # Repo có Playwright: tải Chromium headless khớp phiên bản vào cache (lần sau dùng lại),
     # để e2e chạy được ở pha run không mạng. Thư viện hệ thống nằm sẵn trong image.
     "if [ -x node_modules/.bin/playwright ]; then "
@@ -151,6 +155,12 @@ def container_flags(cfg: Config, name: str, volume: str, caps: tuple[str, ...] =
         "-e",
         "UV_CACHE_DIR=/cache/uv",
         "-e",
+        "COREPACK_HOME=/cache/corepack",
+        "-e",
+        "COREPACK_ENABLE_DOWNLOAD_PROMPT=0",
+        "-e",
+        "npm_config_store_dir=/cache/pnpm-store",
+        "-e",
         f"PLAYWRIGHT_BROWSERS_PATH={BROWSERS_PATH}",
         # Chromium cần /dev/shm lớn hơn mặc định 64 MB của Docker, nếu không tab dễ crash.
         "--shm-size",
@@ -190,11 +200,13 @@ def remote_script(
             setup,
         ]
     )
+    # Shim pnpm của corepack nằm trong container setup đã xoá; tạo lại (không cần mạng).
+    shims = "if [ -f pnpm-lock.yaml ] && command -v corepack >/dev/null; then corepack enable; fi; "
     if preview_output is None:
-        run = f"set -e; {command}"
+        run = f"set -e; {shims}{command}"
     else:
         out = shlex.quote(preview_output)
-        run = f"set -e; ({command}) 1>&2; test -d {out}; tar czf - -C {out} ."
+        run = f"set -e; {shims}({command}) 1>&2; test -d {out}; tar czf - -C {out} ."
     run_cmd = shlex.join(
         [
             "docker",

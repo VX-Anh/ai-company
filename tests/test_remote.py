@@ -85,8 +85,12 @@ def test_remote_script_runs_command_without_network(tmp_path: Path) -> None:
     # Chromium của Playwright tải ở pha setup (có mạng) vào cache, pha run dùng lại khi không mạng.
     assert "playwright install --only-shell chromium" in setup
     assert "playwright install" not in run
+    # Repo pnpm: cài ở setup qua corepack, pha run chỉ tạo lại shim (bản pnpm nằm ở cache chung).
+    assert "pnpm install --frozen-lockfile" in setup and "pnpm install" not in run
+    assert "corepack enable" in run
     for part in (setup, run):
         assert f"PLAYWRIGHT_BROWSERS_PATH={rr.BROWSERS_PATH}" in part and "--shm-size 1g" in part
+        assert "COREPACK_HOME=/cache/corepack" in part
     preview = rr.remote_script(
         _config(tmp_path), "abc", "node:22", "npm run build", 0, preview_output="dist"
     )
