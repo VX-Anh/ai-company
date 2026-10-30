@@ -11,7 +11,7 @@ tools:
   - server: gitlab
     allow: [read_file]
     constraints:
-      repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien]
+      repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien, VX-Anh/ai-trace]
 max_risk: L0
 budget:
   per_ticket_usd: 1

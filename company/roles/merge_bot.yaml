@@ -7,5 +7,5 @@ tools:
   - server: gitlab
     allow: [merge_mr, get_merge_request]
     constraints:
-      repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien]
+      repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien, VX-Anh/ai-trace]
 max_risk: L3

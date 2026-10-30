@@ -9,7 +9,7 @@ tools:
   - server: gitlab
     allow: [read_file, download_archive, get_merge_request]
     constraints:
-      repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien]
+      repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien, VX-Anh/ai-trace]
 max_risk: L0
 limits:
   max_iterations: 40

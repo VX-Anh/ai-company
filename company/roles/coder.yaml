@@ -11,7 +11,7 @@ tools:
     allow: [read_file, download_archive, create_branch, push, open_merge_request,
             get_merge_request]
     constraints:                # MCP server kiểm tra lại tham số, không chỉ guard
-      repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien]
+      repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien, VX-Anh/ai-trace]
       branch_pattern: "ai/*"
 max_risk: L2                    # hành động L3 luôn phải qua người duyệt
 budget:
