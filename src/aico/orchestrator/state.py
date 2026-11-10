@@ -23,6 +23,7 @@ class TicketState(TypedDict):
     review_passed: bool
     review_notes: str
     skip_test: bool  # ticket mang nhãn bỏ bước test (vd docs)
+    max_review_rounds: int  # giới hạn vòng review của ticket (theo nhãn hoặc SOP)
     test_rounds: int
     test_passed: bool
     test_notes: str

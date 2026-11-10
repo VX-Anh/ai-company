@@ -78,6 +78,9 @@ class Deps:
     label_item_roles: dict[str, tuple[str, ...]] = field(default_factory=dict)
     # Ticket mang nhãn này bỏ bước test (vd `docs`: không có hành vi để chạy thử).
     test_skip_labels: tuple[str, ...] = ()
+    # Số vòng review tối đa riêng theo nhãn (vd `research`: Fact Checker kỹ, cần nhiều vòng hơn);
+    # không khớp nhãn nào thì dùng max_review_rounds của SOP.
+    label_review_rounds: dict[str, int] = field(default_factory=dict)
 
     def role(self, step: str) -> str:
         return self.sop.steps[step]
@@ -88,6 +91,13 @@ class Deps:
             if (roles := by_label.get(label.lower())) is not None:
                 return roles
         return self.item_roles
+
+    def review_rounds_for(self, ticket: Ticket) -> int:
+        by_label = {k.lower(): v for k, v in self.label_review_rounds.items()}
+        for label in ticket.labels:
+            if (rounds := by_label.get(label.lower())) is not None:
+                return rounds
+        return self.sop.limits.max_review_rounds
 
     def skips_test(self, ticket: Ticket) -> bool:
         skip = {label.lower() for label in self.test_skip_labels}
@@ -435,6 +445,7 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             "review_notes": result.notes,
             "review_rounds": rounds,
             "skip_test": deps.skips_test(ticket),
+            "max_review_rounds": deps.review_rounds_for(ticket),
         }
 
     async def test(s: TicketState) -> dict[str, Any]:
@@ -548,6 +559,9 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         await deps.tickets.transition(s["ticket_id"], S.DONE, actor="orchestrator")
         return {}
 
+    def max_review_rounds(s: TicketState) -> int:
+        return s.get("max_review_rounds") or limits.max_review_rounds
+
     def route_analyze(s: TicketState) -> str:
         return "escalate" if s.get("escalation_reason") else "plan"
 
@@ -572,7 +586,7 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         if s["review_passed"]:
             tests = deps.tester is not None and "test" in deps.sop.steps
             return "test" if tests and not s.get("skip_test") else "approve_merge"
-        return "code" if s["review_rounds"] < limits.max_review_rounds else "escalate"
+        return "code" if s["review_rounds"] < max_review_rounds(s) else "escalate"
 
     def route_test(s: TicketState) -> str:
         if s.get("escalation_reason"):
@@ -584,10 +598,9 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
     def route_merge_approval(s: TicketState) -> str:
         if s["merge_decision"] == Decision.APPROVED:
             return "merge"
-        if (
-            s["merge_decision"] == Decision.CHANGES_REQUESTED
-            and s["review_rounds"] < limits.max_review_rounds
-        ):
+        if s["merge_decision"] == Decision.CHANGES_REQUESTED and s[
+            "review_rounds"
+        ] < max_review_rounds(s):
             return "code"
         return "escalate"
 

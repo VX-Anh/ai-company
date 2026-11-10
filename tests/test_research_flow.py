@@ -13,6 +13,7 @@ import yaml
 from aico.agents import (
     RESEARCH_LABEL,
     RESEARCH_REVIEW_BRIEF,
+    RESEARCH_REVIEW_ROUNDS,
     RESEARCH_ROLES,
     CliAgentRunner,
     CliCoder,
@@ -24,7 +25,13 @@ from aico.agents import (
 from aico.agents.research import strip_mermaid
 from aico.core import ActionLevel, Ticket, TicketRisk, TicketStatus
 from aico.llm_relay import TaskTokens
-from aico.orchestrator import LabelPlanner, LabelReviewer, RuleTriage, ScriptedReviewer
+from aico.orchestrator import (
+    LabelPlanner,
+    LabelReviewer,
+    ReviewResult,
+    RuleTriage,
+    ScriptedReviewer,
+)
 from aico.registry import Company, load_company
 from harness import PROJECT, make_harness
 from test_ba_tester_flow import FakeAnalyst
@@ -188,3 +195,20 @@ def test_rnd_department_config(company: Company) -> None:
     for role in ("coder", "reviewer", "merge_bot", "researcher", "fact_checker", "research_lead"):
         grant = company.role(role).grant_for("gitlab")
         assert grant is not None and "VX-Anh/aico-knowledge" in grant.constraints.repos, role
+
+
+async def test_research_gets_more_review_rounds_than_code_tickets(company: Company) -> None:
+    fails = [ReviewResult(False, f"vòng {i}: trích dẫn sai") for i in range(1, 5)]
+    rounds = {RESEARCH_LABEL: RESEARCH_REVIEW_ROUNDS}
+    # Ticket research: 4 lần CẦN SỬA vẫn còn lượt, lần 5 đạt thì tới chờ duyệt merge.
+    h = make_harness(company, reviewer=ScriptedReviewer(list(fails)), label_review_rounds=rounds)
+    await h.new_ticket(labels=[RESEARCH_LABEL])
+    await h.runner.run_until_idle()
+    assert (await h.tickets.get("T-1")).status is S.AWAITING_MERGE_APPROVAL
+    # Ticket không có nhãn: vẫn theo giới hạn chung 3 vòng của SOP.
+    h = make_harness(company, reviewer=ScriptedReviewer(list(fails)), label_review_rounds=rounds)
+    await h.new_ticket(labels=["low-risk"])
+    await h.runner.run_until_idle()
+    t = await h.tickets.get("T-1")
+    assert t.status is S.ESCALATED
+    assert company.sop("fix_ticket").limits.max_review_rounds == 3

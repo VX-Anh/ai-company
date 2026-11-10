@@ -22,6 +22,7 @@ from aico.agents import (
     REMOTE_BUILD_HINT,
     RESEARCH_LABEL,
     RESEARCH_REVIEW_BRIEF,
+    RESEARCH_REVIEW_ROUNDS,
     RESEARCH_ROLES,
     RESEARCH_TEAM,
     RETRO_LABEL,
@@ -272,6 +273,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             tester=tester,
             label_item_roles=label_item_roles,
             test_skip_labels=(DOCS_LABEL, RESEARCH_LABEL),
+            label_review_rounds={RESEARCH_LABEL: RESEARCH_REVIEW_ROUNDS} if research_on else {},
         )
 
         async def preview_ticket(ticket_id: str, site: bool) -> dict[str, Any]:

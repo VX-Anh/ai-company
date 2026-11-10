@@ -25,6 +25,8 @@ RESEARCH_TEAM = ("research_lead", "researcher", "fact_checker")
 CARDS_DIR = "cards/"
 INDEX_FILE = "INDEX.md"
 CHECK_SCRIPT = "scripts/check_cards.py"
+# Fact Checker mở lại từng nguồn nên hay bắt lỗi nhỏ ở vòng sau: cho nhiều vòng hơn ticket code.
+RESEARCH_REVIEW_ROUNDS = 5
 MAX_ITEMS = 3
 MAX_CARDS = 5
 

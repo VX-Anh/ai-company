@@ -25,6 +25,7 @@ from aico.agents.remote import (
 from aico.agents.research import (
     RESEARCH_LABEL,
     RESEARCH_REVIEW_BRIEF,
+    RESEARCH_REVIEW_ROUNDS,
     RESEARCH_ROLES,
     RESEARCH_TEAM,
     ResearchPlanner,
@@ -50,6 +51,7 @@ __all__ = [
     "REMOTE_BUILD_HINT",
     "RESEARCH_LABEL",
     "RESEARCH_REVIEW_BRIEF",
+    "RESEARCH_REVIEW_ROUNDS",
     "RESEARCH_ROLES",
     "RESEARCH_TEAM",
     "SHOT_HINT",
