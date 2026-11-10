@@ -3,7 +3,7 @@
 FROM node:22-bookworm-slim
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-       ca-certificates curl git ripgrep bash bubblewrap python3 tzdata        chromium fonts-noto-core fonts-noto-color-emoji \
+       ca-certificates curl git ripgrep bash bubblewrap python3 python3-yaml tzdata        chromium fonts-noto-core fonts-noto-color-emoji \
     && rm -rf /var/lib/apt/lists/*
 # playwright-core + chromium của Debian: aico-shot chụp giao diện (không tải trình duyệt riêng).
 RUN npm install -g @anthropic-ai/claude-code @openai/codex playwright-core && npm cache clean --force

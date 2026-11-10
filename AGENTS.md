@@ -25,6 +25,9 @@ src/aico/agents         cli_agent: giao việc cho worker (CliAgentRunner, CliCo
                         Tester với TEST_BRIEF); llm_agent (LlmPlanner, LlmAnalyst = BA);
                         retro (Researcher hồi cứu); docs (ticket nhãn docs: Researcher web, BA,
                         Tech Lead viết tài liệu, Reviewer chấm tài liệu, bỏ Tester);
+                        research (ticket nhãn research, Phòng R&D: Research Lead chia việc,
+                        Researcher viết thẻ tri thức vào VX-Anh/aico-knowledge, Fact Checker
+                        kiểm chứng thay Reviewer, bỏ BA, duyệt kế hoạch và Tester);
                         remote (bản xem trước MR trên máy build từ xa)
 src/aico/tools          guard, gateway (audit), bridge (MCP cho worker, token theo task)
 src/aico/governance     bản ghi duyệt, audit, kiểm tra duyệt merge

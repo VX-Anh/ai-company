@@ -13,6 +13,7 @@ document/
 ├── README.md                    # file này: mục lục bộ tài liệu
 ├── thiet-ke-kien-truc.md        # tài liệu thiết kế chính
 ├── ke-hoach-trien-khai.md       # kế hoạch thực hiện từng bước theo giai đoạn
+├── ke-hoach-phong-rnd.md        # kế hoạch Phòng R&D: nghiên cứu, kho tri thức, tự học
 └── so-do/                       # sơ đồ tương tác (mở bằng trình duyệt)
     ├── kien-truc-tong-the.html
     ├── so-do-to-chuc.html
@@ -45,6 +46,8 @@ document/
 ## Kế hoạch triển khai
 
 [ke-hoach-trien-khai.md](ke-hoach-trien-khai.md): Bước 0 (chốt quyết định, PoC sandbox), rồi GĐ0 → GĐ3. Mỗi bước ghi rõ việc, đầu ra và điều kiện xong; mỗi giai đoạn có cổng ra.
+
+[ke-hoach-phong-rnd.md](ke-hoach-phong-rnd.md): Phòng R&D (`rnd`) — nghiên cứu theo yêu cầu (ticket nhãn `research`), kho tri thức `VX-Anh/aico-knowledge` duyệt bằng PR, chỉ mục Postgres, tự học ban đêm, lộ trình GĐ1 → GĐ5.
 
 ## Sơ đồ
 

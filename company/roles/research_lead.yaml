@@ -1,0 +1,17 @@
+id: research_lead
+department: rnd
+reports_to: chief_of_staff
+worker: cli
+# Trưởng Phòng R&D: đọc mục lục kho tri thức, chia câu hỏi nghiên cứu (nhãn research) thành đầu
+# việc viết thẻ cho researcher. Không lên web, không viết thẻ.
+workers: [claude, codex]
+prompt: prompts/research_lead.md
+tools:
+  - server: gitlab
+    allow: [read_file]
+    constraints:
+      repos: [VX-Anh/aico-knowledge]
+max_risk: L0
+limits:
+  max_iterations: 40
+  timeout_minutes: 20

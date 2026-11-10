@@ -7,3 +7,6 @@ departments:
   - id: engineering
     name: Phòng Kỹ thuật
     head: tech_lead
+  - id: rnd
+    name: Phòng R&D
+    head: research_lead

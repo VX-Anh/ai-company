@@ -22,6 +22,13 @@ from aico.agents.remote import (
     PreviewSettings,
     RemotePreviewer,
 )
+from aico.agents.research import (
+    RESEARCH_LABEL,
+    RESEARCH_REVIEW_BRIEF,
+    RESEARCH_ROLES,
+    RESEARCH_TEAM,
+    ResearchPlanner,
+)
 from aico.agents.retro import RETRO_LABEL, RetroPlanner
 
 __all__ = [
@@ -41,9 +48,14 @@ __all__ = [
     "PreviewError",
     "PreviewSettings",
     "REMOTE_BUILD_HINT",
+    "RESEARCH_LABEL",
+    "RESEARCH_REVIEW_BRIEF",
+    "RESEARCH_ROLES",
+    "RESEARCH_TEAM",
     "SHOT_HINT",
     "TEST_BRIEF",
     "RemotePreviewer",
+    "ResearchPlanner",
     "RETRO_LABEL",
     "RetroPlanner",
     "WorkerUnavailable",

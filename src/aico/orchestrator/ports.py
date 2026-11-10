@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import base64
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
@@ -166,6 +167,25 @@ class LabelPlanner:
 
     async def plan(self, ticket: Ticket, feedback: str | None, requirements: str = "") -> str:
         return await self.pick(ticket).plan(ticket, feedback, requirements)
+
+
+class LabelReviewer:
+    """Chọn reviewer theo nhãn ticket (`research`: Fact Checker); không khớp thì dùng mặc định."""
+
+    def __init__(self, default: Reviewer, by_label: Mapping[str, Reviewer]) -> None:
+        self._default = default
+        self._by_label = {label.lower(): r for label, r in by_label.items()}
+
+    def pick(self, ticket: Ticket) -> Reviewer:
+        for label in ticket.labels:
+            if (reviewer := self._by_label.get(label.lower())) is not None:
+                return reviewer
+        return self._default
+
+    async def review(
+        self, ticket: Ticket, mr: dict[str, Any], plan: str = "", requirements: str = ""
+    ) -> ReviewResult:
+        return await self.pick(ticket).review(ticket, mr, plan, requirements)
 
 
 class StaticPlanner:

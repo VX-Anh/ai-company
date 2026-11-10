@@ -1,0 +1,18 @@
+id: fact_checker
+department: rnd
+reports_to: research_lead
+worker: cli
+# Chấm PR thẻ tri thức thay Reviewer: mở lại nguồn, đối chiếu trích dẫn, tìm thẻ trùng.
+# Ưu tiên phòng ngược với researcher để kiểm chứng độc lập; Cursor chưa có tìm kiếm web headless.
+workers: [codex, claude]
+web: true
+prompt: prompts/fact_checker.md
+tools:
+  - server: gitlab
+    allow: [read_file, download_archive, get_merge_request]
+    constraints:
+      repos: [VX-Anh/aico-knowledge]
+max_risk: L0
+limits:
+  max_iterations: 40
+  timeout_minutes: 20

@@ -331,6 +331,8 @@ async def test_workers_endpoint_reports_status_and_roles(company: Company) -> No
         "researcher",
         "ba",
         "tester",
+        "research_lead",
+        "fact_checker",
     }
     assert "designer" in by_name["codex"]["roles"]  # designer chỉ chạy ở phòng codex (imagegen)
     assert by_name["cursor"]["state"] == "offline"

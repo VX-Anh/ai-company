@@ -1,9 +1,10 @@
 id: researcher
-department: engineering
-reports_to: tech_lead
+department: rnd
+reports_to: research_lead
 worker: cli
 # Hồi cứu nội bộ (ticket nhãn retro): đọc lịch sử ticket do aico gom sẵn, đề xuất quy tắc mới.
 # Ticket tài liệu (nhãn docs): nghiên cứu trên web, viết vào docs/research/ của repo.
+# Ticket nghiên cứu (nhãn research, Phòng R&D): viết thẻ tri thức trong VX-Anh/aico-knowledge.
 # Không tự push: thay đổi đi qua Reviewer và người duyệt. Cursor chưa có tìm kiếm web headless.
 workers: [claude, codex]
 web: true
@@ -18,7 +19,7 @@ tools:
   - server: gitlab
     allow: [read_file]
     constraints:
-      repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien, VX-Anh/ai-trace]
+      repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien, VX-Anh/ai-trace, VX-Anh/aico-knowledge]
 max_risk: L0
 limits:
   max_iterations: 40

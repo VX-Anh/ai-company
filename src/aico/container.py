@@ -20,6 +20,10 @@ from aico.agents import (
     DOCS_REVIEW_BRIEF,
     DOCS_ROLES,
     REMOTE_BUILD_HINT,
+    RESEARCH_LABEL,
+    RESEARCH_REVIEW_BRIEF,
+    RESEARCH_ROLES,
+    RESEARCH_TEAM,
     RETRO_LABEL,
     SHOT_HINT,
     TEST_BRIEF,
@@ -34,6 +38,7 @@ from aico.agents import (
     LlmSettings,
     PreviewSettings,
     RemotePreviewer,
+    ResearchPlanner,
     RetroPlanner,
 )
 from aico.api import ApiDeps
@@ -47,6 +52,7 @@ from aico.observability import LoggingTraceSink
 from aico.orchestrator import (
     Deps,
     LabelPlanner,
+    LabelReviewer,
     RuleTriage,
     Runner,
     ScriptedCoder,
@@ -176,6 +182,10 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
         docs_on = cli_agents is not None and all(r in company.roles for r in DOCS_ROLES)
         if docs_on and cli_agents is not None:
             by_label[DOCS_LABEL] = DocsPlanner(cli_agents, role_id=sop.steps["plan"])
+        # Ticket nghiên cứu (Phòng R&D): Research Lead chia việc viết thẻ, Fact Checker chấm.
+        research_on = cli_agents is not None and all(r in company.roles for r in RESEARCH_TEAM)
+        if research_on and cli_agents is not None:
+            by_label[RESEARCH_LABEL] = ResearchPlanner(cli_agents)
         if by_label:
             planner = LabelPlanner(planner, by_label)
         remote = await _remote_ready(settings) if settings.worker_token else False
@@ -217,6 +227,15 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 shot_sink=previewer.publish_shots if previewer is not None else None,
                 label_briefs={DOCS_LABEL: DOCS_REVIEW_BRIEF} if docs_on else None,
             )
+            if research_on:
+                fact_checker = CliReviewer(
+                    cli_agents,
+                    gateway,
+                    role_id="fact_checker",
+                    brief=RESEARCH_REVIEW_BRIEF,
+                    label="kiểm chứng",
+                )
+                reviewer = LabelReviewer(reviewer, {RESEARCH_LABEL: fact_checker})
         # Tester đi cùng Reviewer thật: không có Reviewer CLI thì không có gì để kiểm thử.
         tester: Reviewer | None = None
         if settings.reviewer == "cli" and cli_agents is not None and "test" in sop.steps:
@@ -231,6 +250,11 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 brief=TEST_BRIEF,
                 label="kiểm thử",
             )
+        label_item_roles: dict[str, tuple[str, ...]] = {}
+        if docs_on:
+            label_item_roles[DOCS_LABEL] = DOCS_ROLES
+        if research_on:
+            label_item_roles[RESEARCH_LABEL] = RESEARCH_ROLES
         deps = Deps(
             sop=sop,
             tickets=tickets,
@@ -246,8 +270,8 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             analyst=analyst,
             analyze_skip_labels=(RETRO_LABEL, DOCS_LABEL),
             tester=tester,
-            label_item_roles={DOCS_LABEL: DOCS_ROLES} if docs_on else {},
-            test_skip_labels=(DOCS_LABEL,),
+            label_item_roles=label_item_roles,
+            test_skip_labels=(DOCS_LABEL, RESEARCH_LABEL),
         )
 
         async def preview_ticket(ticket_id: str, site: bool) -> dict[str, Any]:
