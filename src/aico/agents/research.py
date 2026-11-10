@@ -57,7 +57,7 @@ mermaid ở bất kỳ đâu trong kế hoạch:
 RESEARCH_REVIEW_BRIEF = (
     "Ticket này tạo hoặc sửa thẻ tri thức: kiểm chứng nội dung, không chấm code.",
     CARD_STANDARD,
-    f"Kiểm tra: chạy `python3 {CHECK_SCRIPT}` (phải OK); mở lại từng nguồn bằng tìm kiếm/đọc web và "
+    f"Kiểm tra: chạy `python3 {CHECK_SCRIPT}` (phải OK); mở lại từng nguồn bằng tìm/đọc web và "
     "xác nhận trích dẫn có thật trên trang, đúng ngữ cảnh; mỗi ý ở mục Cách làm tốt nhất được "
     "nguồn đã dẫn hỗ trợ, không suy diễn quá nguồn; phần suy luận ghi rõ là suy luận; không trùng "
     f"thẻ đã có trong {INDEX_FILE}; quan hệ hợp lý.",
