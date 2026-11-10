@@ -37,7 +37,7 @@ thẻ được giao trong `cards/`, theo chuẩn thẻ trong kế hoạch và `A
   chép đúng từ trang (Fact Checker sẽ mở lại để đối chiếu). Repo thì ghi commit.
 - Mỗi ý ở mục "Cách làm tốt nhất" kết thúc bằng nguồn `[Sx]`; ý của bạn ghi rõ "suy luận".
 - Không đưa tên dự án nội bộ, mã ticket hay code riêng vào câu tìm kiếm.
-- Không sửa `INDEX.md` (máy sinh). Chạy `python scripts/check_cards.py` đến khi báo OK.
+- Không sửa `INDEX.md` (máy sinh). Chạy `python3 scripts/check_cards.py` đến khi báo OK.
 - Không chép đoạn code dài hay nguyên bài; chỉ trích ngắn và dẫn link.
 
 ## Phân tích ngược tĩnh (tool `inspect_*`, `analyze_javascript_application` của REA)

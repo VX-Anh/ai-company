@@ -59,7 +59,7 @@ for t in sorted(json.load(sys.stdin), key=lambda t: t.get("updated_at") or "")[-
           mr[-1] if mr else "")' "${1:-10}"
 }
 
-ticket() {  # ticket <id>: trạng thái, artifact và các event gần nhất kèm ghi chú
+ticket() {  # ticket <id>: trạng thái, artifact và các event gần nhất kèm ghi chú (NOTE_CHARS=0: đủ)
     api GET "/tickets/$1" | python3 -c '
 import sys, json
 t = json.load(sys.stdin)
@@ -67,12 +67,13 @@ print(t["status"], "|", t["title"])
 for a in t.get("artifacts", []):
     print("  artifact", a["kind"], a["ref"], a.get("url") or "")'
     api GET "/tickets/$1/events" | python3 -c '
-import sys, json
+import os, sys, json
+width = int(os.environ.get("NOTE_CHARS", "200"))  # NOTE_CHARS=0: in đủ ghi chú
 for e in json.load(sys.stdin)[-12:]:
     d = e.get("data") or {}
     note = d.get("review_notes") or d.get("reason") or d.get("note") or d.get("summary") or ""
     move = str(e.get("from_status") or "-") + " -> " + e["to_status"] if e.get("to_status") else e["kind"]
-    print(e["at"][:19], move, e.get("actor"), "|", str(note)[:200].replace("\n", " "))'
+    print(e["at"][:19], move, e.get("actor"), "|", (str(note)[:width] if width else str(note)).replace("\n", " "))'
 }
 
 workers() {
