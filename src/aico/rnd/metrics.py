@@ -1,4 +1,4 @@
-"""Chỉ số hiệu năng của hệ agent (Phòng R&D, R0): nền đo trước khi đổi prompt, vai trò, cách xếp phòng.
+"""Chỉ số hiệu năng hệ agent (Phòng R&D, R0): nền đo trước khi đổi prompt, vai trò, xếp phòng.
 
 Chỉ đọc dữ liệu đã có: ticket, event trạng thái, quyết định của người duyệt, event `job` (một lần
 giao việc cho worker: phòng, vai trò, prompt_sha, token, thời gian). Hàm thuần để test không cần DB.
