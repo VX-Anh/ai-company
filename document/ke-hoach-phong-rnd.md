@@ -569,7 +569,7 @@ Chỉ gồm những câu kế hoạch chưa tự quyết được; các quyết 
 - `ToolGateway.tools_for` bỏ qua server chưa cấu hình hoặc lỗi (ghi log) thay vì làm hỏng toàn bộ danh sách tool của vai trò.
 - Kiểm: pytest 203 pass (13 test mới trong `tests/test_knowledge.py`), ruff, pyright, `aico check-config` sạch.
 
-**2026-11-12, R0 (nhánh `rnd-r0`, worktree `D:\TVPL\Marshyico-r0`, chưa merge `main`, chưa deploy):**
+**2026-11-12, R0 (nhánh `rnd-r0`, worktree `D:\TVPL\Marshy\aico-r0`, chưa merge `main`, chưa deploy):**
 - Gộp `rnd-gd2` (GĐ2 đợt 1: migration `0002_knowledge.sql`, `aico.rnd` cards/store/librarian/mcp, tool `search_knowledge`/`get_knowledge`, khối `<knowledge>`). Librarian dùng chung tool `gitlab.branch_head` với SiteWatcher.
 - Sửa: khối `<knowledge>` bỏ từ "aico" khỏi truy vấn (khớp gần như mọi thẻ); `gateway.tools_for` chỉ bỏ qua server chưa cấu hình.
 - Event `job` (`CliAgentRunner(on_job=...)`, `TicketStore.record`), worker trả kèm `tokens`; `aico.rnd.metrics`, `GET /rnd/metrics?days=`, `aico-ops metrics [ngày]`.
