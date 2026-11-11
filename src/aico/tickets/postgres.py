@@ -218,9 +218,7 @@ class PostgresTicketStore:
             )
             return _row_to_ticket(row)
 
-    async def record(
-        self, ticket_id: str, kind: str, *, actor: str, data: dict[str, Any]
-    ) -> None:
+    async def record(self, ticket_id: str, kind: str, *, actor: str, data: dict[str, Any]) -> None:
         async with self._pool.connection() as conn:
             await self._event(conn, Event(ticket_id=ticket_id, kind=kind, actor=actor, data=data))
 

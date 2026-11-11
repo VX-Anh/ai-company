@@ -16,6 +16,7 @@ from psycopg_pool import AsyncConnectionPool
 from starlette.applications import Starlette
 
 from aico.agents import (
+    CARDS_DIR,
     DOCS_LABEL,
     DOCS_REVIEW_BRIEF,
     DOCS_ROLES,
@@ -260,6 +261,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                     role_id="fact_checker",
                     brief=RESEARCH_REVIEW_BRIEF,
                     label="kiểm chứng",
+                    plan_rule=None,
                 )
                 reviewer = LabelReviewer(reviewer, {RESEARCH_LABEL: fact_checker})
         # Tester đi cùng Reviewer thật: không có Reviewer CLI thì không có gì để kiểm thử.
@@ -299,6 +301,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             label_item_roles=label_item_roles,
             test_skip_labels=(DOCS_LABEL, RESEARCH_LABEL),
             label_review_rounds={RESEARCH_LABEL: RESEARCH_REVIEW_ROUNDS} if research_on else {},
+            label_scopes={RESEARCH_LABEL: (CARDS_DIR,)} if research_on else {},
         )
 
         async def preview_ticket(ticket_id: str, site: bool) -> dict[str, Any]:

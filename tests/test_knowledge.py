@@ -254,6 +254,20 @@ async def test_prompt_block_is_bounded_and_logged(kstore: KnowledgeStore) -> Non
     assert await kstore.prompt_block(other, "coder") is None
 
 
+async def test_prompt_block_ignores_system_name(kstore: KnowledgeStore) -> None:
+    """'aico' có trong tên repo và trong tóm tắt của gần như mọi thẻ: không được tính là từ khớp."""
+    card = card_text(
+        "technique/retry-push",
+        "Đẩy lại code cho aico khi GitHub lỗi",
+        "Áp dụng cho aico: thử lại push có backoff.",
+    )
+    await load(kstore, card)
+    ui = Ticket(id="T-9", title="Đổi màu nút đẩy lên", project="VX-Anh/aico-office")
+    assert await kstore.prompt_block(ui, "coder") is None
+    hit = Ticket(id="T-10", title="GitHub lỗi khi đẩy code", project="VX-Anh/aico-office")
+    assert await kstore.prompt_block(hit, "coder") is not None
+
+
 # --- librarian và tool knowledge qua gateway --------------------------------------------------
 
 

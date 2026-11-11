@@ -216,6 +216,16 @@ def _replace(item: WorkItem, **changes: Any) -> WorkItem:
     return replace(item, **changes)
 
 
+def clamp_owns(item: WorkItem, scope: tuple[str, ...]) -> WorkItem:
+    """Giữ vùng file của đầu việc trong `scope` (thư mục kết thúc bằng '/').
+
+    Mẫu nằm ngoài scope (kể cả `**` của vòng sửa hay kế hoạch thiếu owns) bị bỏ; không còn mẫu
+    nào thì cả scope. Đây là chốt chặn ở code, không trông vào việc agent làm đúng prompt.
+    """
+    kept = tuple(p for p in item.owns if p != ALL_FILES and any(p.startswith(s) for s in scope))
+    return replace(item, owns=kept or scope)
+
+
 def fix_item(feedback: str, role: str = "coder") -> WorkItem:
     """Vòng sửa sau review: một đầu việc sửa được mọi file, dựa trên góp ý."""
     title = feedback.strip().splitlines()[0][:80] if feedback.strip() else "Sửa theo góp ý"

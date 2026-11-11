@@ -144,7 +144,9 @@ class ToolGateway:
             allowed = set(grant.allow)
             try:
                 listed = await self._client.list_tools(grant.server)
-            except Exception as exc:  # server chưa cấu hình hoặc đang lỗi: vai trò vẫn có tool khác
+            except ToolError as exc:
+                # Chỉ bỏ qua server chưa cấu hình (vd knowledge khi tắt R&D). Server đã cấu hình mà
+                # lỗi thì báo lên: nuốt lỗi làm agent lặng lẽ mất tool Git mà vẫn chạy tiếp.
                 log.warning("bỏ qua tool của server '%s': %s", grant.server, exc)
                 continue
             for spec in listed:

@@ -25,6 +25,9 @@ KNOWLEDGE_ROLES = ("tech_lead", "ba", "coder", "reviewer", "tester")
 ANCHOR_KINDS = ("role", "metric")
 BLOCK_MAX_CHARS = 6_000
 BLOCK_CARDS = 5
+# Từ có trong gần như mọi thẻ (tên hệ thống, trong mục "áp dụng cho aico"): để trong truy vấn
+# chèn tri thức thì ticket chỉ cần trùng thêm một từ là bị chèn thẻ không liên quan.
+BLOCK_STOP_TERMS = frozenset({"aico"})
 SUMMARY_CHARS = 400
 GET_MAX_CHARS = 8_000
 SEARCH_MAX_K = 8
@@ -381,6 +384,7 @@ class KnowledgeStore:
         """
         repo = (ticket.project or "").rpartition("/")[2]
         query = " ".join((ticket.title, " ".join(ticket.labels), repo))
+        query = " ".join(w for w in _WORD.findall(query) if fold(w).lower() not in BLOCK_STOP_TERMS)
         hits = await self.search(
             query, k=BLOCK_CARDS, exclude_kinds=ANCHOR_KINDS, min_match=2, head_only=True
         )

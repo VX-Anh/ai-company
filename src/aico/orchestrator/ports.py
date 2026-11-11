@@ -145,6 +145,8 @@ class RuleTriage:
         text = f"{ticket.title}\n{ticket.body}".lower()
         labels = {label.lower() for label in ticket.labels}
         for rule in self._policy.risk_rules:
+            if rule.projects and ticket.project not in rule.projects:
+                continue
             if labels & {label.lower() for label in rule.labels}:
                 return TriageResult(self._department, TicketRisk(rule.risk), "khớp nhãn")
             if any(k.lower() in text for k in rule.keywords):

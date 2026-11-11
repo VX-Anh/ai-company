@@ -24,6 +24,7 @@ from aico.agents.remote import (
     SiteWatcher,
 )
 from aico.agents.research import (
+    CARDS_DIR,
     RESEARCH_LABEL,
     RESEARCH_REVIEW_BRIEF,
     RESEARCH_REVIEW_ROUNDS,
@@ -34,6 +35,7 @@ from aico.agents.research import (
 from aico.agents.retro import RETRO_LABEL, RetroPlanner
 
 __all__ = [
+    "CARDS_DIR",
     "AgentRunner",
     "CliAgentRunner",
     "CliCoder",
