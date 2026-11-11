@@ -108,7 +108,7 @@ a = d["all"]
 print("{} ngày: {tickets} ticket, xong {done}, escalate {escalated}, lỗi {failed}".format(d["days"], **a))
 print("đạt ngay vòng đầu {first_pass_rate}, vòng review TB {avg_review_rounds}, người trả lại {owner_return_rate}, phút tới chờ merge TB {avg_minutes_to_merge_approval}".format(**a))
 print("escalate:", a["escalations"])
-print("job: {jobs}, ok {ok_rate}, hết hạn mức {limited}, token {tokens}".format(**a["jobs"]), "| có <knowledge>:", a["knowledge_jobs"])
+print("job: {jobs}, ok {ok_rate}, hết hạn mức {limited}, token {tokens}, lỗi {errors}".format(**a["jobs"]), "| có <knowledge>:", a["knowledge_jobs"])
 for group in ("jobs_by_role", "jobs_by_room"):
     print(group + ":")
     for k, v in a[group].items():

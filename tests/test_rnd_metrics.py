@@ -83,6 +83,7 @@ async def test_aggregate_rates_and_job_groups() -> None:
     assert agg["escalations"] == {"review lặp": 1}
     assert agg["jobs"]["jobs"] == 3 and agg["jobs"]["ok_rate"] == round(2 / 3, 3)
     assert agg["jobs_by_room"]["cursor"]["ok_rate"] == 0.0
+    assert agg["jobs"]["errors"] == {"khác": 1}
     assert agg["jobs_by_room"]["codex"]["tokens"] == 1200
     assert set(agg["jobs_by_prompt"]) == {"coder@aaaaaaaaaaaa", "coder@bbbbbbbbbbbb"}
 
@@ -141,3 +142,15 @@ async def test_bench_candidates_need_merged_mr_with_base_sha() -> None:
 
     rows = await candidates(store, broken, since=utcnow() - timedelta(days=1))
     assert rows == [{"id": "T-1", "skipped": "không đọc được MR !7: GitHub 502"}]
+
+
+def test_classify_job_errors() -> None:
+    from aico.rnd.metrics import classify_job_error
+
+    assert classify_job_error({"limited": True, "error": "x"}) == "hết hạn mức"
+    assert classify_job_error({"error": "agent không hoạt động 400 giây (treo)"}) == "agent treo"
+    assert classify_job_error({"error": "hết thời gian"}) == "hết thời gian"
+    assert classify_job_error({"error": "không kết nối được (ConnectError)"}) == (
+        "worker không trả lời"
+    )
+    assert classify_job_error({"error": "chuẩn bị workspace lỗi: tar"}) == "chuẩn bị workspace"

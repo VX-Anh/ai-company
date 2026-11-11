@@ -43,6 +43,22 @@ ESCALATION_CLASSES: tuple[tuple[str, tuple[str, ...]], ...] = (
 )
 
 
+def classify_job_error(job: Mapping[str, Any]) -> str:
+    """Lớp lỗi của một job (theo thông báo của worker / CliAgentRunner)."""
+    if job.get("limited"):
+        return "hết hạn mức"
+    text = str(job.get("error") or "").lower()
+    if "treo" in text or "không hoạt động" in text:
+        return "agent treo"
+    if "hết thời gian" in text or "timeout" in text:
+        return "hết thời gian"
+    if "không kết nối" in text or "http 5" in text:
+        return "worker không trả lời"
+    if "workspace" in text:
+        return "chuẩn bị workspace"
+    return "khác"
+
+
 def classify_escalation(reason: str) -> str:
     text = reason.strip().lower()
     if not text:
@@ -129,10 +145,12 @@ def _job_stats(jobs: list[Mapping[str, Any]]) -> dict[str, Any]:
         for j in ok
         if j.get("tokens_in") is not None
     ]
+    errors = Counter(classify_job_error(j) for j in jobs if not j.get("ok"))
     return {
         "jobs": len(jobs),
         "ok_rate": _ratio(len(ok), len(jobs)),
         "limited": sum(1 for j in jobs if j.get("limited")),
+        "errors": dict(errors.most_common()),
         "median_seconds": round(median(durations), 1) if durations else None,
         "tokens": sum(tokens),
         "avg_tokens": _avg(tokens),
