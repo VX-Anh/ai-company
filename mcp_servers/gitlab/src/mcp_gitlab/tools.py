@@ -86,6 +86,14 @@ class GitLabTools:
             "data": base64.b64encode(data).decode("ascii"),
         }
 
+    async def branch_head(self, project: str, ref: str = "main") -> dict[str, Any]:
+        """Commit mới nhất của branch: aico so với lần dựng trước để biết bản chính cần dựng lại."""
+        self._c.check_project(project)
+        commits = await self._backend.recent_commits(project, ref)
+        if not commits:
+            raise GitLabError(f"branch {ref} không có commit", 404)
+        return {"project": project, "ref": ref, "sha": str(commits[0]["id"])}
+
     async def list_issues(self, project: str, labels: list[str]) -> dict[str, Any]:
         self._c.check_project(project)
         issues = await self._backend.list_issues(project, labels)

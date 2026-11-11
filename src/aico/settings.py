@@ -63,6 +63,8 @@ class Settings:
     # trong preview_projects được dựng bản xem trước. Không đặt thì giữ cách cũ.
     remote_url: str | None = None
     preview_projects: tuple[str, ...] = ()
+    # Chu kỳ (giây) kiểm tra branch đích của preview_projects để dựng lại bản chính; 0 là tắt.
+    site_watch_seconds: float = 60
     # Đồng bộ ticket sang Jira (một chiều). Bật khi đủ URL, email, token và ánh xạ
     # repo -> project Jira (`VX-Anh/linh-hoa-vien=LHV`). Ticket cập nhật trước jira_since bỏ qua.
     jira_url: str | None = None
@@ -117,6 +119,7 @@ class Settings:
             ),
             remote_url=env.get("AICO_REMOTE_URL") or None,
             preview_projects=_list("AICO_PREVIEW_PROJECTS"),
+            site_watch_seconds=float(env.get("AICO_SITE_WATCH_SECONDS", cls.site_watch_seconds)),
             jira_url=env.get("AICO_JIRA_URL") or None,
             jira_email=env.get("AICO_JIRA_EMAIL") or None,
             jira_token=_secret("AICO_JIRA_TOKEN_FILE"),

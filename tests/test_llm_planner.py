@@ -121,6 +121,7 @@ async def test_tools_for_hides_l3_and_ungranted(company: Company) -> None:
     assert coder == {
         "read_file",
         "download_archive",
+        "branch_head",
         "create_branch",
         "push",
         "open_merge_request",

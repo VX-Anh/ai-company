@@ -20,10 +20,11 @@ from typing import Any
 import httpx
 import pytest
 
-from aico.agents import PreviewError, PreviewSettings, RemotePreviewer
+from aico.agents import PreviewError, PreviewSettings, RemotePreviewer, SiteWatcher
 from aico.core import TicketStatus
 from aico.registry import Company
 from harness import PROJECT, make_harness
+from mcp_gitlab.backend import FakeGitLabBackend
 
 ROOT = Path(__file__).resolve().parents[1]
 TOKEN = "runner-token"
@@ -598,3 +599,54 @@ def test_public_hosts_serve_site_and_refuse_post(tmp_path: Path) -> None:
         assert err.value.code == 403
     finally:
         httpd.shutdown()
+
+
+async def test_site_watcher_rebuilds_when_main_changes_outside_aico(company: Company) -> None:
+    jobs: list[dict[str, Any]] = []
+
+    def runner(request: httpx.Request) -> httpx.Response:
+        job = json.loads(request.content)
+        jobs.append(job)
+        if job["meta"].get("fail"):
+            return httpx.Response(200, json={"ok": False, "error": "build lỗi"})
+        return httpx.Response(200, json={"ok": True, "url": f"http://x/{job['name']}/"})
+
+    gitlab = FakeGitLabBackend()
+    main = gitlab.project(PROJECT).commits["main"]
+    main.append({"id": "a" * 40, "message": "khởi tạo"})
+    h = make_harness(company, gitlab=gitlab)
+    watcher = SiteWatcher(_previewer(h, runner), h.gateway, (PROJECT,))
+
+    # Lần đầu thấy repo: dựng luôn để bản đang phục vụ khớp main.
+    assert await watcher.check_once() == [PROJECT]
+    assert [(j["name"], j["meta"]["ref"], j["meta"]["ticket"]) for j in jobs] == [
+        ("aico-office", "main", None)
+    ]
+    # main không đổi: không dựng lại.
+    assert await watcher.check_once() == []
+    assert len(jobs) == 1
+    # Merge tay trên GitHub (không qua aico): commit mới trên main thì dựng lại.
+    main.append({"id": "b" * 40, "message": "Merge pull request #25"})
+    assert await watcher.check_once() == [PROJECT]
+    assert len(jobs) == 2
+
+
+async def test_site_watcher_skips_failed_sha_and_survives_read_errors(company: Company) -> None:
+    calls: list[str] = []
+
+    def runner(request: httpx.Request) -> httpx.Response:
+        calls.append("build")
+        return httpx.Response(200, json={"ok": False, "error": "build lỗi"})
+
+    gitlab = FakeGitLabBackend()
+    h = make_harness(company, gitlab=gitlab)
+    watcher = SiteWatcher(_previewer(h, runner), h.gateway, (PROJECT,))
+    # main chưa có commit: tool báo lỗi, watcher bỏ qua lượt này.
+    assert await watcher.check_once() == []
+    assert calls == []
+    gitlab.project(PROJECT).commits["main"].append({"id": "c" * 40, "message": "x"})
+    assert await watcher.check_once() == []
+    assert calls == ["build"]
+    # Build lỗi với sha này: chờ commit mới, không dựng lại mỗi chu kỳ.
+    assert await watcher.check_once() == []
+    assert calls == ["build"]

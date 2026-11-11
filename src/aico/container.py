@@ -41,6 +41,7 @@ from aico.agents import (
     RemotePreviewer,
     ResearchPlanner,
     RetroPlanner,
+    SiteWatcher,
 )
 from aico.api import ApiDeps
 from aico.core import Ticket
@@ -81,6 +82,8 @@ class Container:
     runners: tuple[Runner, ...]
     poller: GitLabIssuePoller | None
     jira_sync: JiraSync | None
+    # Dựng lại bản chính khi main của repo xem trước đổi (cả merge ngoài aico); None khi tắt.
+    site_watcher: SiteWatcher | None
     api: ApiDeps
     relay_app: FastAPI
     bridge_app: Starlette
@@ -206,6 +209,11 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 tickets,
                 role_id=sop.steps["code"],
             )
+        site_watcher: SiteWatcher | None = None
+        if previewer is not None and settings.site_watch_seconds > 0:
+            site_watcher = SiteWatcher(
+                previewer, gateway, settings.preview_projects, role_id=sop.steps["code"]
+            )
         coder: Coder = ScriptedCoder()
         if settings.coder == "cli" and cli_agents is not None:
             coder = CliCoder(
@@ -300,7 +308,9 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 comment=comment,
                 merge_role=sop.steps["merge"],
             )
-            if previewer is not None and ticket.project:
+            # Có site_watcher thì nó tự thấy commit merge trong vòng một chu kỳ; dựng ở đây nữa là
+            # dựng hai lần cùng một commit.
+            if previewer is not None and site_watcher is None and ticket.project:
                 previewer.schedule_site(ticket_id, ticket.project, deps.target_branch)
             return ticket
 
@@ -373,6 +383,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             runners=runners,
             poller=poller,
             jira_sync=jira_sync,
+            site_watcher=site_watcher,
             api=ApiDeps(
                 tickets=tickets,
                 approvals=approvals,

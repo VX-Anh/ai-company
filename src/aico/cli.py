@@ -87,6 +87,12 @@ async def _serve(settings: Settings) -> None:
             tasks.append(
                 asyncio.create_task(c.poller.run_forever(settings.poll_seconds), name="intake")
             )
+        if c.site_watcher is not None:
+            tasks.append(
+                asyncio.create_task(
+                    c.site_watcher.run_forever(settings.site_watch_seconds), name="site-watch"
+                )
+            )
         if c.jira_sync is not None:
             tasks.append(
                 asyncio.create_task(c.jira_sync.run_forever(settings.poll_seconds), name="jira")

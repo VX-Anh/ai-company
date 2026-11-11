@@ -82,7 +82,7 @@ class RemotePreviewer:
         return project in self._s.projects
 
     async def build(
-        self, ticket_id: str, project: str, branch: str, *, site: bool = False
+        self, ticket_id: str | None, project: str, branch: str, *, site: bool = False
     ) -> dict[str, Any]:
         """Dựng bản xem trước của branch, gắn link vào ticket; trả kết quả của máy build.
 
@@ -91,6 +91,8 @@ class RemotePreviewer:
         """
         if not self.enabled_for(project):
             raise PreviewError(f"repo {project} không nằm trong AICO_PREVIEW_PROJECTS")
+        if ticket_id is None and not site:
+            raise PreviewError("bản xem trước của branch cần ticket")
         try:
             archive = await self._gateway.call(
                 self._role,
@@ -102,7 +104,7 @@ class RemotePreviewer:
         except ToolError as exc:
             raise PreviewError(f"không tải được {branch}: {exc}") from exc
         job = {
-            "name": site_name(project) if site else ticket_id,
+            "name": site_name(project) if site or ticket_id is None else ticket_id,
             "archive": archive["data"],
             "strip": 1,  # archive GitHub/GitLab có một thư mục gốc
             "build": self._s.build,
@@ -123,7 +125,7 @@ class RemotePreviewer:
         if resp.status_code != 200 or not result.get("ok"):
             error = result.get("error") or f"HTTP {resp.status_code}"
             raise PreviewError(f"{error}\n{result.get('output', '')}".strip())
-        if not site:
+        if not site and ticket_id is not None:
             await self._tickets.add_artifact(
                 ticket_id, Artifact(kind="preview", ref=branch, url=result["url"]), actor=self._role
             )
@@ -183,3 +185,63 @@ class RemotePreviewer:
             log.warning("ticket %s: không dựng được bản xem trước: %s", ticket_id, exc)
         except Exception:
             log.exception("ticket %s: lỗi khi dựng bản xem trước", ticket_id)
+
+
+class SiteWatcher:
+    """Dựng lại bản chính khi branch đích có commit mới, kể cả commit không đi qua aico
+    (merge tay trên GitHub, push thẳng). Lần đầu thấy một repo thì dựng luôn để bản đang
+    phục vụ khớp branch sau khi aico khởi động lại.
+    """
+
+    def __init__(
+        self,
+        previewer: RemotePreviewer,
+        gateway: ToolGateway,
+        projects: tuple[str, ...],
+        *,
+        branch: str = "main",
+        role_id: str = "coder",
+    ) -> None:
+        self._previewer = previewer
+        self._gateway = gateway
+        self._projects = projects
+        self._branch = branch
+        self._role = role_id
+        # sha đã thử dựng (thành công hay lỗi): build lỗi chờ commit mới, không dựng lại mỗi phút.
+        self._seen: dict[str, str] = {}
+
+    async def check_once(self) -> list[str]:
+        """Một lượt kiểm tra; trả các repo đã dựng lại thành công."""
+        built: list[str] = []
+        for project in self._projects:
+            try:
+                head = await self._gateway.call(
+                    self._role,
+                    "gitlab",
+                    "branch_head",
+                    {"project": project, "ref": self._branch},
+                    ticket_id=None,
+                )
+            except Exception as exc:  # mạng/GitHub lỗi một lượt: thử lại lượt sau
+                log.warning("không đọc được %s@%s: %s", project, self._branch, exc)
+                continue
+            sha = str(head.get("sha") or "")
+            if not sha or self._seen.get(project) == sha:
+                continue
+            self._seen[project] = sha
+            try:
+                result = await self._previewer.build(None, project, self._branch, site=True)
+            except PreviewError as exc:
+                log.warning("không dựng được bản chính %s@%s: %s", project, sha[:7], exc)
+                continue
+            log.info("dựng lại bản chính %s@%s: %s", project, sha[:7], result.get("url"))
+            built.append(project)
+        return built
+
+    async def run_forever(self, interval_seconds: float) -> None:
+        while True:
+            try:
+                await self.check_once()
+            except Exception:
+                log.exception("lỗi khi theo dõi branch %s", self._branch)
+            await asyncio.sleep(interval_seconds)

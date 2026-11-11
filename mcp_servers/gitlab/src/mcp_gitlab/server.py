@@ -49,6 +49,10 @@ def build_server(tools: GitLabTools) -> MCPServer:
     async def download_archive(project: str, ref: str = "main") -> dict[str, Any]:
         return await _anticipated(tools.download_archive(project, ref))
 
+    @server.tool(description="Commit mới nhất (sha) của branch.")
+    async def branch_head(project: str, ref: str = "main") -> dict[str, Any]:
+        return await _anticipated(tools.branch_head(project, ref))
+
     @server.tool(description="Liệt kê issue đang mở có đủ các nhãn.")
     async def list_issues(project: str, labels: list[str]) -> dict[str, Any]:
         return await _anticipated(tools.list_issues(project, labels))

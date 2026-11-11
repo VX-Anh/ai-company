@@ -21,6 +21,7 @@ from aico.agents.remote import (
     PreviewError,
     PreviewSettings,
     RemotePreviewer,
+    SiteWatcher,
 )
 from aico.agents.research import (
     RESEARCH_LABEL,
@@ -57,6 +58,7 @@ __all__ = [
     "SHOT_HINT",
     "TEST_BRIEF",
     "RemotePreviewer",
+    "SiteWatcher",
     "ResearchPlanner",
     "RETRO_LABEL",
     "RetroPlanner",

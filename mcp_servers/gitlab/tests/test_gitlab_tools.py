@@ -5,7 +5,7 @@ import base64
 import pytest
 from mcp.client.client import Client
 
-from mcp_gitlab.backend import FakeGitLabBackend
+from mcp_gitlab.backend import FakeGitLabBackend, GitLabError
 from mcp_gitlab.server import build_server
 from mcp_gitlab.tools import ConstraintError, Constraints, GitLabTools
 
@@ -91,10 +91,20 @@ async def test_mcp_server_exposes_tools() -> None:
     async with Client(server) as client:
         listed = await client.list_tools()
         names = {t.name for t in listed.tools}
-        assert {"read_file", "push", "open_merge_request", "merge_mr"} <= names
+        assert {"read_file", "branch_head", "push", "open_merge_request", "merge_mr"} <= names
         result = await client.call_tool("read_file", {"project": PROJECT, "path": "app.py"})
         assert not result.is_error
         assert result.structured_content is not None
         assert result.structured_content["content"] == "print('hi')\n"
         denied = await client.call_tool("read_file", {"project": "evil/repo", "path": "x"})
         assert denied.is_error
+
+
+async def test_branch_head_returns_latest_commit() -> None:
+    tools, backend = _tools()
+    with pytest.raises(GitLabError):
+        await tools.branch_head(PROJECT)
+    backend.project(PROJECT).commits["main"] += [{"id": "a1"}, {"id": "b2"}]
+    assert await tools.branch_head(PROJECT) == {"project": PROJECT, "ref": "main", "sha": "b2"}
+    with pytest.raises(ConstraintError):
+        await tools.branch_head("other/repo")

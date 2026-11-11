@@ -2,6 +2,7 @@
 tool_levels:
   gitlab.read_file: L0
   gitlab.download_archive: L0
+  gitlab.branch_head: L0
   gitlab.list_issues: L0
   gitlab.get_merge_request: L0
   gitlab.create_branch: L2
