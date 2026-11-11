@@ -429,7 +429,7 @@ class JiraSync:
                 source=TicketSource.JIRA,
                 source_ref=f"jira:{issue.key}",
                 project=repo,
-                labels=[lbl for lbl in issue.labels if lbl not in skip],
+                labels=[lbl for lbl in issue.labels if lbl not in skip and lbl.lower() != "eval"],
                 budget_usd=self._budget,
             )
             saved, is_new = await self._tickets.create_from_source(ticket, actor=self._actor)
@@ -461,6 +461,8 @@ class JiraSync:
     # --- Đồng bộ ticket -> issue ---
 
     def _relevant(self, ticket: Ticket) -> str | None:
+        if "eval" in {x.lower() for x in ticket.labels}:
+            return None  # ticket chạy lại của R&D không đẩy sang Jira
         key = self._projects.get(ticket.project or "")
         if key is None:
             return None

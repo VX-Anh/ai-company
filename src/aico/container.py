@@ -66,6 +66,7 @@ from aico.orchestrator import (
 )
 from aico.orchestrator.escalation import merge_escalated, retry_push
 from aico.orchestrator.ports import Analyst, Coder, Planner, Reviewer
+from aico.orchestrator.workplan import ticket_refs
 from aico.registry import Company, load_company
 from aico.rnd import KNOWLEDGE_ROLES, KnowledgeStore, Librarian, build_knowledge_server
 from aico.rnd.bench import candidates as bench_candidates
@@ -355,7 +356,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             mrs = [a for a in ticket.artifacts if a.kind == "merge_request"]
             if previewer is not None and mrs:
                 project = mrs[-1].ref.rpartition("!")[0]
-                previewer.schedule(ticket_id, project, f"ai/{ticket_id}")
+                previewer.schedule(ticket_id, project, ticket_refs(ticket).work)
             return ticket
 
         saver = AsyncPostgresSaver(saver_pool)  # type: ignore[arg-type]
@@ -366,6 +367,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 tickets,
                 lease_seconds=settings.lease_seconds,
                 eval_only=settings.eval_instance,
+                eval_variant=settings.eval_variant,
             )
             for _ in range(settings.runner_concurrency)
         )

@@ -20,6 +20,7 @@ from aico.core import Decision, Event, Ticket, TicketStatus, utcnow
 from aico.governance import ApprovalStore
 from aico.governance.verify import verify_merge_approval
 from aico.intake import new_ticket_id
+from aico.orchestrator.workplan import EVAL_LABEL, eval_spec
 from aico.tickets import TicketExists, TicketNotFound, TicketStore, TransitionError
 
 if TYPE_CHECKING:
@@ -132,7 +133,8 @@ def create_api_app(deps: ApiDeps) -> FastAPI:
             title=body.title,
             body=body.body,
             project=body.project or deps.default_project,
-            labels=body.labels,
+            # Nhãn eval chỉ do `aico eval start` gắn (kèm artifact); API không cho gắn.
+            labels=[x for x in body.labels if x.lower() != EVAL_LABEL],
             budget_usd=body.budget_usd,
         )
         try:
@@ -163,6 +165,12 @@ def create_api_app(deps: ApiDeps) -> FastAPI:
             raise HTTPException(422, f"quyết định '{body.decision}' không hợp lệ ở bước này")
         if ticket.pending_resume is not None:
             raise HTTPException(409, "đã có quyết định đang chờ xử lý")
+        if (
+            eval_spec(ticket) is not None
+            and ticket.status is TicketStatus.AWAITING_MERGE_APPROVAL
+            and body.decision is Decision.APPROVED
+        ):
+            raise HTTPException(422, "ticket chạy lại (eval) không merge: dùng rejected để đóng")
         payload: dict[str, Any] = body.model_dump(mode="json")
         return await deps.tickets.set_pending_resume(ticket_id, payload, actor=body.actor)
 

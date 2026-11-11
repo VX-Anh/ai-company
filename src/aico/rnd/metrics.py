@@ -23,6 +23,7 @@ from typing import Any
 
 from aico.core import Event, Ticket, TicketStatus
 from aico.tickets import TicketStore
+from aico.tickets.store import eval_variant_of
 
 S = TicketStatus
 
@@ -249,7 +250,7 @@ async def collect(
     picked = [
         t
         for t in await store.list()
-        if t.created_at >= since and ("eval" in {x.lower() for x in t.labels}) == eval_only
+        if t.created_at >= since and (eval_variant_of(t) is not None) == eval_only
     ]
     return [ticket_metrics(t, await store.events(t.id)) for t in picked]
 

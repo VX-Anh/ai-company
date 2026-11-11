@@ -7,7 +7,8 @@ Biến môi trường:
 - GITLAB_URL, GITLAB_TOKEN_FILE (token của bot Developer), GITLAB_MERGE_TOKEN_FILE (merge bot)
 - GITLAB_ALLOWED_PROJECTS (phân tách bằng dấu phẩy), GITLAB_BRANCH_PATTERN (mặc định ai/*;
   nhiều mẫu phân tách bằng dấu phẩy, vd ai/*,eval/*)
-- GITLAB_ALLOWED_TARGETS (mặc định main; tên hoặc mẫu, vd main,eval/base/*)
+- GITLAB_ALLOWED_TARGETS (mặc định main; tên hoặc mẫu, vd main,eval/base/*): đích được mở MR
+- GITLAB_MERGE_TARGETS (mặc định main): đích được merge (eval/base/* không bao giờ merge)
 - APPROVAL_VERIFY_URL, APPROVAL_VERIFY_TOKEN_FILE: endpoint của aico xác nhận bản ghi duyệt
 - MCP_HOST (mặc định 127.0.0.1), MCP_PORT (mặc định 8101)
 """
@@ -163,6 +164,7 @@ def main() -> None:
         allowed_projects=projects,
         branch_pattern=os.environ.get("GITLAB_BRANCH_PATTERN", "ai/*"),
         allowed_targets=tuple(os.environ.get("GITLAB_ALLOWED_TARGETS", "main").split(",")),
+        merge_targets=tuple(os.environ.get("GITLAB_MERGE_TARGETS", "main").split(",")),
     )
     verify_url = os.environ.get("APPROVAL_VERIFY_URL")
     verifier = (

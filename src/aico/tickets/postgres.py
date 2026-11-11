@@ -254,7 +254,12 @@ class PostgresTicketStore:
             return None if row is None else row["pending_resume"]
 
     async def claim(
-        self, *, owner: str, lease_seconds: float, eval_only: bool = False
+        self,
+        *,
+        owner: str,
+        lease_seconds: float,
+        eval_only: bool = False,
+        eval_variant: str | None = None,
     ) -> Ticket | None:
         async with self._pool.connection() as conn, conn.transaction():
             cur = await conn.execute(
@@ -262,11 +267,24 @@ class PostgresTicketStore:
                 " where status <> all(%(terminal)s)"
                 "   and (lease_until is null or lease_until <= now())"
                 "   and (status <> all(%(waiting)s) or pending_resume is not null)"
-                "   and exists (select 1 from jsonb_array_elements_text(labels) l"
-                "               where lower(l) = 'eval') = %(eval)s"
+                # Ticket chạy lại = nhãn eval VÀ artifact eval (như store.eval_variant_of).
+                "   and (exists (select 1 from jsonb_array_elements_text(labels) l"
+                "                where lower(l) = 'eval')"
+                "        and exists (select 1 from jsonb_array_elements(artifacts) a"
+                "                    where a->>'kind' = 'eval' and a->>'ref' like '%%@%%')"
+                "       ) = %(eval)s"
+                "   and (%(variant)s::text is null or exists ("
+                "        select 1 from jsonb_array_elements(artifacts) a"
+                "        where a->>'kind' = 'eval'"
+                "          and split_part(a->>'ref', '@', 1) = %(variant)s))"
                 " order by updated_at"
                 " limit 1 for update skip locked",
-                {"terminal": _TERMINAL, "waiting": _WAITING, "eval": eval_only},
+                {
+                    "terminal": _TERMINAL,
+                    "waiting": _WAITING,
+                    "eval": eval_only,
+                    "variant": eval_variant if eval_only else None,
+                },
             )
             row = await cur.fetchone()
             if row is None:

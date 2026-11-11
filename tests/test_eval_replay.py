@@ -127,3 +127,75 @@ async def test_eval_start_is_idempotent_and_report_groups_runs(company: Company)
     assert closed["total"]["pass_rate"] == 1.0
     # Biến thể khác không lẫn.
     assert (await evalrun.report(h.tickets, "khac"))["total"] == {"runs": 0}
+
+
+async def test_label_alone_is_not_eval_and_variant_filter(company: Company) -> None:
+    # Nhãn eval mà không có artifact (người/issue gắn được): ticket thường, aico chính nhận, phải
+    # duyệt kế hoạch như mọi ticket (không có luật YAML "eval = low").
+    h = make_harness(company)
+    plain = Ticket(id="T-2", title="Sửa nút", project=PROJECT, labels=["eval"])
+    await h.tickets.create(plain, actor="test")
+    await h.runner.run_until_idle()
+    assert (await h.tickets.get("T-2")).status is S.AWAITING_PLAN_APPROVAL
+    # Instance eval chỉ nhận ticket của biến thể nó đang mount.
+    await h.tickets.create(eval_ticket("T-3"), actor="eval")
+    other = make_harness(company, tickets=h.tickets, eval_only=True)
+    other.runner._eval_variant = "bien-the-khac"  # noqa: SLF001 - test
+    await other.runner.run_until_idle()
+    assert (await h.tickets.get("T-3")).status is S.NEW
+    right = make_harness(company, tickets=h.tickets, eval_only=True)
+    right.runner._eval_variant = "thu-prompt"  # noqa: SLF001
+    await right.runner.run_until_idle()
+    assert (await h.tickets.get("T-3")).status is S.AWAITING_MERGE_APPROVAL
+
+
+async def test_approving_an_eval_ticket_still_never_merges(company: Company) -> None:
+    h = make_harness(company, eval_only=True)
+    await h.tickets.create(eval_ticket(), actor="eval")
+    await h.runner.run_until_idle()
+    await h.decide("T-1", "approved")
+    await h.runner.run_until_idle()
+    t = await h.tickets.get("T-1")
+    assert t.status is S.ESCALATED
+    assert all(m["state"] != "merged" for m in h.gitlab.project(PROJECT).mrs)
+    reasons = [e.data.get("reason", "") for e in await h.tickets.events("T-1")]
+    assert any("không merge" in r for r in reasons)
+
+
+async def test_api_strips_eval_label_and_refuses_approving_eval_merge(company: Company) -> None:
+    import httpx
+
+    from aico.api import ApiDeps, create_api_app
+    from aico.governance import InMemoryApprovalStore
+
+    h = make_harness(company, eval_only=True)
+    await h.tickets.create(eval_ticket(), actor="eval")
+    await h.runner.run_until_idle()
+    app = create_api_app(ApiDeps(tickets=h.tickets, approvals=InMemoryApprovalStore()))
+    async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://t") as c:
+        made = await c.post("/tickets", json={"title": "x", "labels": ["Eval", "ui"]})
+        assert made.json()["labels"] == ["ui"]
+        body = {"decision": "approved", "actor": "owner"}
+        assert (await c.post("/tickets/T-1/decisions", json=body)).status_code == 422
+        body = {"decision": "rejected", "actor": "owner"}
+        assert (await c.post("/tickets/T-1/decisions", json=body)).status_code == 202
+
+
+async def test_claim_filters_eval_on_both_stores(store) -> None:  # type: ignore[no-untyped-def]
+    await store.create(eval_ticket("T-e"), actor="eval")
+    await store.create(Ticket(id="T-n", title="x", labels=["eval"]), actor="api")
+    normal = await store.claim(owner="a", lease_seconds=30)
+    assert normal is not None and normal.id == "T-n"
+    assert await store.claim(owner="b", lease_seconds=30) is None
+    assert await store.claim(owner="c", lease_seconds=30, eval_only=True, eval_variant="x") is None
+    got = await store.claim(owner="d", lease_seconds=30, eval_only=True, eval_variant="thu-prompt")
+    assert got is not None and got.id == "T-e"
+
+
+def test_eval_suite_rejects_short_sha() -> None:
+    import pytest
+
+    from aico.rnd import evalrun
+
+    with pytest.raises(evalrun.EvalError, match="40 ký tự"):
+        evalrun.eval_tickets([{**SUITE[0], "base_sha": "abc1234"}], "v")

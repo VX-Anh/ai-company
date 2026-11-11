@@ -44,6 +44,11 @@ def eval_tickets(suite: list[dict[str, Any]], variant: str, repeat: int = 1) -> 
         missing = [k for k in ("id", "project", "title", "base_sha") if not item.get(k)]
         if missing:
             raise EvalError(f"mục {item.get('id', '?')} thiếu {', '.join(missing)}")
+        base = str(item["base_sha"])
+        if re.fullmatch(r"[0-9a-f]{7,39}", base):
+            raise EvalError(
+                f"mục {item['id']}: base_sha phải đủ 40 ký tự (SHA ngắn bị coi là tên nhánh)"
+            )
         labels = [x for x in item.get("labels") or [] if str(x).lower() != EVAL_LABEL]
         for n in range(1, repeat + 1):
             out.append(
@@ -101,9 +106,9 @@ async def report(
         rows[_origin(ticket)].append(
             {
                 "ticket": ticket.id,
-                # Tới chờ duyệt merge = review (và test) đã đạt trong giới hạn vòng.
-                "passed": ticket.status is S.AWAITING_MERGE_APPROVAL
-                or (ticket.status is S.ESCALATED and m["escalation"].startswith("merge: rejected")),
+                # Đạt = đã tới chờ duyệt merge (review và test đạt trong giới hạn vòng), dù sau
+                # đó bị đóng (--close), quá hạn duyệt hay từ chối.
+                "passed": m["minutes_to_merge_approval"] is not None,
                 "code_rounds": m["code_rounds"],
                 "review_rounds": m["review_rounds"],
                 "tokens": tokens,
@@ -123,7 +128,9 @@ async def report(
             "origin": origin,
             "runs": len(runs),
             "pass_rate": round(sum(r["passed"] for r in runs) / len(runs), 3),
-            "first_pass_rate": round(sum(r["code_rounds"] <= 1 for r in runs) / len(runs), 3),
+            "first_pass_rate": round(
+                sum(r["passed"] and r["code_rounds"] <= 1 for r in runs) / len(runs), 3
+            ),
             "avg_review_rounds": round(mean(r["review_rounds"] for r in runs), 2),
             "avg_tokens": round(mean(r["tokens"] for r in runs)),
         }

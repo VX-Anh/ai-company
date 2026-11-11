@@ -86,7 +86,9 @@ async def collect_history(
     """Các ticket đã kết thúc gần nhất (bỏ ticket hồi cứu), mới nhất trước."""
     done = await tickets.list(statuses={S.DONE, S.FAILED, S.ESCALATED})
     picked = [
-        t for t in done if t.id != exclude and RETRO_LABEL not in {x.lower() for x in t.labels}
+        t
+        for t in done
+        if t.id != exclude and not {RETRO_LABEL, "eval"} & {x.lower() for x in t.labels}
     ]
     picked.sort(key=lambda t: t.updated_at, reverse=True)
     return [summarize_ticket(t, await tickets.events(t.id)) for t in picked[:limit]]

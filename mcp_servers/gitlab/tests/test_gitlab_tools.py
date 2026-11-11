@@ -160,3 +160,28 @@ async def test_read_file_cuts_single_overlong_line(monkeypatch: pytest.MonkeyPat
     backend.project(PROJECT).files["main"]["min.js"] = "x" * 100 + "\nsau\n"
     r = await tools.read_file(PROJECT, "min.js")
     assert r["content"] == "x" * 10 and r["next_offset"] == 2
+
+
+def test_eval_branch_constraints() -> None:
+    c = Constraints(
+        allowed_projects=(PROJECT,),
+        branch_pattern="ai/*,eval/*",
+        allowed_targets=("main", "eval/base/*"),
+    )
+    c.check_branch("eval/T-1")
+    c.check_pair("eval/T-1", "eval/base/T-1")
+    c.check_pair("ai/T-1", "main")
+    for source, target in (
+        ("eval/T-1", "main"),
+        ("ai/T-1", "eval/base/T-1"),
+        ("eval/base/T-2", "eval/base/T-1"),
+    ):
+        with pytest.raises(ConstraintError):
+            c.check_pair(source, target)
+    with pytest.raises(ConstraintError):
+        c.check_push("eval/base/T-1")
+    c.check_merge_target("main")
+    with pytest.raises(ConstraintError):
+        c.check_merge_target("eval/base/T-1")
+    with pytest.raises(ConstraintError):
+        c.check_branch("feature/x")

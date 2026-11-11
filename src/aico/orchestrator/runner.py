@@ -36,10 +36,12 @@ class Runner:
         lease_seconds: float = 60,
         callbacks: CallbacksFactory | None = None,
         eval_only: bool = False,
+        eval_variant: str | None = None,
     ) -> None:
         self._graph = graph
         # Instance chạy lại của R&D chỉ nhận ticket nhãn eval; aico chính bỏ qua chúng.
         self._eval_only = eval_only
+        self._eval_variant = eval_variant
         self._tickets = tickets
         self.owner = owner or f"aico-{uuid.uuid4().hex[:8]}"
         self._lease = lease_seconds
@@ -48,7 +50,10 @@ class Runner:
     async def run_once(self) -> Ticket | None:
         """Nhận và chạy một ticket. Trả ticket đã xử lý, hoặc None nếu không có việc."""
         ticket = await self._tickets.claim(
-            owner=self.owner, lease_seconds=self._lease, eval_only=self._eval_only
+            owner=self.owner,
+            lease_seconds=self._lease,
+            eval_only=self._eval_only,
+            eval_variant=self._eval_variant,
         )
         if ticket is None:
             return None

@@ -32,6 +32,8 @@ class Constraints:
     branch_pattern: str = "ai/*"
     # Tên nhánh hoặc mẫu fnmatch, vd ("main", "eval/base/*").
     allowed_targets: tuple[str, ...] = ("main",)
+    # Đích được MERGE (hẹp hơn đích được mở MR): eval/base/* chỉ để xem diff, không bao giờ merge.
+    merge_targets: tuple[str, ...] = ("main",)
 
     def check_project(self, project: str) -> None:
         if project not in self.allowed_projects:
@@ -42,6 +44,23 @@ class Constraints:
         patterns = [p.strip() for p in self.branch_pattern.split(",") if p.strip()]
         if bad or not any(fnmatchcase(branch, p) for p in patterns):
             raise ConstraintError(f"branch '{branch}' không khớp '{self.branch_pattern}'")
+
+    def check_pair(self, source: str, target: str) -> None:
+        """Ticket chạy lại (eval/*) chỉ mở MR vào eval/base/*; nhánh khác không vào eval/*."""
+        if source.startswith("eval/"):
+            if source.startswith("eval/base/") or not target.startswith("eval/base/"):
+                raise ConstraintError(f"nhánh '{source}' chỉ được mở MR vào eval/base/*")
+        elif target.startswith("eval/"):
+            raise ConstraintError(f"nhánh '{source}' không được mở MR vào '{target}'")
+
+    def check_push(self, branch: str) -> None:
+        self.check_branch(branch)
+        if branch.startswith("eval/base/"):
+            raise ConstraintError("không push vào eval/base/* (nhánh gốc của lượt chạy lại)")
+
+    def check_merge_target(self, branch: str) -> None:
+        if not any(fnmatchcase(branch, t) for t in self.merge_targets):
+            raise ConstraintError(f"không được merge vào '{branch}'")
 
     def check_target(self, branch: str) -> None:
         bad = not branch or ".." in branch
@@ -174,7 +193,7 @@ class GitLabTools:
     ) -> dict[str, Any]:
         """Tạo một commit trên branch bằng API (không cần git hay credential trong sandbox)."""
         self._c.check_project(project)
-        self._c.check_branch(branch)
+        self._c.check_push(branch)
         if not idempotency_key:
             raise ValueError("cần idempotency_key")
         if not files:
@@ -202,8 +221,13 @@ class GitLabTools:
         self._c.check_project(project)
         self._c.check_branch(source_branch)
         self._c.check_target(target_branch)
+        self._c.check_pair(source_branch, target_branch)
         existing = await self._backend.find_open_mr(project, source_branch)
         if existing is not None:
+            if existing.get("target_branch") not in (None, target_branch):
+                raise ConstraintError(
+                    f"đã có MR mở từ '{source_branch}' vào '{existing.get('target_branch')}'"
+                )
             return {**_mr_view(existing), "created": False}
         mr = await self._backend.create_mr(
             project, source_branch, target_branch, title, description
@@ -226,6 +250,7 @@ class GitLabTools:
             return {**_mr_view(mr), "merged_now": False}
         self._c.check_branch(mr["source_branch"])
         self._c.check_target(mr["target_branch"])
+        self._c.check_merge_target(mr["target_branch"])
         merged = await self._backend.merge_mr(project, mr_iid)
         return {**_mr_view(merged), "merged_now": True}
 

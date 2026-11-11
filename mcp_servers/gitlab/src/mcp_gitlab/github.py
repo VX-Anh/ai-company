@@ -22,9 +22,6 @@ from mcp_gitlab.backend import GitLabError
 SHA_RE = re.compile("[0-9a-f]{40}")
 
 
-_SHA = re.compile(r"[0-9a-f]{40}")
-
-
 def _repo(project: str) -> str:
     owner, _, name = project.partition("/")
     if not owner or not name or "/" in name:
@@ -92,7 +89,7 @@ class HttpGitHubBackend:
         return resp.json() if resp.content else {}
 
     async def _head_sha(self, project: str, branch: str) -> str:
-        if _SHA.fullmatch(branch):
+        if SHA_RE.fullmatch(branch):
             return branch  # đã là commit (ticket chạy lại dựng nhánh ở commit gốc)
         ref = await self._request(
             "GET", f"{_repo(project)}/git/ref/heads/{quote(branch, safe='/')}"

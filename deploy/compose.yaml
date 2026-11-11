@@ -97,6 +97,9 @@ services:
       AICO_COMPANY_DIR: /app/eval-company
       AICO_BRIDGE_URL: http://aico-eval:8300/mcp   # worker gọi tool qua bridge của instance này
       AICO_RND_SCAN_INTERVAL_DAYS: "0"
+      AICO_EVAL_VARIANT: ${AICO_EVAL_VARIANT:-baseline}   # chỉ nhận ticket của biến thể đang mount
+      AICO_RUNNER_CONCURRENCY: "1"   # một ticket một lúc: để chỗ cho ticket thật
+      AICO_PREVIEW_PROJECTS: ""      # không dựng bản xem trước cho nhánh eval/*
     volumes:
       - ${AICO_EVAL_COMPANY_DIR:-../company}:/app/eval-company:ro
     ports: !reset []
