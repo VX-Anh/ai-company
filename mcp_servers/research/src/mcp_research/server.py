@@ -23,8 +23,10 @@ async def _anticipated(call: Awaitable[dict[str, Any]]) -> dict[str, Any]:
         return await call
     except ResearchError as exc:
         raise ToolError(str(exc)) from exc
-    except httpx.HTTPError as exc:
-        raise ToolError(f"lỗi mạng: {exc.__class__.__name__}") from exc
+    except (httpx.HTTPError, httpx.InvalidURL) as exc:
+        raise ToolError(f"lỗi mạng hoặc URL hỏng: {exc.__class__.__name__}") from exc
+    except ValueError as exc:  # URL hỏng (cổng sai, ngoặc IPv6 thiếu) từ urllib
+        raise ToolError(f"URL không hợp lệ: {exc}") from exc
 
 
 def build_server(tools: ResearchTools) -> MCPServer:

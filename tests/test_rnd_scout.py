@@ -84,6 +84,11 @@ def test_should_scan_conditions() -> None:
     assert should_scan(**base, rooms=[hot])[1] == "phòng claude đã dùng nhiều hạn mức"
     week = _room(usage={"windows": [{"window_minutes": 10080, "used_percent": 61}]})
     assert should_scan(**base, rooms=[week])[0] is False
+    # Mọi phòng hết hạn mức hoặc tắt: không tạo ticket để rồi escalate.
+    assert should_scan(**base, rooms=[_room(state="offline")]) == (
+        False,
+        "không phòng nào dùng được",
+    )
     # Phòng hết hạn mức hoặc tắt không chặn phòng khác.
     assert should_scan(**base, rooms=[_room(), _room("cursor", state="limited", usage=None)])[0]
 

@@ -27,13 +27,23 @@ PAGE = """<html><head><title>Docs  Caching</title><style>.x{}</style></head>
 
 def tools(routes: dict[str, httpx.Response]) -> ResearchTools:
     def handler(request: httpx.Request) -> httpx.Response:
-        key = str(request.url).split("?")[0]
+        # Trang web: kết nối thẳng tới IP đã kiểm, tên miền thật nằm ở Host (ghim IP).
+        connected.append((request.url.host, request.headers.get("host", "")))
+        url = (
+            request.url.copy_with(host=request.headers["host"])
+            if request.url.host[0].isdigit()
+            else request.url
+        )
+        key = str(url).split("?")[0]
         if key not in routes:
             return httpx.Response(404)
         return routes[key]
 
     client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
     return ResearchTools(client, resolve, github_api="https://api.github.test")
+
+
+connected: list[tuple[str, str]] = []
 
 
 @pytest.mark.parametrize(
@@ -46,6 +56,8 @@ def tools(routes: dict[str, httpx.Response]) -> ResearchTools:
         "http://localhost/",
         "https://evil.example.com/",
         "http://10.1.2.3/",
+        "http://[::127.0.0.1]/",  # IPv4-compatible
+        "http://[64:ff9b::a00:1]/",  # NAT64 tới 10.0.0.1
         "https://docs.example.com:8443/",
         "ftp://docs.example.com/",
         "https://user:pw@docs.example.com/",
@@ -158,3 +170,38 @@ async def test_mcp_server_returns_blocked_url_as_tool_error() -> None:
         assert names == {"fetch_url", "verify_quote", "github_releases", "github_search_repos"}
         result = await client.call_tool("fetch_url", {"url": "http://127.0.0.1:8000/tickets"})
         assert result.is_error
+
+
+async def test_fetch_connects_to_checked_ip_with_original_host() -> None:
+    connected.clear()
+    t = tools({"https://docs.example.com/c": httpx.Response(200, html=PAGE)})
+    await t.fetch_url("https://docs.example.com/c")
+    assert connected == [("93.184.216.34", "docs.example.com")]
+
+
+async def test_verify_quote_reads_whole_page_not_only_first_chars() -> None:
+    from mcp_research.tools import MAX_CHARS
+
+    page = (
+        "<html><body><p>"
+        + "đầu trang " * (MAX_CHARS // 5)
+        + "</p><p>câu cần tìm ở cuối trang dài</p></body></html>"
+    )
+    t = tools({"https://docs.example.com/long": httpx.Response(200, html=page)})
+    hit = await t.verify_quote("https://docs.example.com/long", "câu cần tìm ở cuối")
+    assert hit["found"] is True
+
+
+async def test_github_follows_repo_rename_redirect() -> None:
+    moved = httpx.Response(
+        301, headers={"location": "https://api.github.test/repos/new/r/releases"}
+    )
+    t = tools(
+        {
+            "https://api.github.test/repos/old/r/releases": moved,
+            "https://api.github.test/repos/new/r/releases": httpx.Response(
+                200, json=[{"tag_name": "v1"}]
+            ),
+        }
+    )
+    assert (await t.github_releases("old/r"))["releases"][0]["tag"] == "v1"

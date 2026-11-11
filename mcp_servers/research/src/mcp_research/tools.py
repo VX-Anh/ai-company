@@ -28,6 +28,7 @@ MAX_BYTES = 2_000_000
 MAX_REDIRECTS = 5
 DEFAULT_CHARS = 20_000
 MAX_CHARS = 60_000
+TOTAL_SECONDS = 45
 ALLOWED_PORTS = frozenset({80, 443})
 GITHUB_API = "https://api.github.com"
 _REPO = re.compile(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+")
@@ -51,7 +52,8 @@ def _now() -> str:
 
 
 async def check_url(url: str, resolve: Resolver) -> str:
-    """Trả URL nếu được phép gọi; ném ResearchError nếu không."""
+    """Trả IP công khai đã kiểm để kết nối thẳng tới đó (ghim IP, chống DNS rebinding: phân giải
+    lần hai lúc kết nối có thể ra IP nội bộ); ném ResearchError nếu URL không được phép."""
     parts = urlsplit(url)
     if parts.scheme not in ("http", "https"):
         raise ResearchError(f"chỉ đọc http/https: {url}")
@@ -76,9 +78,25 @@ async def check_url(url: str, resolve: Resolver) -> str:
     if not addresses:
         raise ResearchError(f"không phân giải được {host}")
     for addr in addresses:
-        if not ipaddress.ip_address(addr).is_global:
+        ip = ipaddress.ip_address(addr)
+        # ::a.b.c.d (IPv4-compatible) và NAT64 64:ff9b::/96 được Python coi là global nhưng có
+        # thể trỏ về IPv4 nội bộ: xét phần IPv4 bên trong.
+        inner = None
+        if isinstance(ip, ipaddress.IPv6Address) and (
+            ip in ipaddress.IPv6Network("64:ff9b::/96") or (int(ip) >> 32 == 0 and int(ip) > 0xFFFF)
+        ):
+            inner = ipaddress.IPv4Address(int(ip) & 0xFFFFFFFF)
+        if not ip.is_global or (inner is not None and not inner.is_global):
             raise ResearchError(f"địa chỉ nội bộ bị chặn: {host} -> {addr}")
-    return url
+    return addresses[0]
+
+
+def pinned_url(url: str, ip: str) -> str:
+    """URL trỏ thẳng tới IP đã kiểm, giữ scheme, cổng, đường dẫn (Host/SNI gửi riêng)."""
+    parts = urlsplit(url)
+    host = f"[{ip}]" if ":" in ip else ip
+    netloc = f"{host}:{parts.port}" if parts.port else host
+    return parts._replace(netloc=netloc).geturl()
 
 
 class _Text(HTMLParser):
@@ -150,11 +168,29 @@ class ResearchTools:
         self._github_api = github_api.rstrip("/")
 
     async def _get(self, url: str) -> tuple[httpx.Response, bytes, str]:
-        """GET tự theo chuyển hướng, kiểm từng URL; đọc tối đa MAX_BYTES."""
+        """GET tự theo chuyển hướng, kiểm từng URL; đọc tối đa MAX_BYTES; tổng thời gian có trần
+        (timeout của httpx tính theo từng thao tác, máy chủ nhỏ giọt có thể giữ rất lâu)."""
+        try:
+            async with asyncio.timeout(TOTAL_SECONDS):
+                return await self._get_pinned(url)
+        except TimeoutError:
+            raise ResearchError(f"đọc trang quá {TOTAL_SECONDS} giây: {url}") from None
+
+    async def _get_pinned(self, url: str) -> tuple[httpx.Response, bytes, str]:
         current = url
         for _ in range(MAX_REDIRECTS + 1):
-            await check_url(current, self._resolve)
-            async with self._client.stream("GET", current, follow_redirects=False) as resp:
+            ip = await check_url(current, self._resolve)
+            parts = urlsplit(current)
+            host = parts.hostname or ""
+            headers = {"Host": parts.netloc.rpartition("@")[2]}
+            extensions = {"sni_hostname": host} if parts.scheme == "https" else {}
+            async with self._client.stream(
+                "GET",
+                pinned_url(current, ip),
+                headers=headers,
+                extensions=extensions,
+                follow_redirects=False,
+            ) as resp:
                 if resp.is_redirect and resp.headers.get("location"):
                     current = urljoin(current, resp.headers["location"])
                     continue
@@ -167,6 +203,13 @@ class ResearchTools:
         raise ResearchError(f"chuyển hướng quá {MAX_REDIRECTS} lần: {url}")
 
     async def fetch_url(self, url: str, max_chars: int = DEFAULT_CHARS) -> dict[str, Any]:
+        page = await self._page(url)
+        text = page.pop("full_text")
+        limit = max(1, min(int(max_chars), MAX_CHARS))
+        return {**page, "text": text[:limit], "truncated": len(text) > limit}
+
+    async def _page(self, url: str) -> dict[str, Any]:
+        """Trang đã đọc với toàn văn (tới MAX_BYTES) trong `full_text`."""
         resp, body, final = await self._get(url)
         if resp.status_code >= 400:
             raise ResearchError(f"trang trả HTTP {resp.status_code}: {final}")
@@ -182,15 +225,13 @@ class ResearchTools:
                 raw,
             )
         )
-        limit = max(1, min(int(max_chars), MAX_CHARS))
         return {
             "url": url,
             "final_url": final,
             "status": resp.status_code,
             "content_type": ctype,
             "title": title,
-            "text": text[:limit],
-            "truncated": len(text) > limit,
+            "full_text": text,
             "sha256": hashlib.sha256(body).hexdigest(),
             "retrieved": _now(),
         }
@@ -199,8 +240,8 @@ class ResearchTools:
         """Trích dẫn có nguyên văn trên trang không (bỏ qua khoảng trắng, hoa/thường, kiểu nháy)."""
         if len(quote.split()) < 3:
             raise ResearchError("trích dẫn quá ngắn để kiểm (cần từ 3 từ)")
-        page = await self.fetch_url(url, max_chars=MAX_CHARS * 10)
-        hay, needle = normalize(page["text"]), normalize(quote)
+        page = await self._page(url)  # toàn văn: trích dẫn ở cuối changelog dài vẫn tìm được
+        hay, needle = normalize(page["full_text"]), normalize(quote)
         at = hay.find(needle)
         context = hay[max(0, at - 120) : at + len(needle) + 120] if at >= 0 else ""
         return {
@@ -217,6 +258,7 @@ class ResearchTools:
             f"{self._github_api}{path}",
             params=params,
             headers={"Accept": "application/vnd.github+json"},
+            follow_redirects=True,  # repo đổi tên/chuyển chủ trả 301; host GitHub cố định
         )
         if resp.status_code == 403 and resp.headers.get("x-ratelimit-remaining") == "0":
             raise ResearchError("GitHub hết lượt gọi không token trong giờ này, thử lại sau")
@@ -229,6 +271,8 @@ class ResearchTools:
         if not _REPO.fullmatch(repo):
             raise ResearchError(f"repo phải dạng owner/name: {repo}")
         items = await self._github(f"/repos/{repo}/releases", {"per_page": max(1, min(limit, 20))})
+        if not isinstance(items, list):
+            raise ResearchError(f"GitHub trả dữ liệu lạ cho releases của {repo}")
         return {
             "repo": repo,
             "releases": [

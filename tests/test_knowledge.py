@@ -159,6 +159,23 @@ def test_cards_from_archive_skips_bad_and_non_card_files() -> None:
     assert len(skipped) == 2 and any("trùng id" in s for s in skipped)
 
 
+def test_card_with_wrong_types_is_skipped_not_fatal() -> None:
+    """trust: high hay sources là số không được làm hỏng cả lần dựng chỉ mục."""
+    bad_trust = CACHING.replace("trust: 1", "trust: high")
+    bad_rel = card_text(
+        "technique/rel-hong", "Quan hệ hỏng", "x", relations="[{rel: optimizes, to: a, sources: 5}]"
+    )
+    assert bad_trust != CACHING
+    data = archive(
+        {
+            "cards/technique/prompt-caching.md": bad_trust,
+            "cards/technique/rel-hong.md": bad_rel,
+        }
+    )
+    cards, skipped = cards_from_archive(data)
+    assert cards == [] and len(skipped) == 2
+
+
 # --- chỉ mục ---------------------------------------------------------------------------------
 
 

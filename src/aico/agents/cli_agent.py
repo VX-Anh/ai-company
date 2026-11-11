@@ -257,7 +257,13 @@ class CliAgentRunner:
         if not body.get("ok"):
             log.warning("worker %s lỗi: %s", name, body.get("error"))
             error = str(body.get("error") or "lỗi không rõ")[:500]
-            return {"error": error, "limited": bool(body.get("limited"))}
+            # Giữ token và thời gian của lượt hỏng để event job đo đủ chi phí.
+            return {
+                "error": error,
+                "limited": bool(body.get("limited")),
+                "tokens": body.get("tokens"),
+                "duration_seconds": body.get("duration_seconds"),
+            }
         log.info("worker %s xong sau %ss", name, body.get("duration_seconds"))
         body.pop("error", None)
         return body

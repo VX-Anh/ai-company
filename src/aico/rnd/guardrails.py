@@ -22,6 +22,9 @@ PROMPTS = "company/prompts/*.md"
 ROLES = "company/roles/*.yaml"
 # Khoá của vai trò mà thí nghiệm được đổi; mọi khoá khác phải giữ nguyên.
 TUNABLE_ROLE_KEYS = frozenset({"workers", "limits"})
+# Trần của limits: thí nghiệm không được biến một vai trò thành job chạy vô hạn.
+LIMIT_CAPS = {"timeout_minutes": 120, "max_iterations": 100}
+REGULAR_FILE_MODE = "100644"
 
 # đường dẫn -> (nội dung ở base hoặc None nếu file mới, nội dung ở head hoặc None nếu bị xoá)
 Changes = Mapping[str, tuple[str | None, str | None]]
@@ -51,7 +54,13 @@ def violations(changes: Changes) -> list[str]:
                 continue
             if before is None or after is None:
                 out.append(f"{path}: vai trò phải là mapping YAML")
-            elif before != after:
+                continue
+            limits = (yaml.safe_load(new) or {}).get("limits") or {}
+            for key, cap in LIMIT_CAPS.items():
+                value = limits.get(key) if isinstance(limits, dict) else None
+                if isinstance(value, (int, float)) and value > cap:
+                    out.append(f"{path}: limits.{key} = {value} vượt trần {cap}")
+            if before != after:
                 changed = sorted(
                     k for k in set(before) | set(after) if before.get(k) != after.get(k)
                 )
@@ -70,18 +79,34 @@ def _git(root: Path, *args: str) -> str:
     ).stdout
 
 
-def git_changes(root: Path, base: str) -> dict[str, tuple[str | None, str | None]]:
-    """Thay đổi của HEAD so với base (điểm rẽ nhánh), đọc nội dung cả hai phía."""
-    status = _git(root, "diff", "--name-status", "--no-renames", f"{base}...HEAD")
-    merge_base = _git(root, "merge-base", base, "HEAD").strip()
+def git_changes(
+    root: Path, base: str, head: str = "HEAD"
+) -> tuple[dict[str, tuple[str | None, str | None]], list[str]]:
+    """Thay đổi của head so với base (điểm rẽ nhánh) và lỗi về loại file.
+
+    Chỉ đọc object Git, không chạy code của head. File phải là file thường (mode 100644):
+    symlink (120000) hay submodule có thể trỏ prompt tới /run/secrets và đưa secret vào prompt.
+    """
+    merge_base = _git(root, "merge-base", base, head).strip()
+    raw = _git(root, "diff", "--raw", "--no-renames", "--no-abbrev", merge_base, head)
     changes: dict[str, tuple[str | None, str | None]] = {}
-    for line in status.splitlines():
-        code, _, path = line.partition("\t")
-        old = None if code.startswith("A") else _git(root, "show", f"{merge_base}:{path}")
-        new = None if code.startswith("D") else _git(root, "show", f"HEAD:{path}")
+    problems: list[str] = []
+    allowed = (REGULAR_FILE_MODE, "000000")  # 000000: phía không có file (thêm/xoá)
+    for line in raw.splitlines():
+        meta, _, path = line.partition("	")
+        fields = meta.lstrip(":").split()
+        if len(fields) < 5:
+            continue
+        old_mode, new_mode, status = fields[0], fields[1], fields[4]
+        if old_mode not in allowed or new_mode not in allowed:
+            problems.append(f"{path}: chỉ được sửa file thường (mode {old_mode} -> {new_mode})")
+            continue
+        old = None if status.startswith("A") else _git(root, "show", f"{merge_base}:{path}")
+        new = None if status.startswith("D") else _git(root, "show", f"{head}:{path}")
         changes[path] = (old, new)
-    return changes
+    return changes, problems
 
 
-def check(root: Path, base: str) -> list[str]:
-    return violations(git_changes(root, base))
+def check(root: Path, base: str, head: str = "HEAD") -> list[str]:
+    changes, problems = git_changes(root, base, head)
+    return problems + violations(changes)

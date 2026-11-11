@@ -65,6 +65,7 @@ def should_scan(
         return False, "chưa tới kỳ"
     if active_tickets:
         return False, f"đang có {active_tickets} ticket chạy"
+    usable = 0
     for room in rooms:
         if room.get("agents"):
             return False, f"phòng {room.get('name')} đang có agent"
@@ -73,6 +74,9 @@ def should_scan(
         windows = (room.get("usage") or {}).get("windows") or []
         if not all(_window_ok(w, policy) for w in windows):
             return False, f"phòng {room.get('name')} đã dùng nhiều hạn mức"
+        usable += 1
+    if not usable:
+        return False, "không phòng nào dùng được"
     return True, "tới kỳ, hệ rảnh"
 
 

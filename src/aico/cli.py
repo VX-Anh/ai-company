@@ -140,6 +140,7 @@ def main(argv: list[str] | None = None) -> int:
         "check-selfimprove", help="kiểm PR tự cải tiến (nhánh rnd/*) chỉ sửa prompt/workers/limits"
     )
     guard.add_argument("--base", default="origin/main", help="ref đích của PR")
+    guard.add_argument("--head", default="HEAD", help="ref của PR (chỉ đọc object Git)")
     args = parser.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):
         if isinstance(stream, io.TextIOWrapper):
@@ -157,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.cmd == "check-selfimprove":
         from aico.rnd.guardrails import check as check_selfimprove
 
-        problems = check_selfimprove(Path.cwd(), args.base)
+        problems = check_selfimprove(Path.cwd(), args.base, args.head)
         for line in problems:
             print(line, file=sys.stderr)
         print("OK" if not problems else f"LỖI: {len(problems)} thay đổi ngoài phạm vi")

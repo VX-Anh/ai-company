@@ -133,11 +133,11 @@ def parse_card(path: str, text: str) -> Card:
             local_id=str(s.get("id")),
             url=str(s.get("url")),
             kind=str(s.get("kind") or "docs"),
-            trust=int(s.get("trust") or 2),
+            trust=min(3, max(1, int(s.get("trust") or 2))),
             published=_date(s.get("published")),
             retrieved=_date(s.get("retrieved")),
             commit_sha=str(s["commit"]) if s.get("commit") else None,
-            quote=str(s["quote"]) if s.get("quote") else None,
+            quote=str(s["quote"]).replace("\x00", "") if s.get("quote") else None,
         )
         for s in (meta.get("sources") or [])
         if isinstance(s, dict) and s.get("id") and s.get("url")
@@ -176,8 +176,9 @@ def cards_from_archive(data: bytes) -> tuple[list[Card], list[str]]:
                 continue
             try:
                 card = parse_card(path, handle.read().decode("utf-8"))
-            except (CardError, UnicodeDecodeError) as exc:
-                skipped.append(str(exc))
+            except (CardError, UnicodeDecodeError, ValueError, TypeError) as exc:
+                # Thẻ sai kiểu (trust: high, sources: 5...) chỉ bỏ thẻ đó, không làm hỏng chỉ mục.
+                skipped.append(f"{exc}")
                 continue
             if card.id in seen:
                 skipped.append(f"{path}: trùng id '{card.id}'")
