@@ -12,6 +12,11 @@ tool_levels:
   # Kho tri thức Phòng R&D (chạy trong tiến trình aico): chỉ đọc tri thức đã duyệt.
   knowledge.search_knowledge: L0
   knowledge.get_knowledge: L0
+  # Nghiên cứu (Phòng R&D): đọc web/GitHub công khai, chặn địa chỉ nội bộ, không ghi gì.
+  research.fetch_url: L0
+  research.verify_quote: L0
+  research.github_releases: L0
+  research.github_search_repos: L0
   # Pixelbolt: vẽ pixel art từ công thức JSON, chỉ ghi file trong thư mục output của container
   pixel.pixel_help: L0
   pixel.pixel_inspect: L0

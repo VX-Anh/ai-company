@@ -6,6 +6,7 @@ requires-python = "==3.12.*"
 members = [
     "aico",
     "mcp-gitlab",
+    "mcp-research",
 ]
 
 [[package]]
@@ -34,6 +35,7 @@ observability = [
 [package.dev-dependencies]
 dev = [
     { name = "mcp-gitlab" },
+    { name = "mcp-research" },
     { name = "pgserver" },
     { name = "pyright" },
     { name = "pytest" },
@@ -61,6 +63,7 @@ provides-extras = ["observability"]
 [package.metadata.requires-dev]
 dev = [
     { name = "mcp-gitlab", editable = "mcp_servers/gitlab" },
+    { name = "mcp-research", editable = "mcp_servers/research" },
     { name = "pgserver", specifier = ">=0.1.4" },
     { name = "pyright", specifier = ">=1.1.380" },
     { name = "pytest", specifier = ">=8.3" },
@@ -683,6 +686,21 @@ wheels = [
 name = "mcp-gitlab"
 version = "0.1.0"
 source = { editable = "mcp_servers/gitlab" }
+dependencies = [
+    { name = "httpx" },
+    { name = "mcp" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "httpx", specifier = ">=0.27" },
+    { name = "mcp", specifier = ">=1.9" },
+]
+
+[[package]]
+name = "mcp-research"
+version = "0.1.0"
+source = { editable = "mcp_servers/research" }
 dependencies = [
     { name = "httpx" },
     { name = "mcp" },

@@ -1,0 +1,19 @@
+[project]
+name = "mcp-research"
+version = "0.1.0"
+description = "MCP server nghiên cứu của AI Company OS: đọc web và GitHub công khai, chỉ đọc, chặn địa chỉ nội bộ"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "mcp>=1.9",
+    "httpx>=0.27",
+]
+
+[project.scripts]
+mcp-research = "mcp_research.server:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/mcp_research"]

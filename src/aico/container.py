@@ -131,6 +131,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 {"gitlab": settings.mcp_gitlab_url}
                 | ({"pixel": settings.mcp_pixel_url} if settings.mcp_pixel_url else {})
                 | ({"rea": settings.mcp_rea_url} if settings.mcp_rea_url else {})
+                | ({"research": settings.mcp_research_url} if settings.mcp_research_url else {})
                 | ({"knowledge": build_knowledge_server(knowledge)} if knowledge else {})
             ),
             PostgresAuditLog(pool),

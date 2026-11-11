@@ -412,3 +412,36 @@ async def test_accents_disambiguate_homonyms(kstore: KnowledgeStore) -> None:
     # gõ không dấu vẫn tìm được thẻ có dấu
     assert (await kstore.search("giao thuc noi lai", today=TODAY))[0]["id"] == "technique/giao-thuc"
     assert await kstore.search("nổi bật", today=TODAY) == []
+
+
+async def test_tools_for_skips_broken_optional_server_but_not_git(company: Company) -> None:
+    """Server phụ (research) lỗi: researcher vẫn có tool khác. Server Git lỗi: báo lên."""
+
+    class Flaky(McpToolClient):
+        def __init__(self, broken: str) -> None:
+            super().__init__(
+                {
+                    "gitlab": build_server(
+                        GitLabTools(FakeGitLabBackend(), Constraints(allowed_projects=(KB,)))
+                    )
+                }
+            )
+            self._broken = broken
+
+        async def list_tools(self, server: str):  # type: ignore[override]
+            if server == self._broken:
+                raise ConnectionError(f"{server} không trả lời")
+            return await super().list_tools(server)
+
+    def gateway(broken: str) -> ToolGateway:
+        return ToolGateway(
+            company,
+            Guard(company.policy, InMemoryApprovalStore()),
+            Flaky(broken),
+            InMemoryAuditLog(),
+        )
+
+    names = {s.name for s in await gateway("research").tools_for("researcher")}
+    assert "read_file" in names and "fetch_url" not in names
+    with pytest.raises(ConnectionError):
+        await gateway("gitlab").tools_for("researcher")

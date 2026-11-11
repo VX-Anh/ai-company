@@ -44,6 +44,7 @@ services:
       AICO_MCP_GITLAB_URL: http://mcp-gitlab:8101/mcp
       AICO_MCP_PIXEL_URL: http://mcp-pixel:8102/mcp
       AICO_MCP_REA_URL: http://mcp-rea:8103/mcp
+      AICO_MCP_RESEARCH_URL: http://mcp-research:8104/mcp
       AICO_API_TOKEN_FILE: /run/secrets/aico_api_token
       AICO_INTERNAL_TOKEN_FILE: /run/secrets/aico_internal_token
       AICO_INTAKE_PROJECTS: ${GITLAB_PROJECTS:-}
@@ -75,7 +76,7 @@ services:
     ports:
       - "127.0.0.1:8000:8000"   # API và console chỉ mở cho máy này
     # GĐ1: relay tách thành service riêng trên mạng `sandbox`; không nối aico vào mạng đó.
-    networks: [core, workers]
+    networks: [core, workers, research]
     depends_on:
       migrate: {condition: service_completed_successfully}
       mcp-gitlab: {condition: service_started}
@@ -99,6 +100,16 @@ services:
     secrets: [gitlab_token, gitlab_merge_token, aico_internal_token]
     group_add: ["${SECRETS_GID:-10100}"]
     networks: [core]
+    restart: unless-stopped
+
+  # Nghiên cứu (Phòng R&D): đọc web/GitHub công khai cho agent qua tool bridge (guard + audit).
+  # Không secret. Mạng riêng `research` chỉ có aico và container này: dù URL bị lừa trỏ vào
+  # tên dịch vụ nội bộ cũng không tới được Postgres/MCP khác (tool còn chặn IP không công khai).
+  mcp-research:
+    build:
+      context: ..
+      dockerfile: deploy/docker/mcp-research.Dockerfile
+    networks: [research]
     restart: unless-stopped
 
   # REA: phân tích ngược tĩnh cho agent, sau cầu nối stdio -> HTTP (mỗi lần gọi một tiến trình,
@@ -220,6 +231,8 @@ services:
 
 networks:
   core: {}
+  # Chỉ aico và mcp-research: tool đọc web không thấy mạng core.
+  research: {}
   # Worker cần Internet để gọi Anthropic/OpenAI/Cursor; tách khỏi mạng core (DB, MCP).
   workers: {}
   # GĐ1: sandbox OpenHands và model relay; không có đường ra Internet.

@@ -7,6 +7,9 @@ worker: cli
 workers: [claude, codex]
 prompt: prompts/research_lead.md
 tools:
+  # Đọc web/GitHub công khai có audit (fetch_url, verify_quote: kiểm trích dẫn bằng máy).
+  - server: research
+    allow: [fetch_url, verify_quote, github_releases, github_search_repos]
   - server: gitlab
     allow: [read_file]
     constraints:

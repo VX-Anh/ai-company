@@ -20,6 +20,9 @@ from aico.tools.guard import Guard, Verdict
 
 log = logging.getLogger(__name__)
 
+# Server mà lỗi khi liệt kê tool thì dừng việc thay vì bỏ qua (xem ToolGateway.tools_for).
+ESSENTIAL_SERVERS = frozenset({"gitlab"})
+
 IMAGES_KEY = "_images"  # [{mime_type, data(base64)}] trong kết quả tool
 
 
@@ -144,9 +147,12 @@ class ToolGateway:
             allowed = set(grant.allow)
             try:
                 listed = await self._client.list_tools(grant.server)
-            except ToolError as exc:
-                # Chỉ bỏ qua server chưa cấu hình (vd knowledge khi tắt R&D). Server đã cấu hình mà
-                # lỗi thì báo lên: nuốt lỗi làm agent lặng lẽ mất tool Git mà vẫn chạy tiếp.
+            except Exception as exc:
+                # Server Git là thiết yếu: lỗi thì báo lên, không để agent lặng lẽ mất tool Git mà
+                # vẫn chạy tiếp. Server phụ (knowledge, research, pixel, rea) chưa cấu hình hoặc
+                # đang lỗi thì vai trò chạy tiếp với các tool còn lại.
+                if grant.server in ESSENTIAL_SERVERS:
+                    raise
                 log.warning("bỏ qua tool của server '%s': %s", grant.server, exc)
                 continue
             for spec in listed:

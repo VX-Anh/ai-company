@@ -65,7 +65,8 @@ def _company(company_copy: Path) -> Company:
     for role in ("research_lead", "fact_checker"):
         path = company_copy / "roles" / f"{role}.yaml"
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
-        data["tools"][0]["constraints"]["repos"].append(PROJECT)
+        grant = next(t for t in data["tools"] if t["server"] == "gitlab")
+        grant["constraints"]["repos"].append(PROJECT)
         path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
     # Luật research = low chỉ áp cho kho tri thức: thêm repo giả vào luật đó.
     policy = company_copy / "policies" / "default.yaml"

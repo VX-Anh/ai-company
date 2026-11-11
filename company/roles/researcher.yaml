@@ -10,6 +10,9 @@ workers: [claude, codex]
 web: true
 prompt: prompts/researcher.md
 tools:
+  # Đọc web/GitHub công khai có audit (fetch_url, verify_quote: kiểm trích dẫn bằng máy).
+  - server: research
+    allow: [fetch_url, verify_quote, github_releases, github_search_repos]
   # Phân tích ngược tĩnh file trong /targets (game/app tham khảo), chỉ đọc.
   - server: rea
     allow: [inspect_pe_resources, inspect_managed_artifact, inspect_managed_members,

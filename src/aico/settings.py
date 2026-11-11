@@ -32,6 +32,8 @@ class Settings:
     mcp_gitlab_url: str = "http://127.0.0.1:8101/mcp"
     mcp_pixel_url: str | None = None  # Pixelbolt (pixel art); không đặt thì không có tool pixel
     mcp_rea_url: str | None = None  # REA (phân tích ngược); không đặt thì không có tool rea
+    # Nghiên cứu (fetch_url, verify_quote, GitHub): không đặt thì không có tool research
+    mcp_research_url: str | None = None
     upstream_llm_url: str = "http://127.0.0.1:20128/v1"
     upstream_llm_key: str | None = None
     api_host: str = "127.0.0.1"
@@ -93,6 +95,7 @@ class Settings:
             mcp_gitlab_url=env.get("AICO_MCP_GITLAB_URL", cls.mcp_gitlab_url),
             mcp_pixel_url=env.get("AICO_MCP_PIXEL_URL") or None,
             mcp_rea_url=env.get("AICO_MCP_REA_URL") or None,
+            mcp_research_url=env.get("AICO_MCP_RESEARCH_URL") or None,
             upstream_llm_url=env.get("AICO_UPSTREAM_LLM_URL", cls.upstream_llm_url),
             upstream_llm_key=_secret("AICO_UPSTREAM_LLM_KEY_FILE"),
             api_host=env.get("AICO_API_HOST", cls.api_host),

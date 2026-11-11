@@ -8,6 +8,9 @@ workers: [codex, claude]
 web: true
 prompt: prompts/fact_checker.md
 tools:
+  # Đọc web/GitHub công khai có audit (fetch_url, verify_quote: kiểm trích dẫn bằng máy).
+  - server: research
+    allow: [fetch_url, verify_quote, github_releases, github_search_repos]
   - server: gitlab
     allow: [read_file, download_archive, get_merge_request]
     constraints:
