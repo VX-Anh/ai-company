@@ -134,6 +134,10 @@ def main(argv: list[str] | None = None) -> int:
     check = sub.add_parser("check-config", help="kiểm tra thư mục company/")
     check.add_argument("path", nargs="?", default="company")
     sub.add_parser("serve", help="chạy API, model relay, runner, intake, đồng bộ Jira")
+    guard = sub.add_parser(
+        "check-selfimprove", help="kiểm PR tự cải tiến (nhánh rnd/*) chỉ sửa prompt/workers/limits"
+    )
+    guard.add_argument("--base", default="origin/main", help="ref đích của PR")
     args = parser.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):
         if isinstance(stream, io.TextIOWrapper):
@@ -148,6 +152,14 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"OK: {len(company.roles)} vai trò, {len(company.sops)} SOP")
         return 0
+    if args.cmd == "check-selfimprove":
+        from aico.rnd.guardrails import check as check_selfimprove
+
+        problems = check_selfimprove(Path.cwd(), args.base)
+        for line in problems:
+            print(line, file=sys.stderr)
+        print("OK" if not problems else f"LỖI: {len(problems)} thay đổi ngoài phạm vi")
+        return 1 if problems else 0
     settings = Settings.from_env()
     if args.cmd == "migrate":
         _run(_migrate(settings))

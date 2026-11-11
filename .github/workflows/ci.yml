@@ -27,6 +27,21 @@ jobs:
       - run: uv run pyright
       - run: uv run aico check-config company
 
+  # PR tự cải tiến của Phòng R&D (nhánh rnd/*): chỉ được sửa prompt và workers/limits của vai trò.
+  selfimprove-scope:
+    if: github.event_name == 'pull_request' && startsWith(github.head_ref, 'rnd/')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+          enable-cache: true
+      - run: uv sync --frozen --all-packages
+      - run: uv run aico check-selfimprove --base "origin/${{ github.base_ref }}"
+
   test:
     runs-on: ubuntu-latest
     services:
