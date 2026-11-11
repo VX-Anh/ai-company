@@ -27,6 +27,7 @@ Việc phải làm:
 
 | # | Việc | Ghi chú |
 | --- | --- | --- |
+| 2.0 | Đặt `selfimprove-scope` (workflow `.github/workflows/selfimprove.yml`, `pull_request_target`, chạy code của `main`) làm **required check** cho `main` của ai-company; PR do agent mở phải mang nhãn `selfimprove` hoặc nhánh `rnd/*` | Đã có trên `rnd-r0`; owner bật required check trong GitHub |
 | 2.1 | Vai trò `experimenter` (workers `[codex, claude]`, L2, chỉ repo `VX-Anh/ai-company`, branch `rnd/*`) và `evaluator` (L0 + chạy eval) | mcp-gitlab cần cho phép `rnd/*` cho riêng repo này (`GITLAB_BRANCH_PATTERN` hiện là một mẫu chung `ai/*`: cần đổi thành ánh xạ repo → mẫu) |
 | 2.2 | `SelfImprovePlanner` (mẫu `RetroPlanner`): đầu vào `<metrics>` + giả thuyết; đầu ra kế hoạch theo mẫu bản ghi thí nghiệm | Luật rủi ro `selfimprove = high`, `projects: [VX-Anh/ai-company]` |
 | 2.3 | `label_scopes`: `selfimprove → (company/prompts/, company/roles/)` (dùng lại cơ chế đã có cho research) | Lớp chặn thứ hai sau CI |
