@@ -89,6 +89,8 @@ async def test_retro_label_routes_planning_to_researcher_with_history() -> None:
     assert role == "researcher"
     assert "<history>" in prompt and "quên kiểm rows rỗng" in prompt
     assert "Đề xuất cho aico" in prompt
+    # Số liệu gộp đi kèm để đề xuất thành giả thuyết đo được.
+    assert "<metrics>" in prompt and '"first_pass_rate"' in prompt and "GIẢ THUYẾT" in prompt
 
     normal = await planner.plan(Ticket(id="T-2", title="Sửa nút"), None)
     assert normal.startswith("Kế hoạch cho T-2")
