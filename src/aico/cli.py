@@ -99,6 +99,8 @@ async def _serve(settings: Settings) -> None:
                     c.librarian.run_forever(settings.knowledge_watch_seconds), name="librarian"
                 )
             )
+        if c.scan_scheduler is not None:
+            tasks.append(asyncio.create_task(c.scan_scheduler.run_forever(), name="rnd-scan"))
         if c.jira_sync is not None:
             tasks.append(
                 asyncio.create_task(c.jira_sync.run_forever(settings.poll_seconds), name="jira")

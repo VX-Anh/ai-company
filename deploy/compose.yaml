@@ -65,6 +65,8 @@ services:
       # AICO_PREVIEW_PROJECTS được dựng bản xem trước. Để trống REMOTE_SSH_TARGET thì tắt.
       AICO_REMOTE_URL: ${AICO_REMOTE_URL:-http://remote-runner:8500}
       AICO_PREVIEW_PROJECTS: ${AICO_PREVIEW_PROJECTS:-}
+      # Phòng R&D: dò công nghệ tự động mỗi N ngày khi hệ rảnh và hạn mức thấp; 0 (mặc định) là tắt.
+      AICO_RND_SCAN_INTERVAL_DAYS: ${AICO_RND_SCAN_INTERVAL_DAYS:-0}
       # Đồng bộ ticket sang Jira: tắt khi thiếu URL/email/ánh xạ hoặc secrets/jira_token rỗng.
       AICO_JIRA_URL: ${AICO_JIRA_URL:-}
       AICO_JIRA_EMAIL: ${AICO_JIRA_EMAIL:-}

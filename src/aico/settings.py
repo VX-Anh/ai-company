@@ -67,6 +67,8 @@ class Settings:
     preview_projects: tuple[str, ...] = ()
     # Chu kỳ (giây) kiểm tra branch đích của preview_projects để dựng lại bản chính; 0 là tắt.
     site_watch_seconds: float = 60
+    # Dò công nghệ tự động (Phòng R&D): mỗi N ngày, khi hệ rảnh và hạn mức còn thấp; 0 là tắt.
+    rnd_scan_interval_days: int = 0
     # Kho tri thức Phòng R&D: librarian dựng chỉ mục từ main mỗi knowledge_watch_seconds; agent
     # có tool knowledge.search/get và khối <knowledge> trong prompt. Rỗng là tắt.
     knowledge_project: str | None = "VX-Anh/aico-knowledge"
@@ -127,6 +129,7 @@ class Settings:
             remote_url=env.get("AICO_REMOTE_URL") or None,
             preview_projects=_list("AICO_PREVIEW_PROJECTS"),
             site_watch_seconds=float(env.get("AICO_SITE_WATCH_SECONDS", cls.site_watch_seconds)),
+            rnd_scan_interval_days=int(env.get("AICO_RND_SCAN_INTERVAL_DAYS", "0") or 0),
             knowledge_project=env.get("AICO_KNOWLEDGE_PROJECT", cls.knowledge_project or "")
             or None,
             knowledge_watch_seconds=float(

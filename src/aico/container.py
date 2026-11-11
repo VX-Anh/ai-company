@@ -69,6 +69,7 @@ from aico.orchestrator.ports import Analyst, Coder, Planner, Reviewer
 from aico.registry import Company, load_company
 from aico.rnd import KNOWLEDGE_ROLES, KnowledgeStore, Librarian, build_knowledge_server
 from aico.rnd.bench import candidates as bench_candidates
+from aico.rnd.scheduler import ScanPolicy, ScanScheduler
 from aico.rnd.scout import load_watchlist, scan_ticket
 from aico.settings import Settings
 from aico.tickets.postgres import PostgresTicketStore
@@ -89,6 +90,8 @@ class Container:
     jira_sync: JiraSync | None
     # Dựng lại bản chính khi main của repo xem trước đổi (cả merge ngoài aico); None khi tắt.
     site_watcher: SiteWatcher | None
+    # Tạo ticket dò công nghệ định kỳ khi rảnh (Phòng R&D); None khi tắt (mặc định).
+    scan_scheduler: ScanScheduler | None
     # Dựng lại chỉ mục tri thức khi main của kho tri thức đổi; None khi tắt.
     librarian: Librarian | None
     api: ApiDeps
@@ -405,6 +408,19 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 watchlist, today=utcnow().date(), days=days, project=settings.knowledge_project
             )
 
+        scan_scheduler: ScanScheduler | None = None
+        if settings.rnd_scan_interval_days > 0 and settings.knowledge_project:
+            if cli_agents is None:
+                log.warning("bỏ dò công nghệ tự động: cần worker CLI để đọc hạn mức các phòng")
+            else:
+                scan_scheduler = ScanScheduler(
+                    tickets,
+                    scan,
+                    cli_agents.statuses,
+                    ScanPolicy(interval_days=settings.rnd_scan_interval_days),
+                    utcnow,
+                )
+
         async def bench(days: int) -> list[dict[str, Any]]:
             return await bench_candidates(tickets, read_mr, since=utcnow() - timedelta(days=days))
 
@@ -416,6 +432,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             poller=poller,
             jira_sync=jira_sync,
             site_watcher=site_watcher,
+            scan_scheduler=scan_scheduler,
             librarian=librarian,
             api=ApiDeps(
                 tickets=tickets,
