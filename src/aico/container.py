@@ -65,6 +65,7 @@ from aico.orchestrator import (
 from aico.orchestrator.escalation import merge_escalated, retry_push
 from aico.orchestrator.ports import Analyst, Coder, Planner, Reviewer
 from aico.registry import Company, load_company
+from aico.rnd import KNOWLEDGE_ROLES, KnowledgeStore, Librarian, build_knowledge_server
 from aico.settings import Settings
 from aico.tickets.postgres import PostgresTicketStore
 from aico.tools import Guard, McpToolClient, ToolGateway, read_whole_file
@@ -84,6 +85,8 @@ class Container:
     jira_sync: JiraSync | None
     # Dựng lại bản chính khi main của repo xem trước đổi (cả merge ngoài aico); None khi tắt.
     site_watcher: SiteWatcher | None
+    # Dựng lại chỉ mục tri thức khi main của kho tri thức đổi; None khi tắt.
+    librarian: Librarian | None
     api: ApiDeps
     relay_app: FastAPI
     bridge_app: Starlette
@@ -115,6 +118,9 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
     try:
         tickets = PostgresTicketStore(pool)
         approvals = PostgresApprovalStore(pool)
+        # Kho tri thức (Phòng R&D GĐ2): tool knowledge chạy trong tiến trình, vẫn qua guard/audit.
+        knowledge_on = bool(settings.knowledge_project) and "librarian" in company.roles
+        knowledge = KnowledgeStore(pool) if knowledge_on else None
         gateway = ToolGateway(
             company,
             Guard(company.policy, approvals),
@@ -122,8 +128,14 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 {"gitlab": settings.mcp_gitlab_url}
                 | ({"pixel": settings.mcp_pixel_url} if settings.mcp_pixel_url else {})
                 | ({"rea": settings.mcp_rea_url} if settings.mcp_rea_url else {})
+                | ({"knowledge": build_knowledge_server(knowledge)} if knowledge else {})
             ),
             PostgresAuditLog(pool),
+        )
+        librarian = (
+            Librarian(knowledge, gateway, settings.knowledge_project)
+            if knowledge is not None and settings.knowledge_project
+            else None
         )
         tokens = TaskTokens()
         relay_app = create_relay_app(
@@ -162,6 +174,8 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                     usage_tight_percent=settings.usage_tight_percent,
                     slow_workers=settings.slow_workers,
                     http_client=worker_client,
+                    knowledge=knowledge.prompt_block if knowledge is not None else None,
+                    knowledge_roles=KNOWLEDGE_ROLES,
                 ),
             )
         if settings.planner == "cli" and cli_agents is not None:
@@ -372,6 +386,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             poller=poller,
             jira_sync=jira_sync,
             site_watcher=site_watcher,
+            librarian=librarian,
             api=ApiDeps(
                 tickets=tickets,
                 approvals=approvals,
@@ -384,6 +399,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 merge_escalated=merge_escalated_ticket,
                 retry_push=retry_push_ticket,
                 preview=preview_ticket if previewer is not None else None,
+                knowledge=knowledge,
             ),
             relay_app=relay_app,
             bridge_app=bridge_app,

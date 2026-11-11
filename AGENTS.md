@@ -32,6 +32,9 @@ src/aico/agents         cli_agent: giao việc cho worker (CliAgentRunner, CliCo
 src/aico/tools          guard, gateway (audit), bridge (MCP cho worker, token theo task)
 src/aico/governance     bản ghi duyệt, audit, kiểm tra duyệt merge
 src/aico/api            REST API cho người và GUI (/tickets, /workers)
+src/aico/rnd            Phòng R&D GĐ2: đọc thẻ tri thức (cards), chỉ mục Postgres kn_* (store),
+                        librarian dựng lại khi main của kho tri thức đổi, MCP knowledge trong tiến
+                        trình (search_knowledge, get_knowledge), khối <knowledge> cho prompt
 src/aico/jira           đồng bộ một chiều ticket -> Jira (issue, trạng thái, nhãn chờ người, link PR)
 src/aico/llm_relay      model relay (token theo task, ngân sách)
 mcp_servers/gitlab      MCP server Git (GitHub backend mặc định, MR = PR)

@@ -20,6 +20,9 @@ tools:
     allow: [read_file]
     constraints:
       repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien, VX-Anh/ai-trace, VX-Anh/aico-knowledge]
+  # Tri thức đã duyệt của Phòng R&D (tìm, đọc thẻ); không có tool ghi.
+  - server: knowledge
+    allow: [search_knowledge, get_knowledge]
 max_risk: L0
 limits:
   max_iterations: 40

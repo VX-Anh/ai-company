@@ -19,7 +19,10 @@ from aico.tickets.postgres import PostgresTicketStore
 ROOT = Path(__file__).resolve().parents[1]
 COMPANY_DIR = ROOT / "company"
 
-_TABLES = "audit_log, budget_reservations, approvals, ticket_events, tickets"
+_TABLES = (
+    "audit_log, budget_reservations, approvals, ticket_events, tickets,"
+    " kn_nodes, kn_edges, kn_sources, kn_usage, kn_builds"
+)
 
 
 def pytest_asyncio_loop_factories(config: object, item: object) -> dict[str, object]:
