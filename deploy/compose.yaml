@@ -85,6 +85,22 @@ services:
       remote-runner: {condition: service_started}
     restart: unless-stopped
 
+  # Instance chạy lại của Phòng R&D (R1): chỉ nhận ticket nhãn eval, cấu hình công ty là thư mục
+  # biến thể (AICO_EVAL_COMPANY_DIR, mặc định company/ hiện tại = baseline). Không mở cổng ra máy,
+  # không chạy intake/Jira/site watcher. Chỉ bật khi đo: docker compose --profile eval up -d aico-eval
+  aico-eval:
+    extends: {service: aico}
+    profiles: [eval]
+    command: ["aico", "serve"]
+    environment:
+      AICO_EVAL_INSTANCE: "1"
+      AICO_COMPANY_DIR: /app/eval-company
+      AICO_BRIDGE_URL: http://aico-eval:8300/mcp   # worker gọi tool qua bridge của instance này
+      AICO_RND_SCAN_INTERVAL_DAYS: "0"
+    volumes:
+      - ${AICO_EVAL_COMPANY_DIR:-../company}:/app/eval-company:ro
+    ports: !reset []
+
   mcp-gitlab:
     build:
       context: ..

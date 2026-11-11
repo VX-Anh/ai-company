@@ -208,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
                 text = (
                     sys.stdin.read() if args.suite == "-" else Path(args.suite).read_text("utf-8")
                 )
-                suite = json.loads(text)
+                suite = json.loads(text) if text.strip() else []  # stdin trống: không có bộ chuẩn
             return _run(_eval(settings, args, suite))
         except ValueError as exc:  # EvalError, JSON hỏng
             print(f"LỖI: {exc}", file=sys.stderr)

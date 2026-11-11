@@ -1,8 +1,30 @@
 # Thiết kế R1: chạy lại ticket cũ để đo thay đổi của aico
 
-Trạng thái: **bản đề xuất, chờ owner duyệt** (2026-11-12). Phần này sửa lõi orchestrator nên
-chưa code; các mảnh nền đã có trên nhánh `rnd-r0` (event `job`, `/rnd/metrics`, `/rnd/bench`,
-mốc `base_sha`/`merge_commit_sha` của MR).
+Trạng thái (2026-11-12): **đã code trên nhánh `rnd-r1`** (tách từ `rnd-r0`), theo mặc định ở
+mục 6 (branch `eval/*` trên repo thật, không fork). Owner duyệt nhánh này riêng; `rnd-r0` merge
+được độc lập. Chưa chạy thật: cần merge, deploy, bật `aico-eval`.
+
+**Cách dùng (sau khi merge + deploy):**
+
+```bash
+# 1. Bộ chuẩn: lấy ứng viên, chọn 10–15 mục, lưu suite.json (giữ trường base_sha, observed)
+aico-ops bench 90 > suite.json
+# 2. Biến thể: thư mục company/ đã sửa (prompt, workers, limits), đặt trong .env
+#    AICO_EVAL_COMPANY_DIR=/đường/dẫn/biến-thể   (để trống = company/ hiện tại = baseline)
+docker compose --profile eval up -d aico-eval
+# 3. Chạy: mỗi mục 2 lần
+aico-ops eval-start baseline 2 < suite.json
+# 4. Xem, rồi đóng các ticket đã chấm
+aico-ops eval-report baseline < suite.json
+aico-ops eval-report baseline --close
+```
+
+Đã làm: nhãn + artifact `eval`, `workplan.ticket_refs` (nhánh `eval/<id>` từ commit gốc, MR vào
+`eval/base/<id>`), `TicketStore.claim(eval_only)`, `AICO_EVAL_INSTANCE`, luật `eval = low`,
+mcp-gitlab/guard nhiều mẫu nhánh và ref SHA, `aico eval start|report`, service `aico-eval`
+(profile `eval`), chỉ số chung không tính ticket eval. Chưa làm: chấm acceptance (build/test trên
+máy build) tự động; dọn branch `eval/*` sau khi chấm; trần hạn mức riêng cho eval (hiện chỉ dựa
+vào việc owner bật/tắt `aico-eval`); `base_sha` nên là merge-base (compare API).
 
 ## 1. Mục tiêu
 
