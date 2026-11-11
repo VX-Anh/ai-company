@@ -871,7 +871,8 @@ class _Handler(BaseHTTPRequestHandler):
                 return
             agent_id = self.stats.start(job, _now())
             result = run_job(job, self.kind, lambda a: self.stats.update(agent_id, a))
-            self.stats.finish(agent_id, result, tuple(result.pop("tokens")), _now())
+            # tokens giữ trong kết quả để aico ghi event `job` (đo token theo vai trò, phòng).
+            self.stats.finish(agent_id, result, tuple(result["tokens"]), _now())
             self.usage.poke()
             self._reply(200, {**result, "agent_id": agent_id})
         except (ValueError, KeyError) as exc:

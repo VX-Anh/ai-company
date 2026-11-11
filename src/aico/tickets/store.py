@@ -68,6 +68,12 @@ class TicketStore(Protocol):
 
     async def events(self, ticket_id: str) -> list[Event]: ...
 
+    async def record(
+        self, ticket_id: str, kind: str, *, actor: str, data: dict[str, Any]
+    ) -> None:
+        """Ghi event không đổi ticket (vd `job`: một lần giao việc cho worker, để đo hiệu năng)."""
+        ...
+
     async def overdue_approvals(self, now: datetime) -> list[Ticket]: ...
 
 
@@ -171,6 +177,14 @@ class InMemoryTicketStore:
             return self._put(
                 ticket.model_copy(update={"artifacts": [*ticket.artifacts, artifact]}), event
             )
+
+    async def record(
+        self, ticket_id: str, kind: str, *, actor: str, data: dict[str, Any]
+    ) -> None:
+        async with self._lock:
+            self._get(ticket_id)
+            event = Event(ticket_id=ticket_id, kind=kind, actor=actor, data=_jsonable(data))
+            self._events.setdefault(ticket_id, []).append(event)
 
     async def set_pending_resume(
         self, ticket_id: str, payload: dict[str, Any], *, actor: str

@@ -163,6 +163,9 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                     slow_workers=settings.slow_workers,
                     http_client=worker_client,
                 ),
+                on_job=lambda ticket_id, data: tickets.record(
+                    ticket_id, "job", actor=str(data.get("role") or "aico"), data=data
+                ),
             )
         if settings.planner == "cli" and cli_agents is not None:
             planner = LlmPlanner(cli_agents, role_id=sop.steps["plan"])

@@ -10,6 +10,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import difflib
+import hashlib
 import io
 import logging
 import tarfile
@@ -36,6 +37,49 @@ from aico.tools import ToolError, ToolGateway
 
 log = logging.getLogger(__name__)
 
+# Nơi ghi một lần giao việc (event `job`): (ticket_id, dữ liệu) -> None. Lỗi khi ghi không được
+# làm hỏng job, nên runner nuốt và ghi log.
+JobSink = Callable[[str, dict[str, Any]], Awaitable[None]]
+
+
+def prompt_sha(text: str) -> str:
+    """Dấu vân tay ngắn của prompt vai trò: so trước–sau khi đổi prompt mà không lưu nguyên văn."""
+    return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
+
+
+def job_record(
+    *,
+    role_id: str,
+    mode: str,
+    room: str,
+    system_prompt: str,
+    outcome: Mapping[str, Any],
+    critical: bool,
+) -> dict[str, Any]:
+    """Dữ liệu của event `job`: đủ để tính chỉ số theo vai trò, phòng, phiên bản prompt."""
+    tokens = outcome.get("tokens")
+    tokens_in, tokens_out = (
+        (int(tokens[0] or 0), int(tokens[1] or 0))
+        if isinstance(tokens, (list, tuple)) and len(tokens) == 2
+        else (None, None)
+    )
+    ok = "error" not in outcome
+    record: dict[str, Any] = {
+        "role": role_id,
+        "mode": mode,
+        "room": room,
+        "prompt_sha": prompt_sha(system_prompt),
+        "ok": ok,
+        "critical": critical,
+        "tokens_in": tokens_in,
+        "tokens_out": tokens_out,
+        "duration_seconds": outcome.get("duration_seconds"),
+    }
+    if not ok:
+        record["error"] = str(outcome.get("error") or "")[:300]
+        record["limited"] = bool(outcome.get("limited"))
+    return record
+
 
 class WorkerUnavailable(AgentUnavailable):
     """Không worker nào của vai trò nhận hoặc làm xong việc."""
@@ -57,10 +101,18 @@ class CliSettings:
 
 
 class CliAgentRunner:
-    def __init__(self, company: Company, tokens: TaskTokens, settings: CliSettings) -> None:
+    def __init__(
+        self,
+        company: Company,
+        tokens: TaskTokens,
+        settings: CliSettings,
+        *,
+        on_job: JobSink | None = None,
+    ) -> None:
         self._company = company
         self._tokens = tokens
         self._settings = settings
+        self._on_job = on_job
         self._client = settings.http_client or httpx.AsyncClient()
         self._ranks: tuple[float, dict[str, int]] = (float("-inf"), {})
 
@@ -120,6 +172,8 @@ class CliAgentRunner:
                 errors: list[str] = []
                 for name in order:
                     outcome = await self._try(name, job, timeout)
+                    if outcome is not None:
+                        await self._record(ticket, role_id, mode, name, job, outcome, critical)
                     if outcome is not None and "error" not in outcome:
                         return {**outcome, "worker": name}
                     if outcome is not None:
@@ -131,6 +185,31 @@ class CliAgentRunner:
                 await asyncio.sleep(self._settings.busy_wait_seconds)
         finally:
             self._tokens.revoke(token)
+
+    async def _record(
+        self,
+        ticket: Ticket,
+        role_id: str,
+        mode: str,
+        room: str,
+        job: Mapping[str, Any],
+        outcome: Mapping[str, Any],
+        critical: bool,
+    ) -> None:
+        if self._on_job is None:
+            return
+        data = job_record(
+            role_id=role_id,
+            mode=mode,
+            room=room,
+            system_prompt=str(job.get("system_prompt") or ""),
+            outcome=outcome,
+            critical=critical,
+        )
+        try:
+            await self._on_job(ticket.id, data)
+        except Exception as exc:  # số liệu đo không được làm hỏng job thật
+            log.warning("ticket %s: không ghi được event job: %s", ticket.id, exc)
 
     async def _try(
         self, name: str, job: dict[str, Any], wait_seconds: float
