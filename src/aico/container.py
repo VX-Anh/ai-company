@@ -67,7 +67,7 @@ from aico.orchestrator.ports import Analyst, Coder, Planner, Reviewer
 from aico.registry import Company, load_company
 from aico.settings import Settings
 from aico.tickets.postgres import PostgresTicketStore
-from aico.tools import Guard, McpToolClient, ToolError, ToolGateway
+from aico.tools import Guard, McpToolClient, ToolGateway, read_whole_file
 from aico.tools.bridge import ToolBridge, create_tool_bridge_app
 
 log = logging.getLogger(__name__)
@@ -354,19 +354,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             exit_stack.push_async_callback(jira_client.aclose)
 
             async def read_repo_file(project: str, path: str) -> str | None:
-                try:
-                    result = await gateway.call(
-                        "intake",
-                        "gitlab",
-                        "read_file",
-                        {"project": project, "path": path},
-                        ticket_id=None,
-                    )
-                except ToolError as exc:
-                    if "404" in str(exc) or "không có file" in str(exc):
-                        return None
-                    raise
-                return str(result.get("content", ""))
+                return await read_whole_file(gateway, "intake", project, path)
 
             jira_sync = JiraSync(
                 jira_client,

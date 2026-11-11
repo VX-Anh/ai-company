@@ -14,6 +14,7 @@ from aico.tools import (
     ToolGateway,
     Verdict,
     check_branch,
+    read_whole_file,
 )
 from mcp_gitlab.backend import FakeGitLabBackend
 from mcp_gitlab.server import build_server
@@ -190,3 +191,23 @@ async def test_mcp_client_nhan_ket_qua_lon_hon_1mb_qua_sse(monkeypatch: pytest.M
         finally:
             server.should_exit = True
     assert len(str(result["data"])) == 2_000_000
+
+
+async def test_read_whole_file_joins_pages(
+    company: Company, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Code của aico (JiraSync) vẫn nhận trọn file dù read_file trả từng đoạn."""
+    monkeypatch.setattr("mcp_gitlab.tools.MAX_READ_CHARS", 40)
+    backend = FakeGitLabBackend()
+    text = "".join(f"- [ ] S06-T{i}: việc số {i}\n" for i in range(1, 31))
+    backend.project(PROJECT).files["main"]["docs/delivery/sprint-06.md"] = text
+    server = build_server(GitLabTools(backend, Constraints(allowed_projects=(PROJECT,))))
+    gateway = ToolGateway(
+        company,
+        Guard(company.policy, InMemoryApprovalStore()),
+        McpToolClient({"gitlab": server}),
+        InMemoryAuditLog(),
+    )
+    got = await read_whole_file(gateway, "tech_lead", PROJECT, "docs/delivery/sprint-06.md")
+    assert got == text
+    assert await read_whole_file(gateway, "tech_lead", PROJECT, "khong-co.md") is None

@@ -13,6 +13,9 @@ from mcp_gitlab.backend import GitLabBackend, GitLabError
 
 IDEMPOTENCY_TRAILER = "Idempotency-Key:"
 MAX_ARCHIVE_BYTES = 25_000_000
+# Ký tự tối đa mỗi lần read_file. Tiếng Việt tốn khoảng 1 token mỗi 1,5–2 ký tự; 30.000 ký tự
+# nằm dưới mức 25.000 token mà Claude Code chấp nhận cho một kết quả tool MCP.
+MAX_READ_CHARS = 30_000
 
 # (approval_id, project, mr_iid) -> (hợp lệ, lý do)
 ApprovalVerifier = Callable[[str, str, int], Awaitable[tuple[bool, str]]]
@@ -64,13 +67,48 @@ class GitLabTools:
         self._c = constraints
         self._verify = verify_approval
 
-    async def read_file(self, project: str, path: str, ref: str = "main") -> dict[str, Any]:
+    async def read_file(
+        self,
+        project: str,
+        path: str,
+        ref: str = "main",
+        offset: int = 1,
+        limit: int | None = None,
+    ) -> dict[str, Any]:
+        """Đọc file theo dòng: offset tính từ 1, limit là số dòng tối đa.
+
+        Mỗi lần trả tối đa MAX_READ_CHARS ký tự: file lớn hơn mà trả nguyên thì CLI của agent
+        từ chối kết quả và agent không đọc được gì. Khi bị cắt, `next_offset` cho biết gọi tiếp
+        từ dòng nào.
+        """
         self._c.check_project(project)
-        return {
+        if offset < 1:
+            raise ValueError("offset tính từ 1")
+        if limit is not None and limit < 1:
+            raise ValueError("limit phải từ 1")
+        lines = (await self._backend.get_file(project, path, ref)).splitlines(keepends=True)
+        start = min(offset - 1, len(lines))
+        stop = len(lines) if limit is None else min(start + limit, len(lines))
+        end, size = start, 0
+        while end < stop and (end == start or size + len(lines[end]) <= MAX_READ_CHARS):
+            size += len(lines[end])
+            end += 1
+        content = "".join(lines[start:end])
+        if len(content) > MAX_READ_CHARS:  # một dòng quá dài: cắt dòng đó
+            content = content[:MAX_READ_CHARS]
+        result: dict[str, Any] = {
             "path": path,
             "ref": ref,
-            "content": await self._backend.get_file(project, path, ref),
+            "content": content,
+            "total_lines": len(lines),
         }
+        if start > 0 or end < len(lines):
+            result["lines"] = [start + 1, end]
+        if end < len(lines):
+            result["next_offset"] = end + 1
+        if end < stop:  # bị cắt vì giới hạn ký tự, không phải vì limit
+            result["truncated"] = True
+        return result
 
     async def download_archive(self, project: str, ref: str = "main") -> dict[str, Any]:
         """Mã nguồn tại ref (tar.gz, base64) để worker sửa code trong thư mục tạm."""

@@ -181,3 +181,32 @@ class ToolGateway:
             AuditEntry(decision="allow", result_summary=_summary(result), **entry)
         )
         return result
+
+
+async def read_whole_file(
+    gateway: ToolGateway, role_id: str, project: str, path: str, *, ref: str = "main"
+) -> str | None:
+    """Đọc trọn file qua read_file (tool trả từng đoạn theo dòng); file không có thì None.
+
+    Dùng cho code của aico cần cả file (ví dụ JiraSync đọc sprint-NN.md); agent tự đọc theo đoạn.
+    """
+    parts: list[str] = []
+    offset = 1
+    while True:
+        try:
+            result = await gateway.call(
+                role_id,
+                "gitlab",
+                "read_file",
+                {"project": project, "path": path, "ref": ref, "offset": offset},
+                ticket_id=None,
+            )
+        except ToolError as exc:
+            if "404" in str(exc) or "không có file" in str(exc):
+                return None
+            raise
+        parts.append(str(result.get("content", "")))
+        nxt = result.get("next_offset")
+        if not isinstance(nxt, int) or nxt <= offset:
+            return "".join(parts)
+        offset = nxt

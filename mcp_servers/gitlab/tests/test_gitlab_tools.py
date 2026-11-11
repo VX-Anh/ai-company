@@ -96,6 +96,15 @@ async def test_mcp_server_exposes_tools() -> None:
         assert not result.is_error
         assert result.structured_content is not None
         assert result.structured_content["content"] == "print('hi')\n"
+        paged = await client.call_tool(
+            "read_file", {"project": PROJECT, "path": "app.py", "offset": 2, "limit": 5}
+        )
+        page = paged.structured_content
+        assert page is not None and page["content"] == "" and page["total_lines"] == 1
+        bad = await client.call_tool(
+            "read_file", {"project": PROJECT, "path": "app.py", "offset": 0}
+        )
+        assert bad.is_error
         denied = await client.call_tool("read_file", {"project": "evil/repo", "path": "x"})
         assert denied.is_error
 
@@ -108,3 +117,46 @@ async def test_branch_head_returns_latest_commit() -> None:
     assert await tools.branch_head(PROJECT) == {"project": PROJECT, "ref": "main", "sha": "b2"}
     with pytest.raises(ConstraintError):
         await tools.branch_head("other/repo")
+
+
+async def test_read_file_pages_by_line() -> None:
+    tools, backend = _tools()
+    backend.project(PROJECT).files["main"]["doc.md"] = "".join(f"dòng {i}\n" for i in range(1, 11))
+    whole = await tools.read_file(PROJECT, "doc.md")
+    assert whole["total_lines"] == 10 and "truncated" not in whole and "lines" not in whole
+    part = await tools.read_file(PROJECT, "doc.md", offset=3, limit=2)
+    assert part["content"] == "dòng 3\ndòng 4\n"
+    assert part["lines"] == [3, 4] and part["next_offset"] == 5 and "truncated" not in part
+    tail = await tools.read_file(PROJECT, "doc.md", offset=9, limit=50)
+    assert tail["content"] == "dòng 9\ndòng 10\n" and "truncated" not in tail
+    past = await tools.read_file(PROJECT, "doc.md", offset=99)
+    assert past["content"] == "" and past["total_lines"] == 10
+    with pytest.raises(ValueError):
+        await tools.read_file(PROJECT, "doc.md", offset=0)
+    with pytest.raises(ValueError):
+        await tools.read_file(PROJECT, "doc.md", limit=0)
+
+
+async def test_read_file_caps_large_file_and_continues(monkeypatch: pytest.MonkeyPatch) -> None:
+    """File lớn hơn giới hạn: trả từng đoạn trọn dòng, đọc hết bằng next_offset."""
+    monkeypatch.setattr("mcp_gitlab.tools.MAX_READ_CHARS", 50)
+    tools, backend = _tools()
+    text = "".join(f"Quy tắc số {i:02d} của dự án\n" for i in range(1, 21))
+    backend.project(PROJECT).files["main"]["AGENTS.md"] = text
+    pieces, offset = [], 1
+    while True:
+        r = await tools.read_file(PROJECT, "AGENTS.md", offset=offset)
+        assert len(r["content"]) <= 50 and r["content"].endswith("\n")
+        pieces.append(r["content"])
+        if not r.get("truncated"):
+            break
+        offset = r["next_offset"]
+    assert "".join(pieces) == text and len(pieces) > 1
+
+
+async def test_read_file_cuts_single_overlong_line(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("mcp_gitlab.tools.MAX_READ_CHARS", 10)
+    tools, backend = _tools()
+    backend.project(PROJECT).files["main"]["min.js"] = "x" * 100 + "\nsau\n"
+    r = await tools.read_file(PROJECT, "min.js")
+    assert r["content"] == "x" * 10 and r["next_offset"] == 2

@@ -41,9 +41,18 @@ async def _anticipated(call: Awaitable[dict[str, Any]]) -> dict[str, Any]:
 def build_server(tools: GitLabTools) -> MCPServer:
     server = MCPServer(name="gitlab", instructions="Tool GitLab của AI Company OS.")
 
-    @server.tool(description="Đọc nội dung một file tại ref.")
-    async def read_file(project: str, path: str, ref: str = "main") -> dict[str, Any]:
-        return await _anticipated(tools.read_file(project, path, ref))
+    @server.tool(
+        description=(
+            "Đọc nội dung một file tại ref, theo dòng. offset: dòng bắt đầu (từ 1), limit: số dòng."
+            " Mỗi lần trả tối đa khoảng 30.000 ký tự (truncated=true khi bị cắt vì giới hạn này)."
+            " Còn dòng chưa đọc thì có next_offset: gọi lại với offset=next_offset để đọc tiếp."
+            " total_lines là tổng số dòng."
+        )
+    )
+    async def read_file(
+        project: str, path: str, ref: str = "main", offset: int = 1, limit: int | None = None
+    ) -> dict[str, Any]:
+        return await _anticipated(tools.read_file(project, path, ref, offset, limit))
 
     @server.tool(description="Tải mã nguồn tại ref (tar.gz, base64) cho worker sửa code.")
     async def download_archive(project: str, ref: str = "main") -> dict[str, Any]:
