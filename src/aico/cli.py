@@ -1,4 +1,4 @@
-"""aico migrate | check-config | serve"""
+"""aico migrate | check-config | serve | check-selfimprove | eval"""
 
 from __future__ import annotations
 
@@ -35,6 +35,31 @@ async def _migrate(settings: Settings) -> None:
     applied = await migrate(settings.database_url)
     await setup_checkpointer(settings.database_url)
     print("đã áp migration:", ", ".join(applied) or "(không có gì mới)")
+
+
+async def _eval(settings: Settings, args: argparse.Namespace, suite: list[dict[str, Any]]) -> int:
+    """aico eval start|report: chạy lại bộ ticket chuẩn với một biến thể (Phòng R&D, R1)."""
+    import json
+
+    from aico.db import create_pool
+    from aico.rnd import evalrun
+    from aico.tickets.postgres import PostgresTicketStore
+
+    pool = create_pool(settings.database_url)
+    await pool.open()
+    try:
+        store = PostgresTicketStore(pool)
+        if args.eval_cmd == "start":
+            created = await evalrun.start(store, suite, args.variant, args.repeat)
+            for tid, new in created:
+                print(tid, "mới" if new else "đã có")
+            return 0
+        observed = {str(i["id"]): i.get("observed") or {} for i in suite if "id" in i}
+        result = await evalrun.report(store, args.variant, observed=observed, close=args.close)
+        print(json.dumps(result, ensure_ascii=False, indent=1))
+        return 0
+    finally:
+        await pool.close()
 
 
 async def _deadlines(container: Any, every: float = 60) -> None:
@@ -141,6 +166,16 @@ def main(argv: list[str] | None = None) -> int:
     )
     guard.add_argument("--base", default="origin/main", help="ref đích của PR")
     guard.add_argument("--head", default="HEAD", help="ref của PR (chỉ đọc object Git)")
+    ev = sub.add_parser("eval", help="chạy lại bộ ticket chuẩn với một biến thể (Phòng R&D)")
+    ev_sub = ev.add_subparsers(dest="eval_cmd", required=True)
+    ev_start = ev_sub.add_parser("start", help="tạo ticket eval từ bộ chuẩn (JSON của /rnd/bench)")
+    ev_start.add_argument("--variant", required=True)
+    ev_start.add_argument("--suite", required=True, help="file JSON hoặc - (stdin)")
+    ev_start.add_argument("--repeat", type=int, default=2, help="số lần chạy mỗi ticket")
+    ev_report = ev_sub.add_parser("report", help="kết quả của biến thể")
+    ev_report.add_argument("--variant", required=True)
+    ev_report.add_argument("--suite", help="bộ chuẩn để so với số liệu chạy thật")
+    ev_report.add_argument("--close", action="store_true", help="đóng ticket đã chấm")
     args = parser.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):
         if isinstance(stream, io.TextIOWrapper):
@@ -164,6 +199,20 @@ def main(argv: list[str] | None = None) -> int:
         print("OK" if not problems else f"LỖI: {len(problems)} thay đổi ngoài phạm vi")
         return 1 if problems else 0
     settings = Settings.from_env()
+    if args.cmd == "eval":
+        import json
+
+        try:
+            suite: list[dict[str, Any]] = []
+            if args.suite:
+                text = (
+                    sys.stdin.read() if args.suite == "-" else Path(args.suite).read_text("utf-8")
+                )
+                suite = json.loads(text)
+            return _run(_eval(settings, args, suite))
+        except ValueError as exc:  # EvalError, JSON hỏng
+            print(f"LỖI: {exc}", file=sys.stderr)
+            return 1
     if args.cmd == "migrate":
         _run(_migrate(settings))
     else:

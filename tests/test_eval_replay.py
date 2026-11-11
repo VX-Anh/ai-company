@@ -76,3 +76,54 @@ async def test_eval_ticket_cannot_merge_or_retry_push(company: Company) -> None:
         await merge_escalated(h.tickets, h.approvals, h.gateway, "T-1", actor="owner")
     with pytest.raises(EscalationError, match="không đẩy lại"):
         await retry_push(h.tickets, h.gateway, "T-1", actor="owner", code_role="coder")
+
+
+SUITE = [
+    {
+        "id": "T-old",
+        "project": PROJECT,
+        "title": "Sửa nút",
+        "body": "đề bài cũ",
+        "labels": ["ui"],
+        "base_sha": "main",
+        "observed": {"code_rounds": 2, "review_rounds": 2},
+    },
+    {"id": "T-skip", "skipped": "không đọc được MR"},
+]
+
+
+async def test_eval_start_is_idempotent_and_report_groups_runs(company: Company) -> None:
+    import pytest
+
+    from aico.rnd import evalrun
+
+    h = make_harness(company, eval_only=True)
+    created = await evalrun.start(h.tickets, SUITE, "thu-prompt", repeat=2)
+    assert [new for _, new in created] == [True, True]
+    again = await evalrun.start(h.tickets, SUITE, "thu-prompt", repeat=2)
+    assert [new for _, new in again] == [False, False]
+    t = await h.tickets.get(created[0][0])
+    assert t.labels == ["ui", "eval"] and t.title.startswith("[eval thu-prompt]")
+    assert eval_spec(t) == ("thu-prompt", "main")
+    with pytest.raises(evalrun.EvalError):
+        evalrun.eval_tickets(SUITE, "Tên Sai")
+
+    # Chưa chạy: báo đang chạy, chưa có kết quả.
+    pending = await evalrun.report(h.tickets, "thu-prompt")
+    assert pending["running"] == 2 and pending["total"] == {"runs": 0}
+
+    h.gitlab.project(PROJECT).files["main"]["app.py"] = "x\n"
+    await h.runner.run_until_idle()
+    observed = {"T-old": SUITE[0]["observed"]}
+    result = await evalrun.report(h.tickets, "thu-prompt", observed=observed, close=True)
+    assert result["running"] == 0 and result["total"]["runs"] == 2
+    line = result["tickets"][0]
+    assert line["origin"] == "T-old" and line["runs"] == 2 and line["pass_rate"] == 1.0
+    assert line["observed"] == {"code_rounds": 2, "review_rounds": 2}
+    # --close: đóng lượt (từ chối merge), ticket thành escalated, vẫn tính là đạt.
+    await h.runner.run_until_idle()
+    assert {(await h.tickets.get(tid)).status for tid, _ in created} == {S.ESCALATED}
+    closed = await evalrun.report(h.tickets, "thu-prompt")
+    assert closed["total"]["pass_rate"] == 1.0
+    # Biến thể khác không lẫn.
+    assert (await evalrun.report(h.tickets, "khac"))["total"] == {"runs": 0}
