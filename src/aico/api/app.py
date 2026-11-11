@@ -58,6 +58,8 @@ class ApiDeps:
     knowledge: KnowledgeStore | None = None
     # Ứng viên bộ ticket chuẩn của R&D: (số ngày) -> danh sách; None khi không có gateway Git.
     bench: Callable[[int], Awaitable[list[dict[str, Any]]]] | None = None
+    # Ticket dò công nghệ dựng từ company/rnd/watchlist.yaml: (số ngày) -> dữ liệu POST /tickets.
+    scan_ticket: Callable[[int], dict[str, Any]] | None = None
 
 
 class CreateTicket(BaseModel):
@@ -231,6 +233,16 @@ def create_api_app(deps: ApiDeps) -> FastAPI:
         if deps.bench is None:
             raise HTTPException(501, "chưa cấu hình đọc MR (gateway Git)")
         return await deps.bench(days)
+
+    @app.get("/rnd/scan-ticket", dependencies=user)
+    async def rnd_scan_ticket(days: Annotated[int, Query(ge=1, le=90)] = 7) -> dict[str, Any]:
+        """Ticket research dò các nguồn trong watchlist (chưa tạo; gửi lại vào POST /tickets)."""
+        if deps.scan_ticket is None:
+            raise HTTPException(501, "chưa bật kho tri thức (AICO_KNOWLEDGE_PROJECT)")
+        try:
+            return deps.scan_ticket(days)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
 
     @app.get("/internal/approvals/{approval_id}", dependencies=[Depends(require_internal)])
     async def verify_approval(

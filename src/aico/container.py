@@ -69,6 +69,7 @@ from aico.orchestrator.ports import Analyst, Coder, Planner, Reviewer
 from aico.registry import Company, load_company
 from aico.rnd import KNOWLEDGE_ROLES, KnowledgeStore, Librarian, build_knowledge_server
 from aico.rnd.bench import candidates as bench_candidates
+from aico.rnd.scout import load_watchlist, scan_ticket
 from aico.settings import Settings
 from aico.tickets.postgres import PostgresTicketStore
 from aico.tools import Guard, McpToolClient, ToolGateway, read_whole_file
@@ -397,6 +398,13 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 ticket_id=None,
             )
 
+        def scan(days: int) -> dict[str, Any]:
+            assert settings.knowledge_project
+            watchlist = load_watchlist(settings.company_dir / "rnd" / "watchlist.yaml")
+            return scan_ticket(
+                watchlist, today=utcnow().date(), days=days, project=settings.knowledge_project
+            )
+
         async def bench(days: int) -> list[dict[str, Any]]:
             return await bench_candidates(tickets, read_mr, since=utcnow() - timedelta(days=days))
 
@@ -422,6 +430,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 retry_push=retry_push_ticket,
                 preview=preview_ticket if previewer is not None else None,
                 bench=bench,
+                scan_ticket=scan if settings.knowledge_project else None,
                 knowledge=knowledge,
             ),
             relay_app=relay_app,

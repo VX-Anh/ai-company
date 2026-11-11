@@ -1,0 +1,38 @@
+# Nguồn theo dõi của Phòng R&D (dò công nghệ cho tự cải tiến aico và dự án mới).
+# Owner sửa file này qua PR; PR tự cải tiến (nhánh rnd/*) không được sửa (aico check-selfimprove).
+# Dùng bởi `aico-ops scan [ngày]`: dựng ticket research dò các nguồn dưới đây trong N ngày gần nhất.
+
+# Mục tiêu: mỗi phát hiện phải gắn với một mục tiêu để thành giả thuyết đo được.
+goals:
+  - id: aico
+    text: >-
+      Tự cải tiến hệ agent aico: Claude Code, Codex CLI, Cursor CLI chạy headless trong worker,
+      LangGraph điều phối, tool qua MCP; chỉ số: tỷ lệ đạt ngay vòng đầu, vòng review, người
+      trả lại, token, thời gian, hết hạn mức.
+  - id: products
+    text: >-
+      Dự án code đang làm: aico-office (GUI web pixel, Vite + TypeScript), linh-hoa-vien (game web
+      merge/idle), ai-trace (công cụ truy vết hệ AI event-driven).
+
+# Repo GitHub công khai: đọc bản phát hành bằng tool github_releases.
+release_repos:
+  - {repo: anthropics/claude-code, goal: aico}
+  - {repo: openai/codex, goal: aico}
+  - {repo: langchain-ai/langgraph, goal: aico}
+  - {repo: modelcontextprotocol/modelcontextprotocol, goal: aico}
+  - {repo: modelcontextprotocol/python-sdk, goal: aico}
+  - {repo: vitejs/vite, goal: products}
+
+# Trang changelog không có trên GitHub release: đọc bằng fetch_url.
+changelog_urls:
+  - {url: "https://github.com/anthropics/claude-code/blob/main/CHANGELOG.md", goal: aico}
+  - {url: "https://cursor.com/changelog", goal: aico}
+
+# Tìm repo mới nổi (xu hướng) bằng github_search_repos với created_after = đầu kỳ dò.
+search_queries:
+  - {query: "coding agent", goal: aico}
+  - {query: "multi-agent orchestration", goal: aico}
+  - {query: "agent evaluation benchmark", goal: aico}
+  - {query: "mcp server", goal: aico}
+  - {query: "claude code", goal: aico}
+  - {query: "pixel art web game", goal: products}
