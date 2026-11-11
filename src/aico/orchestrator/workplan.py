@@ -295,3 +295,42 @@ def render_architecture_doc(mermaid: str, ticket_id: str) -> str:
             "",
         ]
     )
+
+
+EVAL_LABEL = "eval"
+
+
+@dataclass(frozen=True)
+class TicketRefs:
+    """Nhánh làm việc, ref gốc để tạo nhánh, và nhánh đích của MR."""
+
+    work: str
+    base: str
+    target: str
+    eval_variant: str | None = None
+
+
+def eval_spec(ticket: Any) -> tuple[str, str] | None:
+    """(biến thể, commit gốc) nếu là ticket chạy lại (nhãn eval + artifact eval), không thì None.
+
+    Cần cả hai: nhãn để runner lọc, artifact để biết dựng lại từ commit nào.
+    """
+    if EVAL_LABEL not in {str(x).lower() for x in ticket.labels}:
+        return None
+    for artifact in ticket.artifacts:
+        if artifact.kind == "eval":
+            variant, sep, base = str(artifact.ref).partition("@")
+            if sep and variant and base:
+                return variant, base
+    return None
+
+
+def ticket_refs(ticket: Any, target_branch: str = "main") -> TicketRefs:
+    """Ticket thường: ai/<id> từ main, MR vào main. Ticket chạy lại: eval/<id> từ commit gốc, MR
+    vào eval/base/<id> (cũng tạo ở commit gốc) để diff đúng phần agent làm; không bao giờ vào main.
+    """
+    spec = eval_spec(ticket)
+    if spec is None:
+        return TicketRefs(f"ai/{ticket.id}", target_branch, target_branch)
+    variant, base = spec
+    return TicketRefs(f"eval/{ticket.id}", base, f"eval/base/{ticket.id}", variant)

@@ -69,6 +69,9 @@ class Settings:
     site_watch_seconds: float = 60
     # Dò công nghệ tự động (Phòng R&D): mỗi N ngày, khi hệ rảnh và hạn mức còn thấp; 0 là tắt.
     rnd_scan_interval_days: int = 0
+    # Instance chạy lại của Phòng R&D (service aico-eval): runner chỉ nhận ticket nhãn eval và
+    # không chạy intake, Jira, site watcher, dò công nghệ (aico chính đã làm).
+    eval_instance: bool = False
     # Kho tri thức Phòng R&D: librarian dựng chỉ mục từ main mỗi knowledge_watch_seconds; agent
     # có tool knowledge.search/get và khối <knowledge> trong prompt. Rỗng là tắt.
     knowledge_project: str | None = "VX-Anh/aico-knowledge"
@@ -130,6 +133,7 @@ class Settings:
             preview_projects=_list("AICO_PREVIEW_PROJECTS"),
             site_watch_seconds=float(env.get("AICO_SITE_WATCH_SECONDS", cls.site_watch_seconds)),
             rnd_scan_interval_days=int(env.get("AICO_RND_SCAN_INTERVAL_DAYS", "0") or 0),
+            eval_instance=env.get("AICO_EVAL_INSTANCE", "") == "1",
             knowledge_project=env.get("AICO_KNOWLEDGE_PROJECT", cls.knowledge_project or "")
             or None,
             knowledge_watch_seconds=float(

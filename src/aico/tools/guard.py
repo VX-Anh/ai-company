@@ -39,7 +39,8 @@ def _deny(reason: str, level: ActionLevel | None = None) -> GuardDecision:
 def check_branch(branch: str, pattern: str) -> bool:
     if not branch or ".." in branch or branch.startswith("/") or branch.endswith("/"):
         return False
-    return fnmatchcase(branch, pattern)
+    # Nhiều mẫu phân tách bằng dấu phẩy, vd "ai/*,eval/*".
+    return any(fnmatchcase(branch, p.strip()) for p in pattern.split(",") if p.strip())
 
 
 class Guard:

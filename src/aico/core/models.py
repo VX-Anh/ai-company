@@ -70,7 +70,8 @@ class Artifact(BaseModel):
 
     # screenshot: ảnh giao diện reviewer chụp (ref = "<lần chụp>/<file>.png").
     # jira: issue Jira đồng bộ với ticket (ref = khoá issue, ví dụ LHV-14).
-    kind: Literal["branch", "merge_request", "report", "preview", "screenshot", "jira"]
+    # eval: ticket chạy lại của Phòng R&D (ref = "<biến thể>@<commit gốc>"), xem ticket_refs.
+    kind: Literal["branch", "merge_request", "report", "preview", "screenshot", "jira", "eval"]
     ref: str
     url: str | None = None
 

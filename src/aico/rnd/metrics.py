@@ -241,9 +241,16 @@ def _short(agg: Mapping[str, Any]) -> dict[str, Any]:
     return {k: agg[k] for k in _SHORT_KEYS}
 
 
-async def collect(store: TicketStore, *, since: datetime) -> list[dict[str, Any]]:
-    """Số liệu các ticket tạo từ `since` (cũ nhất trước)."""
-    picked = [t for t in await store.list() if t.created_at >= since]
+async def collect(
+    store: TicketStore, *, since: datetime, eval_only: bool = False
+) -> list[dict[str, Any]]:
+    """Số liệu các ticket tạo từ `since` (cũ nhất trước). Ticket chạy lại (nhãn eval) tách riêng:
+    mặc định không tính vào chỉ số của hệ thật; eval_only=True để báo cáo thí nghiệm."""
+    picked = [
+        t
+        for t in await store.list()
+        if t.created_at >= since and ("eval" in {x.lower() for x in t.labels}) == eval_only
+    ]
     return [ticket_metrics(t, await store.events(t.id)) for t in picked]
 
 

@@ -28,7 +28,9 @@ class ConstraintError(PermissionError):
 @dataclass(frozen=True)
 class Constraints:
     allowed_projects: tuple[str, ...]
+    # Nhiều mẫu phân tách bằng dấu phẩy, vd "ai/*,eval/*" (eval/*: ticket chạy lại của R&D).
     branch_pattern: str = "ai/*"
+    # Tên nhánh hoặc mẫu fnmatch, vd ("main", "eval/base/*").
     allowed_targets: tuple[str, ...] = ("main",)
 
     def check_project(self, project: str) -> None:
@@ -37,11 +39,13 @@ class Constraints:
 
     def check_branch(self, branch: str) -> None:
         bad = not branch or ".." in branch or branch.startswith("/") or branch.endswith("/")
-        if bad or not fnmatchcase(branch, self.branch_pattern):
+        patterns = [p.strip() for p in self.branch_pattern.split(",") if p.strip()]
+        if bad or not any(fnmatchcase(branch, p) for p in patterns):
             raise ConstraintError(f"branch '{branch}' không khớp '{self.branch_pattern}'")
 
     def check_target(self, branch: str) -> None:
-        if branch not in self.allowed_targets:
+        bad = not branch or ".." in branch
+        if bad or not any(fnmatchcase(branch, t) for t in self.allowed_targets):
             raise ConstraintError(f"không được mở MR vào '{branch}'")
 
 

@@ -97,6 +97,9 @@ services:
       GITLAB_TOKEN_FILE: /run/secrets/gitlab_token
       GITLAB_MERGE_TOKEN_FILE: /run/secrets/gitlab_merge_token
       GITLAB_ALLOWED_PROJECTS: ${GITLAB_PROJECTS:?đặt GITLAB_PROJECTS trong .env}
+      # eval/*: ticket chạy lại của Phòng R&D (nhánh từ commit gốc, MR vào eval/base/*, không vào main)
+      GITLAB_BRANCH_PATTERN: "ai/*,eval/*"
+      GITLAB_ALLOWED_TARGETS: "main,eval/base/*"
       APPROVAL_VERIFY_URL: http://aico:8000/internal/approvals
       APPROVAL_VERIFY_TOKEN_FILE: /run/secrets/aico_internal_token
     secrets: [gitlab_token, gitlab_merge_token, aico_internal_token]

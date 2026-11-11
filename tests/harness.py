@@ -73,6 +73,7 @@ def make_harness(
     test_skip_labels: tuple[str, ...] = (),
     label_review_rounds: dict[str, int] | None = None,
     label_scopes: dict[str, tuple[str, ...]] | None = None,
+    eval_only: bool = False,
 ) -> Harness:
     tickets = tickets or InMemoryTicketStore()
     approvals = approvals or InMemoryApprovalStore()
@@ -84,7 +85,12 @@ def make_harness(
     async def verify(approval_id: str, project: str, mr_iid: int) -> tuple[bool, str]:
         return await verify_merge_approval(approvals, tickets, approval_id, project, mr_iid)
 
-    server = build_server(GitLabTools(gitlab, Constraints(allowed_projects=(PROJECT,)), verify))
+    constraints = Constraints(
+        allowed_projects=(PROJECT,),
+        branch_pattern="ai/*,eval/*",
+        allowed_targets=("main", "eval/base/*"),
+    )
+    server = build_server(GitLabTools(gitlab, constraints, verify))
     client: ToolClient = McpToolClient({"gitlab": server})
     if wrap_client is not None:
         client = wrap_client(client)
@@ -112,7 +118,7 @@ def make_harness(
         label_scopes=label_scopes or {},
     )
     graph = build_fix_ticket(deps).compile(checkpointer=checkpointer or InMemorySaver())
-    runner = Runner(graph, tickets, owner=owner, lease_seconds=lease_seconds)
+    runner = Runner(graph, tickets, owner=owner, lease_seconds=lease_seconds, eval_only=eval_only)
     return Harness(company, tickets, approvals, audit, gitlab, reviewer, gateway, runner)
 
 

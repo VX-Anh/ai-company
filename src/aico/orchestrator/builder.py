@@ -41,6 +41,7 @@ from aico.orchestrator.workplan import (
     plan_doc_path,
     render_architecture_doc,
     render_plan_doc,
+    ticket_refs,
 )
 from aico.tickets import TicketStore
 from aico.tools import ToolError, ToolGateway
@@ -280,11 +281,19 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         người xem, lấy lại hoặc đẩy tay.
         """
         role = deps.role("code")
+        refs = ticket_refs(ticket, deps.target_branch)
         try:
+            if refs.eval_variant is not None:
+                # Chạy lại: nhánh đích của MR dựng ở commit gốc để diff chỉ gồm phần agent làm.
+                await git(
+                    tid,
+                    "create_branch",
+                    {"project": project, "branch": refs.target, "ref": refs.base},
+                )
             await git(
                 tid,
                 "create_branch",
-                {"project": project, "branch": branch, "ref": deps.target_branch},
+                {"project": project, "branch": branch, "ref": refs.base},
             )
             for message, files, key in commits:
                 await git(
@@ -322,7 +331,7 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
                 {
                     "project": project,
                     "source_branch": branch,
-                    "target_branch": deps.target_branch,
+                    "target_branch": refs.target,
                     "title": f"{tid}: {ticket.title}",
                     "description": description,
                 },
@@ -409,8 +418,8 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             data["feedback"] = feedback
         await deps.tickets.transition(tid, S.IN_PROGRESS, actor=role, data=data)
         project = await project_of(tid)
-        branch = f"ai/{tid}"
         ticket = await deps.tickets.get(tid)
+        branch = ticket_refs(ticket, deps.target_branch).work
         if isinstance(deps.coder, ItemCoder):
             return await code_items(s, ticket, project, branch, attempt, feedback)
         try:

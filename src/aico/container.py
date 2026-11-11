@@ -142,7 +142,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
         )
         librarian = (
             Librarian(knowledge, gateway, settings.knowledge_project)
-            if knowledge is not None and settings.knowledge_project
+            if knowledge is not None and settings.knowledge_project and not settings.eval_instance
             else None
         )
         tokens = TaskTokens()
@@ -235,7 +235,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 role_id=sop.steps["code"],
             )
         site_watcher: SiteWatcher | None = None
-        if previewer is not None and settings.site_watch_seconds > 0:
+        if previewer is not None and settings.site_watch_seconds > 0 and not settings.eval_instance:
             site_watcher = SiteWatcher(
                 previewer, gateway, settings.preview_projects, role_id=sop.steps["code"]
             )
@@ -361,7 +361,12 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
         saver = AsyncPostgresSaver(saver_pool)  # type: ignore[arg-type]
         graph = build_fix_ticket(deps).compile(checkpointer=saver)
         runners = tuple(
-            Runner(graph, tickets, lease_seconds=settings.lease_seconds)
+            Runner(
+                graph,
+                tickets,
+                lease_seconds=settings.lease_seconds,
+                eval_only=settings.eval_instance,
+            )
             for _ in range(settings.runner_concurrency)
         )
         runner = runners[0]
@@ -369,11 +374,11 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             GitLabIssuePoller(
                 gateway, tickets, settings.intake_projects, label=settings.intake_label
             )
-            if settings.intake_projects
+            if settings.intake_projects and not settings.eval_instance
             else None
         )
         jira_sync = None
-        if settings.jira_enabled:
+        if settings.jira_enabled and not settings.eval_instance:
             assert settings.jira_url and settings.jira_email and settings.jira_token
             jira_client = HttpJiraClient(
                 settings.jira_url, settings.jira_email, settings.jira_token
@@ -409,7 +414,11 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             )
 
         scan_scheduler: ScanScheduler | None = None
-        if settings.rnd_scan_interval_days > 0 and settings.knowledge_project:
+        if (
+            settings.rnd_scan_interval_days > 0
+            and settings.knowledge_project
+            and not settings.eval_instance
+        ):
             if cli_agents is None:
                 log.warning("bỏ dò công nghệ tự động: cần worker CLI để đọc hạn mức các phòng")
             else:

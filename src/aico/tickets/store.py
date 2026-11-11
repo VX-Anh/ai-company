@@ -60,7 +60,12 @@ class TicketStore(Protocol):
 
     async def take_pending_resume(self, ticket_id: str, *, owner: str) -> dict[str, Any] | None: ...
 
-    async def claim(self, *, owner: str, lease_seconds: float) -> Ticket | None: ...
+    async def claim(
+        self, *, owner: str, lease_seconds: float, eval_only: bool = False
+    ) -> Ticket | None:
+        """Nhận một ticket cần chạy. eval_only=False (aico chính) bỏ qua ticket nhãn `eval`;
+        True (instance chạy lại của R&D) chỉ nhận ticket nhãn `eval`."""
+        ...
 
     async def renew(self, ticket_id: str, *, owner: str, lease_seconds: float) -> bool: ...
 
@@ -73,6 +78,10 @@ class TicketStore(Protocol):
         ...
 
     async def overdue_approvals(self, now: datetime) -> list[Ticket]: ...
+
+
+def is_eval(ticket: Ticket) -> bool:
+    return "eval" in {label.lower() for label in ticket.labels}
 
 
 def is_claimable(ticket: Ticket, now: datetime) -> bool:
@@ -199,10 +208,14 @@ class InMemoryTicketStore:
             self._put(ticket.model_copy(update={"pending_resume": None}))
             return payload
 
-    async def claim(self, *, owner: str, lease_seconds: float) -> Ticket | None:
+    async def claim(
+        self, *, owner: str, lease_seconds: float, eval_only: bool = False
+    ) -> Ticket | None:
         async with self._lock:
             now = utcnow()
             for ticket in sorted(self._tickets.values(), key=lambda t: t.updated_at):
+                if is_eval(ticket) != eval_only:
+                    continue
                 if is_claimable(ticket, now):
                     claimed = ticket.model_copy(
                         update={
