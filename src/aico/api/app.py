@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from aico.core import Decision, Event, Ticket, TicketStatus
+from aico.core import Decision, Event, Ticket, TicketStatus, utcnow
 from aico.governance import ApprovalStore
 from aico.governance.verify import verify_merge_approval
 from aico.intake import new_ticket_id
@@ -214,6 +214,14 @@ def create_api_app(deps: ApiDeps) -> FastAPI:
         if card is None:
             raise HTTPException(404, f"không có thẻ '{node_id}'")
         return card
+
+    @app.get("/rnd/metrics", dependencies=user)
+    async def rnd_metrics(days: Annotated[int, Query(ge=1, le=365)] = 30) -> dict[str, Any]:
+        """Chỉ số hiệu năng hệ agent (Phòng R&D): tỷ lệ đạt ngay, vòng review, người trả lại,
+        lớp lý do escalate, job theo vai trò/phòng/prompt. Chỉ đọc."""
+        from aico.rnd.metrics import report
+
+        return await report(deps.tickets, now=utcnow(), days=days)
 
     @app.get("/internal/approvals/{approval_id}", dependencies=[Depends(require_internal)])
     async def verify_approval(

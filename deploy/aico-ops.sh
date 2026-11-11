@@ -100,6 +100,23 @@ case "${1:-}" in
         api POST "/tickets/$2/decisions" \
             "$(python3 -c 'import json,sys; print(json.dumps({"decision": sys.argv[1], "actor": "owner", "comment": sys.argv[2]}))' "$3" "${4:-}")" \
             | python3 -c "$summary" ;;
+    metrics)  # metrics [số ngày]: chỉ số hiệu năng hệ agent (Phòng R&D), chỉ đọc
+        api GET "/rnd/metrics?days=${2:-30}" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+a = d["all"]
+print("{} ngày: {tickets} ticket, xong {done}, escalate {escalated}, lỗi {failed}".format(d["days"], **a))
+print("đạt ngay vòng đầu {first_pass_rate}, vòng review TB {avg_review_rounds}, người trả lại {owner_return_rate}, phút tới chờ merge TB {avg_minutes_to_merge_approval}".format(**a))
+print("escalate:", a["escalations"])
+print("job: {jobs}, ok {ok_rate}, hết hạn mức {limited}, token {tokens}".format(**a["jobs"]), "| có <knowledge>:", a["knowledge_jobs"])
+for group in ("jobs_by_role", "jobs_by_room"):
+    print(group + ":")
+    for k, v in a[group].items():
+        print("  {}: {jobs} job, ok {ok_rate}, trung vị {median_seconds}s, token TB {avg_tokens}".format(k, **v))
+print("theo nhãn:")
+for k, v in d["by_label"].items():
+    print("  {}: {tickets} ticket, đạt ngay {first_pass_rate}, review TB {avg_review_rounds}, escalate {escalated}".format(k, **v))
+' ;;
     remote-image)  # dựng image build mặc định (Node + thư viện Chromium) trên server
         cd "$STACK" && docker compose exec -T remote-runner             python3 /opt/remote_runner.py build-image aico/node-playwright:22             < "$STACK/remote/node-playwright.Dockerfile" ;;
     escalate)  # escalate <id> <merge|retry_push|...> [ghi chú]
@@ -107,7 +124,7 @@ case "${1:-}" in
             "$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "actor": "owner", "comment": sys.argv[2]}))' "$3" "${4:-}")" \
             | python3 -c "$summary" ;;
     *)
-        echo "lệnh: safe | deploy [--force] | tickets [n] | ticket <id> | workers | logs [service] [since]"
+        echo "lệnh: safe | deploy [--force] | tickets [n] | ticket <id> | workers | logs [service] [since] | metrics [ngày]"
         echo "      create <file.json> | decide <id> <approved|revise|changes_requested|rejected> [ghi chú] | escalate <id> <action> [ghi chú]"
         echo "      remote-image (dựng image Node + Chromium trên máy build, chạy lại khi sửa node-playwright.Dockerfile)"
         exit 2 ;;
