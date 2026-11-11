@@ -12,6 +12,9 @@ tools:
     allow: [read_file, download_archive, get_merge_request]
     constraints:
       repos: [VX-Anh/aico-knowledge]
+  # Tri thức đã duyệt của Phòng R&D (tìm, đọc thẻ); không có tool ghi.
+  - server: knowledge
+    allow: [search_knowledge, get_knowledge]
 max_risk: L0
 limits:
   max_iterations: 40

@@ -9,6 +9,9 @@ tool_levels:
   gitlab.push: L2
   gitlab.open_merge_request: L2
   gitlab.merge_mr: L3
+  # Kho tri thức Phòng R&D (chạy trong tiến trình aico): chỉ đọc tri thức đã duyệt.
+  knowledge.search_knowledge: L0
+  knowledge.get_knowledge: L0
   # Pixelbolt: vẽ pixel art từ công thức JSON, chỉ ghi file trong thư mục output của container
   pixel.pixel_help: L0
   pixel.pixel_inspect: L0

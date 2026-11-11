@@ -1,0 +1,12 @@
+# Vai trò hệ thống của Phòng R&D: dựng chỉ mục tri thức từ main của kho tri thức khi main đổi.
+# Không gọi model, chỉ đọc.
+id: librarian
+department: rnd
+reports_to: research_lead
+worker: system
+tools:
+  - server: gitlab
+    allow: [branch_head, download_archive]
+    constraints:
+      repos: [VX-Anh/aico-knowledge]
+max_risk: L0

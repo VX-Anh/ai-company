@@ -8,7 +8,7 @@ from __future__ import annotations
 import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -21,6 +21,9 @@ from aico.governance import ApprovalStore
 from aico.governance.verify import verify_merge_approval
 from aico.intake import new_ticket_id
 from aico.tickets import TicketExists, TicketNotFound, TicketStore, TransitionError
+
+if TYPE_CHECKING:
+    from aico.rnd import KnowledgeStore
 
 S = TicketStatus
 ALLOWED_DECISIONS = {
@@ -51,6 +54,8 @@ class ApiDeps:
     # Dựng lại bản xem trước trên máy build từ xa: (ticket_id, site) -> kết quả (có url).
     # site=True dựng bản chính của repo (branch đích) thay cho branch của ticket.
     preview: Callable[[str, bool], Awaitable[dict[str, Any]]] | None = None
+    # Chỉ mục kho tri thức (Phòng R&D); None khi tắt.
+    knowledge: KnowledgeStore | None = None
 
 
 class CreateTicket(BaseModel):
@@ -189,6 +194,26 @@ def create_api_app(deps: ApiDeps) -> FastAPI:
             raise HTTPException(409, str(exc)) from None
         except RuntimeError as exc:  # PreviewError: build lỗi, máy build không phản hồi
             raise HTTPException(502, str(exc)) from None
+
+    @app.get("/knowledge/nodes", dependencies=user)
+    async def knowledge_nodes(
+        q: str | None = None, k: Annotated[int, Query(ge=1, le=8)] = 8
+    ) -> list[dict[str, Any]]:
+        """Thẻ tri thức đã duyệt: có q thì tìm (tối đa k thẻ), không có thì liệt kê tất cả."""
+        if deps.knowledge is None:
+            raise HTTPException(501, "chưa bật kho tri thức (AICO_KNOWLEDGE_PROJECT)")
+        if q:
+            return await deps.knowledge.search(q, k=k)
+        return await deps.knowledge.list_nodes()
+
+    @app.get("/knowledge/nodes/{node_id:path}", dependencies=user)
+    async def knowledge_node(node_id: str) -> dict[str, Any]:
+        if deps.knowledge is None:
+            raise HTTPException(501, "chưa bật kho tri thức (AICO_KNOWLEDGE_PROJECT)")
+        card = await deps.knowledge.get(node_id)
+        if card is None:
+            raise HTTPException(404, f"không có thẻ '{node_id}'")
+        return card
 
     @app.get("/internal/approvals/{approval_id}", dependencies=[Depends(require_internal)])
     async def verify_approval(

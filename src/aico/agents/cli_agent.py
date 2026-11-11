@@ -98,6 +98,10 @@ class CliSettings:
     # Phòng chạy chậm (Cursor: một lượt thường 7–8 phút, Claude/Codex 2–4 phút): việc găng giao
     # cho phòng khác trước, phòng chậm chỉ nhận khi các phòng kia đầy hoặc gần hết hạn mức.
     slow_workers: tuple[str, ...] = ()
+    # Khối <knowledge> (thẻ tri thức đã duyệt liên quan tới ticket) nối cuối lời giao việc cho
+    # các vai trò trong knowledge_roles. Trả None khi không có thẻ nào đủ liên quan.
+    knowledge: Callable[[Ticket, str], Awaitable[str | None]] | None = None
+    knowledge_roles: tuple[str, ...] = ()
 
 
 class CliAgentRunner:
@@ -147,6 +151,10 @@ class CliAgentRunner:
         if unknown:
             raise WorkerUnavailable(f"chưa cấu hình worker: {', '.join(unknown)}")
         timeout = role.limits.timeout_minutes * 60
+        bare = instruction
+        instruction = await self._with_knowledge(role_id, ticket, instruction)
+        # Thí nghiệm đầu tiên của R&D: chèn tri thức có giảm vòng review không.
+        knowledge = instruction != bare
         token = self._tokens.issue(ticket.id, role_id, ttl=timedelta(seconds=timeout + 60))
         job = {
             "prompt": instruction,
@@ -173,7 +181,9 @@ class CliAgentRunner:
                 for name in order:
                     outcome = await self._try(name, job, timeout)
                     if outcome is not None:
-                        await self._record(ticket, role_id, mode, name, job, outcome, critical)
+                        await self._record(
+                            ticket, role_id, mode, name, job, outcome, critical, knowledge
+                        )
                     if outcome is not None and "error" not in outcome:
                         return {**outcome, "worker": name}
                     if outcome is not None:
@@ -195,6 +205,7 @@ class CliAgentRunner:
         job: Mapping[str, Any],
         outcome: Mapping[str, Any],
         critical: bool,
+        knowledge: bool,
     ) -> None:
         if self._on_job is None:
             return
@@ -206,10 +217,22 @@ class CliAgentRunner:
             outcome=outcome,
             critical=critical,
         )
+        data["knowledge"] = knowledge
         try:
             await self._on_job(ticket.id, data)
         except Exception as exc:  # số liệu đo không được làm hỏng job thật
             log.warning("ticket %s: không ghi được event job: %s", ticket.id, exc)
+
+    async def _with_knowledge(self, role_id: str, ticket: Ticket, instruction: str) -> str:
+        hook = self._settings.knowledge
+        if hook is None or role_id not in self._settings.knowledge_roles:
+            return instruction
+        try:
+            block = await hook(ticket, role_id)
+        except Exception as exc:  # tri thức chỉ để tham khảo: lỗi chỉ mục không chặn việc chính
+            log.warning("không lấy được tri thức cho %s/%s: %s", ticket.id, role_id, exc)
+            return instruction
+        return f"{instruction}\n\n{block}" if block else instruction
 
     async def _try(
         self, name: str, job: dict[str, Any], wait_seconds: float

@@ -65,6 +65,10 @@ class Settings:
     preview_projects: tuple[str, ...] = ()
     # Chu kỳ (giây) kiểm tra branch đích của preview_projects để dựng lại bản chính; 0 là tắt.
     site_watch_seconds: float = 60
+    # Kho tri thức Phòng R&D: librarian dựng chỉ mục từ main mỗi knowledge_watch_seconds; agent
+    # có tool knowledge.search/get và khối <knowledge> trong prompt. Rỗng là tắt.
+    knowledge_project: str | None = "VX-Anh/aico-knowledge"
+    knowledge_watch_seconds: float = 60
     # Đồng bộ ticket sang Jira (một chiều). Bật khi đủ URL, email, token và ánh xạ
     # repo -> project Jira (`VX-Anh/linh-hoa-vien=LHV`). Ticket cập nhật trước jira_since bỏ qua.
     jira_url: str | None = None
@@ -120,6 +124,11 @@ class Settings:
             remote_url=env.get("AICO_REMOTE_URL") or None,
             preview_projects=_list("AICO_PREVIEW_PROJECTS"),
             site_watch_seconds=float(env.get("AICO_SITE_WATCH_SECONDS", cls.site_watch_seconds)),
+            knowledge_project=env.get("AICO_KNOWLEDGE_PROJECT", cls.knowledge_project or "")
+            or None,
+            knowledge_watch_seconds=float(
+                env.get("AICO_KNOWLEDGE_WATCH_SECONDS", cls.knowledge_watch_seconds)
+            ),
             jira_url=env.get("AICO_JIRA_URL") or None,
             jira_email=env.get("AICO_JIRA_EMAIL") or None,
             jira_token=_secret("AICO_JIRA_TOKEN_FILE"),
