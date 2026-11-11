@@ -113,6 +113,10 @@ for group in ("jobs_by_role", "jobs_by_room"):
     print(group + ":")
     for k, v in a[group].items():
         print("  {}: {jobs} job, ok {ok_rate}, trung vị {median_seconds}s, token TB {avg_tokens}".format(k, **v))
+k = d["knowledge_effect"]
+print("chèn tri thức: có {} ticket (đạt ngay {}, review TB {}) | không {} ticket (đạt ngay {}, review TB {})".format(
+    k["with_knowledge"]["tickets"], k["with_knowledge"]["first_pass_rate"], k["with_knowledge"]["avg_review_rounds"],
+    k["without"]["tickets"], k["without"]["first_pass_rate"], k["without"]["avg_review_rounds"]))
 print("theo nhãn:")
 for k, v in d["by_label"].items():
     print("  {}: {tickets} ticket, đạt ngay {first_pass_rate}, review TB {avg_review_rounds}, escalate {escalated}".format(k, **v))

@@ -198,8 +198,20 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def knowledge_effect(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Thí nghiệm đầu tiên của R&D: ticket có job được chèn <knowledge> so với ticket không có.
+
+    Chỉ tính ticket có event job (sau R0). Quan sát, không phải thí nghiệm đối chứng: ghi kèm cỡ
+    mẫu, chênh lệch nhỏ với mẫu nhỏ không có ý nghĩa.
+    """
+    measured = [r for r in rows if r["jobs"]]
+    with_k = [r for r in measured if any(j.get("knowledge") for j in r["jobs"])]
+    without = [r for r in measured if r not in with_k]
+    return {"with_knowledge": _short(aggregate(with_k)), "without": _short(aggregate(without))}
+
+
 def metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Tổng và tách theo nhãn chính, repo."""
+    """Tổng và tách theo nhãn chính, repo; kèm so sánh có/không chèn tri thức."""
     by_label: dict[str, list[dict[str, Any]]] = defaultdict(list)
     by_project: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for r in rows:
@@ -209,6 +221,7 @@ def metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "all": aggregate(rows),
         "by_label": {k: _short(aggregate(v)) for k, v in sorted(by_label.items())},
         "by_project": {k: _short(aggregate(v)) for k, v in sorted(by_project.items())},
+        "knowledge_effect": knowledge_effect(rows),
     }
 
 

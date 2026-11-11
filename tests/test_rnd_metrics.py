@@ -154,3 +154,29 @@ def test_classify_job_errors() -> None:
         "worker không trả lời"
     )
     assert classify_job_error({"error": "chuẩn bị workspace lỗi: tar"}) == "chuẩn bị workspace"
+
+
+def test_knowledge_effect_splits_tickets_by_injected_jobs() -> None:
+    from aico.rnd.metrics import knowledge_effect
+
+    def row(tid: str, knowledge: bool | None, rounds: int) -> dict[str, object]:
+        jobs = [] if knowledge is None else [job("coder", "claude", knowledge=knowledge)]
+        return {
+            "id": tid,
+            "project": "x",
+            "labels": [],
+            "status": "done",
+            "code_rounds": rounds,
+            "review_rounds": rounds,
+            "merge_reviews": 1,
+            "owner_returns": 0,
+            "escalation_class": None,
+            "minutes_to_merge_approval": 5.0,
+            "jobs": jobs,
+        }
+
+    effect = knowledge_effect([row("A", True, 1), row("B", False, 3), row("C", None, 9)])
+    assert effect["with_knowledge"]["tickets"] == 1
+    assert effect["with_knowledge"]["first_pass_rate"] == 1.0
+    assert effect["without"]["tickets"] == 1  # C không có event job (trước R0): không tính
+    assert effect["without"]["avg_review_rounds"] == 3
