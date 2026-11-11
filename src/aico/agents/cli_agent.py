@@ -256,7 +256,8 @@ class CliAgentRunner:
         body = resp.json()
         if not body.get("ok"):
             log.warning("worker %s lỗi: %s", name, body.get("error"))
-            return {"error": str(body.get("error") or "lỗi không rõ")[:500]}
+            error = str(body.get("error") or "lỗi không rõ")[:500]
+            return {"error": error, "limited": bool(body.get("limited"))}
         log.info("worker %s xong sau %ss", name, body.get("duration_seconds"))
         body.pop("error", None)
         return body

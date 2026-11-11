@@ -13,6 +13,7 @@ import httpx
 import pytest
 
 from aico.agents import CliAgentRunner, CliSettings, LlmPlanner, WorkerUnavailable
+from aico.agents.cli_agent import prompt_sha
 from aico.core import Ticket, TicketStatus
 from aico.llm_relay import TaskTokens
 from aico.registry import Company
@@ -811,3 +812,50 @@ async def test_critical_job_skips_slow_room_first(
     # spread=2 xoay Cursor lên đầu (coder khai báo claude, codex, cursor).
     await runner.run_job("coder", ticket, "làm", mode="write", spread=2, critical=critical)
     assert runs == [first]
+
+
+async def test_each_worker_attempt_is_recorded_as_job_event(company: Company) -> None:
+    """Event `job` là nền đo hiệu năng của Phòng R&D: mỗi lần thử ở một phòng là một bản ghi."""
+
+    async def handler(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"state": "idle"})
+        if request.url.host == "claude":
+            return httpx.Response(200, json={"ok": False, "error": "hết hạn mức", "limited": True})
+        body = {"ok": True, "result": "kế hoạch", "tokens": [1200, 300], "duration_seconds": 42.5}
+        return httpx.Response(200, json=body)
+
+    records: list[tuple[str, dict[str, Any]]] = []
+
+    async def sink(ticket_id: str, data: dict[str, Any]) -> None:
+        records.append((ticket_id, data))
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
+    runner = CliAgentRunner(
+        company,
+        TaskTokens(),
+        CliSettings(WORKERS, "worker-secret", "http://bridge", 0.01, client),
+        on_job=sink,
+    )
+    ticket = Ticket(id="T-5", title="x", project=PROJECT)
+    assert await runner.run("tech_lead", ticket, "lập kế hoạch") == "kế hoạch"
+    assert [r[0] for r in records] == ["T-5", "T-5"]
+    failed, ok = records[0][1], records[1][1]
+    assert failed["room"] == "claude" and failed["ok"] is False and failed["limited"] is True
+    assert failed["tokens_in"] is None
+    assert ok["room"] == "codex" and ok["ok"] is True and ok["role"] == "tech_lead"
+    assert (ok["tokens_in"], ok["tokens_out"], ok["duration_seconds"]) == (1200, 300, 42.5)
+    assert ok["prompt_sha"] == prompt_sha(company.prompt_text("tech_lead"))
+    assert len(ok["prompt_sha"]) == 12 and ok["knowledge"] is False
+
+    async def broken(ticket_id: str, data: dict[str, Any]) -> None:
+        raise RuntimeError("db lỗi")
+
+    # Ghi số liệu lỗi không được làm hỏng job thật.
+    runner = CliAgentRunner(
+        company,
+        TaskTokens(),
+        CliSettings(WORKERS, "worker-secret", "http://bridge", 0.01, client),
+        on_job=broken,
+    )
+    assert await runner.run("tech_lead", ticket, "lập kế hoạch") == "kế hoạch"
