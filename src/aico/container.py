@@ -6,6 +6,7 @@ import contextlib
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 import httpx
@@ -45,7 +46,7 @@ from aico.agents import (
     SiteWatcher,
 )
 from aico.api import ApiDeps
-from aico.core import Ticket
+from aico.core import Ticket, utcnow
 from aico.db import create_pool
 from aico.governance import PostgresApprovalStore, PostgresAuditLog
 from aico.intake import GitLabIssuePoller
@@ -67,6 +68,7 @@ from aico.orchestrator.escalation import merge_escalated, retry_push
 from aico.orchestrator.ports import Analyst, Coder, Planner, Reviewer
 from aico.registry import Company, load_company
 from aico.rnd import KNOWLEDGE_ROLES, KnowledgeStore, Librarian, build_knowledge_server
+from aico.rnd.bench import candidates as bench_candidates
 from aico.settings import Settings
 from aico.tickets.postgres import PostgresTicketStore
 from aico.tools import Guard, McpToolClient, ToolGateway, read_whole_file
@@ -384,6 +386,19 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 read_file=read_repo_file,
                 intake_label=settings.intake_label,
             )
+
+        async def read_mr(project: str, iid: int) -> dict[str, Any]:
+            return await gateway.call(
+                sop.steps["review"],
+                "gitlab",
+                "get_merge_request",
+                {"project": project, "mr_iid": iid},
+                ticket_id=None,
+            )
+
+        async def bench(days: int) -> list[dict[str, Any]]:
+            return await bench_candidates(tickets, read_mr, since=utcnow() - timedelta(days=days))
+
         yield Container(
             settings=settings,
             company=company,
@@ -405,6 +420,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 merge_escalated=merge_escalated_ticket,
                 retry_push=retry_push_ticket,
                 preview=preview_ticket if previewer is not None else None,
+                bench=bench,
                 knowledge=knowledge,
             ),
             relay_app=relay_app,

@@ -44,6 +44,10 @@ def _pr_view(pr: dict[str, Any]) -> dict[str, Any]:
         "title": pr.get("title"),
         "description": pr.get("body") or "",
         "web_url": pr.get("html_url"),
+        # Mốc commit để R&D dựng lại trạng thái repo khi chạy lại ticket cũ (bộ ticket chuẩn).
+        "base_sha": (pr.get("base") or {}).get("sha"),
+        "head_sha": (pr.get("head") or {}).get("sha"),
+        "merge_commit_sha": pr.get("merge_commit_sha") if state == "merged" else None,
     }
 
 

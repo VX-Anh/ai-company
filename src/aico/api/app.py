@@ -56,6 +56,8 @@ class ApiDeps:
     preview: Callable[[str, bool], Awaitable[dict[str, Any]]] | None = None
     # Chỉ mục kho tri thức (Phòng R&D); None khi tắt.
     knowledge: KnowledgeStore | None = None
+    # Ứng viên bộ ticket chuẩn của R&D: (số ngày) -> danh sách; None khi không có gateway Git.
+    bench: Callable[[int], Awaitable[list[dict[str, Any]]]] | None = None
 
 
 class CreateTicket(BaseModel):
@@ -222,6 +224,13 @@ def create_api_app(deps: ApiDeps) -> FastAPI:
         from aico.rnd.metrics import report
 
         return await report(deps.tickets, now=utcnow(), days=days)
+
+    @app.get("/rnd/bench", dependencies=user)
+    async def rnd_bench(days: Annotated[int, Query(ge=1, le=365)] = 90) -> list[dict[str, Any]]:
+        """Ticket code đã merge, đủ mốc commit để chạy lại (ứng viên bộ ticket chuẩn). Chỉ đọc."""
+        if deps.bench is None:
+            raise HTTPException(501, "chưa cấu hình đọc MR (gateway Git)")
+        return await deps.bench(days)
 
     @app.get("/internal/approvals/{approval_id}", dependencies=[Depends(require_internal)])
     async def verify_approval(

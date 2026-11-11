@@ -111,3 +111,33 @@ async def test_metrics_api_reads_only_recent_tickets() -> None:
         body = (await c.get("/rnd/metrics", params={"days": 120})).json()
         assert body["all"]["tickets"] == 2 and body["days"] == 120
         assert (await c.get("/rnd/metrics", params={"days": 0})).status_code == 422
+
+
+async def test_bench_candidates_need_merged_mr_with_base_sha() -> None:
+    from aico.core import Artifact
+    from aico.rnd.bench import candidates, merge_request_of
+
+    store = InMemoryTicketStore()
+    await _ticket_returned_by_owner(store)  # T-1, project x/app, DONE
+    await store.add_artifact("T-1", Artifact(kind="merge_request", ref="x/app!7"), actor="c")
+    # Ticket nghiên cứu: không vào bộ chuẩn dù đã merge.
+    await store.create(Ticket(id="T-r", title="r", project="x/kb", labels=["research"]), actor="t")
+    await _walk(store, "T-r", [S.TRIAGED, S.PLANNED, S.IN_PROGRESS, S.IN_REVIEW])
+    await _walk(store, "T-r", [S.AWAITING_MERGE_APPROVAL, S.MERGING, S.DONE])
+    await store.add_artifact("T-r", Artifact(kind="merge_request", ref="x/kb!1"), actor="c")
+    assert merge_request_of(await store.get("T-1")) == ("x/app", 7)
+
+    async def read_mr(project: str, iid: int) -> dict[str, object]:
+        assert (project, iid) == ("x/app", 7)
+        return {"merged": True, "base_sha": "b" * 40, "head_sha": "h" * 40, "web_url": "u"}
+
+    rows = await candidates(store, read_mr, since=utcnow() - timedelta(days=1))
+    assert [r["id"] for r in rows] == ["T-1"]
+    assert rows[0]["base_sha"] == "b" * 40 and rows[0]["observed"]["owner_returns"] == 1
+    assert rows[0]["observed"]["tokens"] == 1200
+
+    async def broken(project: str, iid: int) -> dict[str, object]:
+        raise RuntimeError("GitHub 502")
+
+    rows = await candidates(store, broken, since=utcnow() - timedelta(days=1))
+    assert rows == [{"id": "T-1", "skipped": "không đọc được MR !7: GitHub 502"}]

@@ -53,6 +53,10 @@ def _mr_view(mr: dict[str, Any]) -> dict[str, Any]:
         "source_branch": mr.get("source_branch"),
         "target_branch": mr.get("target_branch"),
         "web_url": mr.get("web_url"),
+        # GitHub: base/head có sẵn trong PR; GitLab: diff_refs. Thiếu thì None.
+        "base_sha": mr.get("base_sha") or (mr.get("diff_refs") or {}).get("base_sha"),
+        "head_sha": mr.get("head_sha") or mr.get("sha"),
+        "merge_commit_sha": mr.get("merge_commit_sha"),
     }
 
 
