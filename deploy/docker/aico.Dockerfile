@@ -4,6 +4,7 @@ WORKDIR /app
 ENV UV_COMPILE_BYTECODE=1 UV_LINK_MODE=copy UV_PYTHON_DOWNLOADS=never
 COPY pyproject.toml uv.lock README.md ./
 COPY mcp_servers/gitlab/pyproject.toml mcp_servers/gitlab/pyproject.toml
+COPY mcp_servers/research/pyproject.toml mcp_servers/research/pyproject.toml
 RUN uv sync --frozen --no-dev --package aico --no-install-workspace
 COPY src src
 COPY mcp_servers mcp_servers
