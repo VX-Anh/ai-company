@@ -16,6 +16,7 @@ document/
 ├── ke-hoach-phong-rnd.md        # kế hoạch Phòng R&D: mục đích, lộ trình R0–R4, tiến độ
 ├── rnd/                         # thiết kế chi tiết của Phòng R&D (chờ owner duyệt)
 │   ├── thiet-ke-chay-lai.md     # R1: bộ ticket chuẩn, chạy lại ticket cũ để đo thay đổi
+│   ├── thiet-ke-cong-truoc-review.md  # cổng tất định giữa code và review (xoá file, ngoài owns, đầu việc dở)
 │   └── thiet-ke-tu-cai-tien-va-uom-du-an.md  # R2 vòng tự cải tiến, R3 ươm dự án
 └── so-do/                       # sơ đồ tương tác (mở bằng trình duyệt)
     ├── kien-truc-tong-the.html

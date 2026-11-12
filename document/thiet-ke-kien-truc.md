@@ -166,6 +166,7 @@ Nạp toàn bộ `company/` lúc khởi động, validate bằng Pydantic. Cấu
     - Trên một máy chỉ có một tiến trình `aico`. Cơ chế lease vẫn giữ, để sau này chạy thêm tiến trình trên server mà mỗi ticket vẫn chỉ có một nơi xử lý.
 - **Side effect idempotent:** một node có thể chạy lại từ đầu, sau restart và cả khi resume sau `interrupt()`. Mọi side effect mang idempotency key `ticket_id:node:attempt`; trước khi tạo branch hoặc MR, node đối soát với GitLab xem đã có chưa.
 - Node `approve_plan` và `approve_merge` gọi `interrupt()` để dừng và chờ. Node không tự chuyển ticket sang `awaiting_*`: runner chuyển sau khi checkpoint có interrupt đã lưu, để tiến trình chết giữa chừng không để ticket kẹt ở trạng thái chờ; console hoặc REST API gửi `Command(resume={...})` mang quyết định duyệt. `interrupt()` không tự áp chính sách: node đọc giá trị resume, ghi bản ghi duyệt vào Governance rồi rẽ nhánh theo kết quả.
+- **Cổng trước review:** giữa `code` và `review` có node `gate` kiểm tất định nhánh làm việc (xoá file ngoài phạm vi, sửa ngoài `owns`, đầu việc chưa xong); vi phạm thì quay lại `code` kèm danh sách file, quá `prereview_gate.max_rounds` lần liên tiếp thì `escalated`. Chi tiết: [rnd/thiet-ke-cong-truoc-review.md](rnd/thiet-ke-cong-truoc-review.md).
 - **Giới hạn vòng lặp:** state có `plan_rounds`, `review_rounds`, `merge_attempts`; node tăng bộ đếm khi bị quay lại. Mỗi bộ đếm có trần khai báo trong SOP, mỗi điểm chờ duyệt có hạn `approval_deadline`; quá trần hoặc quá hạn thì chuyển `escalated`.
 
 ### Agent runtime

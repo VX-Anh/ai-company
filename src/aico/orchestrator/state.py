@@ -19,6 +19,11 @@ class TicketState(TypedDict):
     code_attempts: int
     branch: str
     mr_iid: int
+    item_results: list[dict[str, Any]]  # bảng kết quả đầu việc của lần code gần nhất (doc_row)
+    gate_rounds: int  # số lần liên tiếp cổng trước review trả về bước code
+    gate_passed: bool
+    gate_feedback: str  # góp ý của cổng cho lần code kế; rỗng khi cổng đã cho qua
+    gate_retry_items: list[str]  # đầu việc chưa xong cần chạy lại (khi đó là vi phạm duy nhất)
     review_rounds: int
     review_passed: bool
     review_notes: str

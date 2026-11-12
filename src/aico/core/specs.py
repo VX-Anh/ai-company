@@ -92,12 +92,26 @@ class SopLimits(_Spec):
     approval_deadline_hours: float = Field(default=48, gt=0)
 
 
+class PrereviewGateSpec(_Spec):
+    """Cổng trước review (kiểm tất định giữa bước code và review). Thiếu khoá thì dùng mặc định:
+    ba kiểm tra chắc chắn là lỗi đều bật, nhánh dựng trên gốc cũ chỉ ghi chú."""
+
+    enabled: bool = True
+    deletions: bool = True  # xoá file không thuộc phạm vi đầu việc
+    outside_owns: bool = True  # sửa/thêm file ngoài owns của kế hoạch
+    unfinished_items: bool = True  # còn đầu việc lỗi/bỏ qua
+    stale_base: Literal["off", "warn"] = "warn"  # nhánh không chứa đầu nhánh đích: chỉ ghi chú
+    max_rounds: int = Field(default=2, ge=0)  # số lần trả về bước code liên tiếp trước khi escalate
+    skip_labels: tuple[str, ...] = ()  # ticket mang nhãn này không qua cổng
+
+
 class SopSpec(_Spec):
     id: str = Field(pattern=_ID_PATTERN)
     department: str
     graph: Literal["fix_ticket"]
     steps: dict[str, str]
     limits: SopLimits = SopLimits()
+    prereview_gate: PrereviewGateSpec = PrereviewGateSpec()
 
 
 class ModelPrice(_Spec):

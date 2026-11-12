@@ -10,7 +10,9 @@ Quy ước:
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+import binascii
+import tarfile
+from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
 from langgraph.graph import END, START, StateGraph
@@ -18,6 +20,7 @@ from langgraph.types import interrupt
 
 from aico.core import ApprovalKind, Artifact, Decision, SopSpec, Ticket, TicketRisk, TicketStatus
 from aico.governance import ApprovalStore
+from aico.orchestrator import prereview
 from aico.orchestrator.ports import (
     AgentUnavailable,
     Analyst,
@@ -33,6 +36,7 @@ from aico.orchestrator.ports import (
 )
 from aico.orchestrator.state import TicketState
 from aico.orchestrator.workplan import (
+    ALL_FILES,
     ARCHITECTURE_DOC,
     ARCHITECTURE_LABEL,
     EVAL_SYSTEM_ROLE,
@@ -47,7 +51,7 @@ from aico.orchestrator.workplan import (
     ticket_refs,
 )
 from aico.tickets import TicketStore
-from aico.tools import ToolError, ToolGateway
+from aico.tools import ToolDenied, ToolError, ToolGateway
 
 S = TicketStatus
 GITLAB = "gitlab"
@@ -166,6 +170,10 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             "merge_attempts": 0,
             "merged": False,
             "eval": is_eval,
+            "gate_rounds": 0,
+            "gate_feedback": "",
+            "gate_retry_items": [],
+            "item_results": [],
         }
 
     async def analyze(s: TicketState) -> dict[str, Any]:
@@ -393,7 +401,17 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         default_role = deps.item_roles_for(ticket)[0]
         if not items:
             items = [WorkItem("W1", "Thực hiện kế hoạch", default_role)]
-        work = [fix_item(feedback, default_role)] if feedback else items
+        retry = set(s.get("gate_retry_items") or [])
+        if feedback and retry:
+            # Cổng trước review trả về chỉ vì đầu việc chưa xong: chạy lại đúng các đầu việc đó
+            # với owns cũ (phụ thuộc vào đầu việc đã xong thì bỏ, phần đó đã nằm trên nhánh).
+            work = [
+                replace(i, depends_on=tuple(d for d in i.depends_on if d in retry))
+                for i in items
+                if i.id in retry
+            ]
+        else:
+            work = [fix_item(feedback, default_role)] if feedback else items
         if (scope := deps.scope_for(ticket)) is not None:
             work = [clamp_owns(item, scope) for item in work]
         try:
@@ -407,6 +425,13 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             errors = "; ".join(f"{r.item_id}: {r.error}" for r in results if r.error)
             return {"escalation_reason": f"viết code: không đầu việc nào sửa được file ({errors})"}
 
+        rows = [r.doc_row() for r in results]
+        if feedback and retry:
+            # Bảng đầu việc = lần trước, đè kết quả các đầu việc vừa chạy lại.
+            fresh = {r["id"]: r for r in rows}
+            rows = [fresh.pop(r["id"], r) for r in s.get("item_results") or []] + list(
+                fresh.values()
+            )
         commits = [
             (
                 f"{tid}/{r.item_id}: {r.summary}",
@@ -420,22 +445,24 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             ticket.title,
             s.get("plan", ""),
             [i.to_dict() for i in items],
-            [r.doc_row() for r in results],
+            rows,
             attempt=attempt,
             notes=list(s.get("plan_notes") or []),
         )
         docs = [(plan_doc_path(tid), doc)]
         if s.get("architecture") and await architecture_writable(tid, ticket, project):
             docs.append((ARCHITECTURE_DOC, render_architecture_doc(s["architecture"], tid)))
-        return await publish(
+        update = await publish(
             tid, ticket, project, branch, attempt, commits, description=doc, docs=docs
         )
+        return {**update, "item_results": rows}
 
     async def code(s: TicketState) -> dict[str, Any]:
         tid = s["ticket_id"]
         role = deps.role("code")
         attempt = s.get("code_attempts", 0) + 1
-        feedback = s.get("review_notes") or s.get("merge_error") or None
+        # Góp ý của cổng trước review đi trước: nhánh chưa tới tay reviewer.
+        feedback = s.get("gate_feedback") or s.get("review_notes") or s.get("merge_error") or None
         # Góp ý (review cần sửa, người yêu cầu sửa, merge lỗi) hiện trên /events cho người xem.
         data: dict[str, Any] = {"attempt": attempt}
         if feedback:
@@ -460,9 +487,116 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
                 f"{tid}:code:{attempt}",
             )
         ]
-        return await publish(
+        update = await publish(
             tid, ticket, project, branch, attempt, commits, description=s.get("plan", "")
         )
+        return {**update, "item_results": []}
+
+    async def gate(s: TicketState) -> dict[str, Any]:
+        """Cổng trước review: kiểm tất định nhánh làm việc, không gọi model (xem prereview)."""
+        tid = s["ticket_id"]
+        cfg = deps.sop.prereview_gate
+        ticket = await deps.tickets.get(tid)
+        passed: dict[str, Any] = {
+            "gate_passed": True,
+            "gate_rounds": 0,
+            "gate_feedback": "",
+            "gate_retry_items": [],
+        }
+        skip = {label.lower() for label in cfg.skip_labels}
+        if not cfg.enabled or skip & {label.lower() for label in ticket.labels}:
+            return passed
+        project = ticket.project or deps.default_project
+        refs = ticket_refs(ticket, deps.target_branch)
+        items = [WorkItem.from_dict(d) for d in s.get("work_items") or []]
+        if (scope := deps.scope_for(ticket)) is not None:
+            # Như bước code: nhãn có phạm vi riêng (vd research: cards/) thì owns bị kẹp vào đó.
+            items = [clamp_owns(i, scope) for i in items] or [
+                clamp_owns(WorkItem("W1", "", owns=(ALL_FILES,)), scope)
+            ]
+        notes: list[str] = []
+        diff: prereview.BranchDiff | None = None
+        stale = False
+        if cfg.deletions or cfg.outside_owns or cfg.stale_base != "off":
+            try:
+                # Diff so với commit chung, không so với đầu nhánh đích: việc người khác merge
+                # sau khi nhánh tách ra không bị tính là nhánh này xoá.
+                fork = (
+                    await git(
+                        tid,
+                        "merge_base",
+                        {"project": project, "base": refs.target, "head": refs.work},
+                    )
+                )["sha"]
+                if cfg.stale_base != "off":
+                    head = await git(tid, "branch_head", {"project": project, "ref": refs.target})
+                    stale = head["sha"] != fork
+                if cfg.deletions or cfg.outside_owns:
+                    base_archive = await git(
+                        tid, "download_archive", {"project": project, "ref": fork}
+                    )
+                    head_archive = await git(
+                        tid, "download_archive", {"project": project, "ref": refs.work}
+                    )
+                    diff = await asyncio.to_thread(
+                        prereview.branch_diff, base_archive["data"], head_archive["data"]
+                    )
+            except (ToolError, ToolDenied, tarfile.TarError, binascii.Error, KeyError) as exc:
+                # Lỗi hạ tầng không phải lỗi của bài làm: không chặn, ghi lại để người biết.
+                notes.append(f"không lấy được diff của nhánh, bỏ kiểm tra theo diff: {exc}")
+        if stale:
+            notes.append(
+                f"nhánh {refs.work} dựng trên gốc cũ: '{refs.target}' đã có commit mới hơn "
+                "điểm tách nhánh (cần cập nhật nhánh trước khi merge)"
+            )
+        result = prereview.check_branch(
+            diff,
+            items,
+            list(s.get("item_results") or []),
+            system_paths=(plan_doc_path(tid), ARCHITECTURE_DOC),
+            intent_text=f"{ticket.title}\n{ticket.body}\n{s.get('plan', '')}",
+            feedback_text=s.get("review_notes", ""),
+            deletions=cfg.deletions,
+            outside_owns=cfg.outside_owns,
+            unfinished_items=cfg.unfinished_items,
+        )
+        rounds = s.get("gate_rounds", 0)
+        data: dict[str, Any] = {
+            "passed": result.passed,
+            "attempt": s.get("code_attempts", 0),
+            "round": rounds,
+            "stale_base": stale,
+            "violations": [v.to_dict() for v in result.violations],
+            "notes": notes,
+        }
+        if result.passed:
+            await deps.tickets.record(tid, "gate", actor="orchestrator", data=data)
+            return passed
+        feedback = prereview.render_feedback(result, original_ref=refs.target)
+        data["feedback"] = feedback
+        if rounds >= cfg.max_rounds:
+            data["escalated"] = True
+            await deps.tickets.record(tid, "gate", actor="orchestrator", data=data)
+            return {
+                "gate_passed": False,
+                "gate_feedback": feedback,
+                "escalation_reason": (
+                    f"{prereview.GATE_LABEL}: còn vi phạm sau {rounds} lần trả về bước code "
+                    f"({prereview.summary(result)})"
+                ),
+            }
+        await deps.tickets.record(tid, "gate", actor="orchestrator", data=data)
+        unfinished = next(
+            (v.paths for v in result.violations if v.check == prereview.UNFINISHED_ITEMS), ()
+        )
+        return {
+            "gate_passed": False,
+            "gate_rounds": rounds + 1,
+            "gate_feedback": feedback,
+            "gate_retry_items": (
+                list(unfinished) if result.only(prereview.UNFINISHED_ITEMS) else []
+            ),
+        }
 
     async def review(s: TicketState) -> dict[str, Any]:
         tid = s["ticket_id"]
@@ -598,6 +732,8 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             data["test_rounds"] = s.get("test_rounds", 0)
         if s.get("unpushed_changes"):
             data["unpushed_changes"] = s["unpushed_changes"]
+        if s.get("gate_feedback"):
+            data["gate_feedback"] = s["gate_feedback"]
         await deps.tickets.transition(s["ticket_id"], S.ESCALATED, actor="orchestrator", data=data)
         return {"escalation_reason": reason}
 
@@ -617,7 +753,12 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         return "code" if s["risk"] == "low" else "approve_plan"
 
     def route_code(s: TicketState) -> str:
-        return "escalate" if s.get("escalation_reason") else "review"
+        return "escalate" if s.get("escalation_reason") else "gate"
+
+    def route_gate(s: TicketState) -> str:
+        if s.get("escalation_reason"):
+            return "escalate"
+        return "review" if s.get("gate_passed", True) else "code"
 
     def route_plan_approval(s: TicketState) -> str:
         if s["plan_decision"] == Decision.APPROVED:
@@ -664,6 +805,7 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         ("plan", plan),
         ("approve_plan", approve_plan),
         ("code", code),
+        ("gate", gate),
         ("review", review),
         ("test", test),
         ("approve_merge", approve_merge),
@@ -677,7 +819,8 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
     g.add_conditional_edges("analyze", route_analyze, ["plan", "escalate"])
     g.add_conditional_edges("plan", route_plan, ["code", "approve_plan", "escalate"])
     g.add_conditional_edges("approve_plan", route_plan_approval, ["code", "plan", "escalate"])
-    g.add_conditional_edges("code", route_code, ["review", "escalate"])
+    g.add_conditional_edges("code", route_code, ["gate", "escalate"])
+    g.add_conditional_edges("gate", route_gate, ["review", "code", "escalate"])
     g.add_conditional_edges("review", route_review, ["test", "approve_merge", "code", "escalate"])
     g.add_conditional_edges("test", route_test, ["approve_merge", "code", "escalate"])
     g.add_conditional_edges("approve_merge", route_merge_approval, ["merge", "code", "escalate"])

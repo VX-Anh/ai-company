@@ -15,3 +15,13 @@ limits:
   max_test_rounds: 2
   max_merge_attempts: 2
   approval_deadline_hours: 48
+# Cổng trước review: kiểm tất định (không gọi model) nhánh ai/<ticket> sau bước code. Vi phạm thì
+# trả về bước code kèm danh sách file, không tốn vòng review; quá max_rounds lần liên tiếp thì escalate.
+prereview_gate:
+  enabled: true
+  deletions: true               # xoá file ngoài owns mà kế hoạch/ticket/góp ý không nêu
+  outside_owns: true            # sửa/thêm file ngoài owns (bỏ qua khi kế hoạch không chia owns)
+  unfinished_items: true        # bảng đầu việc còn dòng lỗi/bỏ qua
+  stale_base: warn              # off | warn: nhánh dựng trên gốc cũ chỉ ghi chú vào event gate
+  max_rounds: 2
+  skip_labels: []               # nhãn không qua cổng (research đã bị kẹp trong cards/ bởi label_scopes)

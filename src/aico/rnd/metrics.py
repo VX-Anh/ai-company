@@ -34,6 +34,8 @@ S = TicketStatus
 # Lớp lý do escalate: khớp theo đoạn đầu chuỗi lý do do builder ghi (xem _escalation_reason và
 # các `escalation_reason` trong orchestrator/builder.py). Thứ tự quan trọng: khớp đầu tiên thắng.
 ESCALATION_CLASSES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    # Đứng đầu: lý do của cổng có thể kèm chữ khác ("đầu việc chưa xong", "worker"...).
+    ("cổng trước review", ("cổng trước review",)),
     ("hết ngân sách", ("hết ngân sách",)),
     ("hết hạn mức / worker", ("không worker nào", "hạn mức", "worker", "bận quá thời gian")),
     ("review lặp", ("review chưa đạt",)),
@@ -87,6 +89,10 @@ def ticket_metrics(ticket: Ticket, events: list[Event]) -> dict[str, Any]:
     first_job_at: datetime | None = None
     last_job_at: datetime | None = None
     jobs: list[dict[str, Any]] = []
+    gate_checks = 0
+    gate_blocks = 0
+    gate_stale = 0
+    gate_violations: Counter[str] = Counter()
     for e in events:
         data = e.data or {}
         if e.kind == "status":
@@ -115,6 +121,14 @@ def ticket_metrics(ticket: Ticket, events: list[Event]) -> dict[str, Any]:
                 first_job_at = e.at
             last_job_at = e.at
             jobs.append(dict(data))
+        elif e.kind == "gate":
+            # Cổng trước review: mỗi event là một lần kiểm (bị tắt/bỏ qua thì không có event).
+            gate_checks += 1
+            gate_stale += 1 if data.get("stale_base") else 0
+            if not data.get("passed"):
+                gate_blocks += 1
+                for v in data.get("violations") or []:
+                    gate_violations[str(v.get("check"))] += 1
     minutes_to_merge = (
         round((reached_merge_at - ticket.created_at).total_seconds() / 60, 1)
         if reached_merge_at is not None
@@ -135,6 +149,10 @@ def ticket_metrics(ticket: Ticket, events: list[Event]) -> dict[str, Any]:
         "escalation": escalation,
         "escalation_class": classify_escalation(escalation) if escalation else None,
         "minutes_to_merge_approval": minutes_to_merge,
+        "gate_checks": gate_checks,
+        "gate_blocks": gate_blocks,
+        "gate_stale_base": gate_stale,
+        "gate_violations": dict(gate_violations),
         # Canary: ticket thuộc cấu hình nào tính theo job đầu tiên (event cũ thiếu trường = None).
         "company_sha": jobs[0].get("company_sha") if jobs else None,
         # Mọi cấu hình ticket đã chạy qua, theo thứ tự gặp (None = job thiếu trường). Hơn một giá
@@ -210,6 +228,19 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "escalations": dict(
             Counter(r["escalation_class"] for r in rows if r["escalation_class"]).most_common()
         ),
+        # Cổng trước review: số lần kiểm, số lần trả về bước code (mỗi lần là một vòng review
+        # không phải tốn), theo loại vi phạm; tickets_blocked = số ticket từng bị trả về.
+        "gate": {
+            "checks": sum(r.get("gate_checks", 0) for r in rows),
+            "blocks": sum(r.get("gate_blocks", 0) for r in rows),
+            "tickets_blocked": sum(1 for r in rows if r.get("gate_blocks")),
+            "stale_base": sum(r.get("gate_stale_base", 0) for r in rows),
+            "violations": dict(
+                sum(
+                    (Counter(r.get("gate_violations") or {}) for r in rows), Counter()
+                ).most_common()
+            ),
+        },
         "jobs": _job_stats(jobs),
         "jobs_by_role": _group(jobs, "role"),
         "jobs_by_room": _group(jobs, "room"),
