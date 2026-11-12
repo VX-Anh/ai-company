@@ -22,6 +22,7 @@ from aico.core import ApprovalKind, Artifact, Decision, SopSpec, Ticket, TicketR
 from aico.governance import ApprovalStore
 from aico.orchestrator import prereview
 from aico.orchestrator.ports import (
+    NO_CHANGE_ERROR,
     AgentUnavailable,
     Analyst,
     BudgetExhausted,
@@ -40,6 +41,7 @@ from aico.orchestrator.workplan import (
     ARCHITECTURE_DOC,
     ARCHITECTURE_LABEL,
     EVAL_SYSTEM_ROLE,
+    FIX_ITEM_ID,
     WorkItem,
     clamp_owns,
     eval_spec,
@@ -55,6 +57,7 @@ from aico.tools import ToolDenied, ToolError, ToolGateway
 
 S = TicketStatus
 GITLAB = "gitlab"
+UNFINISHED = prereview.UNFINISHED_ITEMS
 APPROVAL_NOTE_HEADING = "## Ghi chú của người duyệt (ưu tiên hơn kế hoạch khi mâu thuẫn)"
 
 
@@ -173,6 +176,9 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             "gate_rounds": 0,
             "gate_feedback": "",
             "gate_retry_items": [],
+            "gate_retried": [],
+            "gate_accepted": [],
+            "gate_feedback_log": "",
             "item_results": [],
         }
 
@@ -403,7 +409,7 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             items = [WorkItem("W1", "Thực hiện kế hoạch", default_role)]
         retry = set(s.get("gate_retry_items") or [])
         if feedback and retry:
-            # Cổng trước review trả về chỉ vì đầu việc chưa xong: chạy lại đúng các đầu việc đó
+            # Cổng trước review trả về vì đầu việc chưa xong: chạy lại đúng các đầu việc đó
             # với owns cũ (phụ thuộc vào đầu việc đã xong thì bỏ, phần đó đã nằm trên nhánh).
             work = [
                 replace(i, depends_on=tuple(d for d in i.depends_on if d in retry))
@@ -420,18 +426,22 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             return {"escalation_reason": f"viết code hết ngân sách: {exc}"}
         except AgentUnavailable as exc:
             return {"escalation_reason": f"viết code: {exc}"}
+        rows = [r.doc_row() for r in results]
+        if feedback:
+            # Bảng đầu việc = lần trước, đè kết quả các đầu việc vừa chạy (vòng sửa thêm dòng FIX):
+            # đầu việc còn dở không mất dấu sau một vòng sửa.
+            fresh = {r["id"]: r for r in rows}
+            kept = [r for r in s.get("item_results") or [] if r["id"] != FIX_ITEM_ID]
+            rows = [fresh.pop(r["id"], r) for r in kept] + list(fresh.values())
         produced = [r for r in results if r.changes]
         if not produced:
+            if feedback and retry and all(r.error == NO_CHANGE_ERROR for r in results):
+                # Chạy lại mà agent vẫn không sửa gì (thấy không cần sửa, hoặc owns sai): nhánh
+                # giữ nguyên, cổng sẽ cho tới review kèm ghi chú thay vì escalate.
+                return {"code_attempts": attempt, "item_results": rows}
             errors = "; ".join(f"{r.item_id}: {r.error}" for r in results if r.error)
             return {"escalation_reason": f"viết code: không đầu việc nào sửa được file ({errors})"}
 
-        rows = [r.doc_row() for r in results]
-        if feedback and retry:
-            # Bảng đầu việc = lần trước, đè kết quả các đầu việc vừa chạy lại.
-            fresh = {r["id"]: r for r in rows}
-            rows = [fresh.pop(r["id"], r) for r in s.get("item_results") or []] + list(
-                fresh.values()
-            )
         commits = [
             (
                 f"{tid}/{r.item_id}: {r.summary}",
@@ -497,7 +507,7 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         tid = s["ticket_id"]
         cfg = deps.sop.prereview_gate
         ticket = await deps.tickets.get(tid)
-        passed: dict[str, Any] = {
+        go: dict[str, Any] = {
             "gate_passed": True,
             "gate_rounds": 0,
             "gate_feedback": "",
@@ -505,7 +515,13 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         }
         skip = {label.lower() for label in cfg.skip_labels}
         if not cfg.enabled or skip & {label.lower() for label in ticket.labels}:
-            return passed
+            return go
+        modes = {
+            prereview.DELETIONS: cfg.deletions,
+            prereview.OUTSIDE_OWNS: cfg.outside_owns,
+            prereview.UNFINISHED_ITEMS: cfg.unfinished_items,
+        }
+        diff_checks = cfg.deletions != "off" or cfg.outside_owns != "off"
         project = ticket.project or deps.default_project
         refs = ticket_refs(ticket, deps.target_branch)
         items = [WorkItem.from_dict(d) for d in s.get("work_items") or []]
@@ -517,7 +533,8 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         notes: list[str] = []
         diff: prereview.BranchDiff | None = None
         stale = False
-        if cfg.deletions or cfg.outside_owns or cfg.stale_base != "off":
+        diff_skipped = False
+        if diff_checks or cfg.stale_base != "off":
             try:
                 # Diff so với commit chung, không so với đầu nhánh đích: việc người khác merge
                 # sau khi nhánh tách ra không bị tính là nhánh này xoá.
@@ -531,7 +548,7 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
                 if cfg.stale_base != "off":
                     head = await git(tid, "branch_head", {"project": project, "ref": refs.target})
                     stale = head["sha"] != fork
-                if cfg.deletions or cfg.outside_owns:
+                if diff_checks:
                     base_archive = await git(
                         tid, "download_archive", {"project": project, "ref": fork}
                     )
@@ -543,59 +560,90 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
                     )
             except (ToolError, ToolDenied, tarfile.TarError, binascii.Error, KeyError) as exc:
                 # Lỗi hạ tầng không phải lỗi của bài làm: không chặn, ghi lại để người biết.
+                diff_skipped = True
                 notes.append(f"không lấy được diff của nhánh, bỏ kiểm tra theo diff: {exc}")
         if stale:
             notes.append(
                 f"nhánh {refs.work} dựng trên gốc cũ: '{refs.target}' đã có commit mới hơn "
                 "điểm tách nhánh (cần cập nhật nhánh trước khi merge)"
             )
+        # Diff cộng dồn cả nhánh nên góp ý cũng phải cộng dồn: file reviewer yêu cầu sửa ở vòng
+        # trước vẫn là có chủ đích ở các vòng sau.
+        log = s.get("gate_feedback_log", "")
+        for text in (s.get("review_notes", ""), s.get("merge_error", "")):
+            if text and text not in log:
+                log = f"{log}\n{text}".strip()
+        accepted = s.get("gate_accepted")
+        if accepted is None and diff is not None:
+            # Ticket có từ trước khi có cổng: không xét lại thay đổi cũ đã qua tay reviewer.
+            accepted = list(diff.paths)
+            notes.append("ticket có từ trước khi có cổng: nhận mọi thay đổi đang có trên nhánh")
         result = prereview.check_branch(
             diff,
             items,
             list(s.get("item_results") or []),
             system_paths=(plan_doc_path(tid), ARCHITECTURE_DOC),
             intent_text=f"{ticket.title}\n{ticket.body}\n{s.get('plan', '')}",
-            feedback_text=s.get("review_notes", ""),
-            deletions=cfg.deletions,
-            outside_owns=cfg.outside_owns,
-            unfinished_items=cfg.unfinished_items,
+            feedback_text=log,
+            accepted=frozenset(accepted or ()),
+            retried=frozenset(s.get("gate_retried") or ()),
+            deletions=cfg.deletions != "off",
+            outside_owns=cfg.outside_owns != "off",
+            unfinished_items=cfg.unfinished_items != "off",
+        )
+        notes += result.notes
+        blocking = prereview.GateResult(
+            tuple(v for v in result.violations if modes[v.check] == "block")
         )
         rounds = s.get("gate_rounds", 0)
         data: dict[str, Any] = {
-            "passed": result.passed,
+            "passed": blocking.passed,
             "attempt": s.get("code_attempts", 0),
             "round": rounds,
             "stale_base": stale,
-            "violations": [v.to_dict() for v in result.violations],
+            "diff_skipped": diff_skipped,
+            "violations": [{**v.to_dict(), "mode": modes[v.check]} for v in result.violations],
+            # Kiểm tra ở mức warn có vi phạm: lẽ ra đã trả về nếu bật block.
+            "would_block": [v.check for v in result.violations if modes[v.check] == "warn"],
             "notes": notes,
         }
-        if result.passed:
+        if blocking.passed:
             await deps.tickets.record(tid, "gate", actor="orchestrator", data=data)
-            return passed
-        feedback = prereview.render_feedback(result, original_ref=refs.target)
+            go["gate_feedback_log"] = log
+            if diff is not None:
+                # Nhánh tới tay reviewer: từ đây cổng chỉ xét phần thay đổi mới.
+                go["gate_accepted"] = sorted({*(accepted or ()), *diff.paths})
+            elif accepted is not None:
+                go["gate_accepted"] = accepted
+            return go
+        feedback = prereview.render_feedback(blocking, original_ref=refs.target)
         data["feedback"] = feedback
+        update: dict[str, Any] = {
+            "gate_passed": False,
+            "gate_feedback": feedback,
+            "gate_feedback_log": log,
+        }
+        if s.get("gate_accepted") is None and accepted is not None:
+            update["gate_accepted"] = accepted  # ticket cũ: chốt phần đã nhận ở lần kiểm đầu
         if rounds >= cfg.max_rounds:
             data["escalated"] = True
             await deps.tickets.record(tid, "gate", actor="orchestrator", data=data)
             return {
-                "gate_passed": False,
-                "gate_feedback": feedback,
+                **update,
                 "escalation_reason": (
                     f"{prereview.GATE_LABEL}: còn vi phạm sau {rounds} lần trả về bước code "
-                    f"({prereview.summary(result)})"
+                    f"({prereview.summary(blocking)})"
                 ),
             }
         await deps.tickets.record(tid, "gate", actor="orchestrator", data=data)
-        unfinished = next(
-            (v.paths for v in result.violations if v.check == prereview.UNFINISHED_ITEMS), ()
-        )
+        # Vi phạm về file sửa trước bằng một vòng FIX; đầu việc dở vẫn nằm trong bảng đầu việc và
+        # được chạy lại ở lần trả về sau, khi không còn vi phạm về file.
+        retry = list(blocking.violations[0].paths) if blocking.only(UNFINISHED) else []
         return {
-            "gate_passed": False,
+            **update,
             "gate_rounds": rounds + 1,
-            "gate_feedback": feedback,
-            "gate_retry_items": (
-                list(unfinished) if result.only(prereview.UNFINISHED_ITEMS) else []
-            ),
+            "gate_retry_items": retry,
+            "gate_retried": sorted({*(s.get("gate_retried") or ()), *retry}),
         }
 
     async def review(s: TicketState) -> dict[str, Any]:

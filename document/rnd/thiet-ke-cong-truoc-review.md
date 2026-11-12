@@ -27,6 +27,18 @@ code ──> gate ──đạt──────────────> review
 
 Ticket vẫn ở `in_progress` trong lúc qua cổng; mỗi lần kiểm ghi một event `gate`.
 
+## Mức của từng kiểm tra
+
+`deletions`, `outside_owns`, `unfinished_items` mỗi cái một mức:
+
+- `off`: không kiểm.
+- `warn` (mặc định): ghi vi phạm vào event `gate` (`violations` có `mode: warn`, tên kiểm tra nằm
+  trong `would_block`) rồi **vẫn cho tới review**; coder không nhận góp ý nào của cổng.
+- `block`: trả về bước code như mô tả ở "Khi vi phạm".
+
+Mặc định `warn` để đo tỷ lệ chặn nhầm trên ticket thật: so `gate.would_block` ở `/rnd/metrics` với
+ghi chú review của chính các ticket đó, rồi owner mới bật `block` cho từng kiểm tra.
+
 ## Kiểm tra
 
 Diff tính giữa **commit chung** của nhánh làm việc với nhánh đích (`merge_base`) và đầu nhánh làm
@@ -35,10 +47,20 @@ nhánh đích: việc người khác merge sau khi nhánh tách ra không bị t
 
 | Khoá | Vi phạm khi | Không chặn khi |
 | --- | --- | --- |
-| `deletions` | file có ở commit chung, mất ở nhánh | file nằm trong `owns`; là đổi tên/chuyển chỗ (có file thêm mới cùng nội dung hoặc cùng tên); đường dẫn hay thư mục chứa nó được nêu trong ticket, kế hoạch hoặc góp ý review |
-| `outside_owns` | file thêm/sửa không khớp `owns` của đầu việc nào | kế hoạch không chia `owns` (có đầu việc `**`: bỏ cả kiểm tra); file do hệ thống ghi (`docs/plans/<id>.md`, `docs/architecture.md`); đường dẫn được nêu trong góp ý của reviewer/tester/người duyệt |
-| `unfinished_items` | bảng đầu việc của lần code gần nhất còn dòng khác `xong` | vòng sửa `FIX` (một đầu việc, thay cho cả bảng) |
+| `deletions` | file có ở commit chung, mất ở nhánh | file nằm trong `owns`; là đổi tên/chuyển chỗ (có file thêm mới cùng nội dung, hoặc cùng tên ở thư mục kề: mỗi bên lệch tối đa một cấp); đường dẫn hay thư mục chứa nó được nêu trong ticket, kế hoạch hoặc góp ý |
+| `outside_owns` | file thêm/sửa không khớp `owns` của đầu việc nào | kế hoạch không chia `owns` (có đầu việc `**`: bỏ cả kiểm tra); file do hệ thống ghi (`docs/plans/<id>.md`, `docs/architecture.md`); đường dẫn được nêu trong góp ý; file đi kèm: lockfile (`package-lock.json`, `pnpm-lock.yaml`, `uv.lock`...), file test và snapshot (`tests/`, `__tests__/`, `*.test.*`, `*.spec.*`, `test_*.py`, `*.snap`...), file cùng thư mục cùng tên gốc với một file trong `owns` mà nhánh đã đổi (`hero.png` cạnh `hero.pixel.json`) |
+| `unfinished_items` | bảng đầu việc còn dòng khác `xong` (bảng giữ qua các vòng sửa `FIX`) | đầu việc đã được chạy lại mà vẫn "không sửa file nào trong phạm vi": ghi chú, để reviewer xét |
 | `stale_base` | commit chung khác đầu nhánh đích | luôn chỉ ghi chú (`stale_base: true` + `notes` trong event), không chặn |
+
+**Chỉ xét phần mới.** Diff cộng dồn cả nhánh, nên cổng nhớ hai thứ trong state:
+
+- `gate_accepted`: mọi file (đổi hoặc xoá) đã có trên nhánh ở lần gần nhất nhánh được gửi review.
+  Hai kiểm tra theo diff bỏ qua các file này: thứ reviewer đã thấy không bị đòi hoàn tác ở vòng sau.
+- `gate_feedback_log`: mọi góp ý ticket từng nhận (review, kiểm thử, người duyệt merge, merge lỗi),
+  không chỉ của vòng gần nhất.
+
+Ticket đang chạy dở lúc deploy không có `gate_accepted` trong state: lần kiểm đầu nhận hết diff đang
+có trên nhánh (ghi chú trong event), từ đó chỉ xét thay đổi mới.
 
 `owns` là hợp `owns` của mọi đầu việc trong kế hoạch. Ticket có nhãn mang phạm vi riêng
 (`label_scopes`, vd `research` chỉ `cards/`) thì `owns` bị kẹp vào phạm vi đó như ở bước code, nên
@@ -53,9 +75,14 @@ tra theo diff, ghi lý do vào `notes` của event, vẫn kiểm bảng đầu v
 
 ## Khi vi phạm
 
+Phần này chỉ áp cho kiểm tra ở mức `block`.
+
 - Quay lại `code` với góp ý liệt kê từng file và lý do, đi theo đường của vòng sửa sau review
-  (đầu việc `FIX`). Riêng khi vi phạm duy nhất là đầu việc chưa xong thì chạy lại đúng các đầu việc
-  đó với `owns` cũ, bảng đầu việc trong `docs/plans/<id>.md` gộp kết quả hai lần.
+  (đầu việc `FIX`). Khi chỉ còn vi phạm đầu việc chưa xong thì chạy lại đúng các đầu việc đó với
+  `owns` cũ. Vi phạm hỗn hợp: sửa file trước bằng `FIX`, đầu việc dở vẫn nằm trong bảng và được
+  chạy lại ở lần trả về sau. Bảng đầu việc trong `docs/plans/<id>.md` gộp kết quả các lần.
+- Đầu việc chạy lại mà agent vẫn không sửa gì (thấy không cần sửa, hoặc `owns` sai): không
+  escalate, nhánh giữ nguyên và đi tới review kèm ghi chú. Lỗi worker thì vẫn tính là chưa xong.
 - Bộ đếm riêng `gate_rounds` đếm số lần trả về **liên tiếp**, về 0 khi cổng cho qua. Quá
   `max_rounds` thì escalate với lý do bắt đầu bằng `cổng trước review:`; event escalated kèm
   `gate_feedback`. Không dùng chung `review_rounds`: cổng không ăn vào số vòng của reviewer.
@@ -67,24 +94,31 @@ tra theo diff, ghi lý do vào `notes` của event, vẫn kiểm bảng đầu v
 ```yaml
 prereview_gate:
   enabled: true
-  deletions: true
-  outside_owns: true
-  unfinished_items: true
-  stale_base: warn      # off | warn
+  deletions: warn         # off | warn | block
+  outside_owns: warn      # off | warn | block
+  unfinished_items: warn  # off | warn | block
+  stale_base: warn        # off | warn
   max_rounds: 2
   skip_labels: []
 ```
+
+YAML đọc `off` trần thành `false`: spec nhận `false` là `off`, còn `true`/`on` thì báo lỗi cấu hình
+(phải ghi rõ mức).
 
 Vai trò `coder` được cấp thêm tool chỉ đọc `gitlab.merge_base` (bước code gọi tool Git bằng vai
 trò này).
 
 ## Số đo
 
-- Event `gate`: `passed`, `attempt`, `round`, `stale_base`, `violations` (`check`, `count`,
-  `paths` tối đa 40), `notes`, `feedback` (khi vi phạm), `escalated`.
-- `/rnd/metrics`: mỗi ticket có `gate_checks`, `gate_blocks`, `gate_stale_base`,
-  `gate_violations`; phần gộp có `gate` (`checks`, `blocks`, `tickets_blocked`, `stale_base`,
-  `violations` theo loại). Lớp escalate mới: `cổng trước review`.
+- Event `gate`: `passed` (không có vi phạm mức block), `attempt`, `round`, `stale_base`,
+  `diff_skipped` (bỏ kiểm diff vì lỗi Git), `violations` (`check`, `mode`, `count`, `paths` tối đa
+  40), `would_block` (kiểm tra mức warn có vi phạm), `notes`, `feedback` (khi trả về), `escalated`.
+- `/rnd/metrics`: mỗi ticket có `gate_checks`, `gate_blocks`, `gate_stale_base`, `gate_skipped`,
+  `gate_violations` (mức block), `gate_would_block` (mức warn); phần gộp có `gate` (`checks`,
+  `blocks`, `tickets_blocked`, `stale_base`, `skipped`, `violations`, `would_block` theo kiểm tra,
+  `tickets_would_block`). Lớp escalate mới: `cổng trước review`.
+- Ở mức warn, vi phạm về file chỉ đếm một lần (file vào `gate_accepted` khi nhánh tới review);
+  đầu việc dở thì đếm lại mỗi lần kiểm cho tới khi xong.
 - Lần trả về của cổng không đổi trạng thái ticket nên không tính vào `code_rounds`/`first_pass_rate`.
 
 ## Rủi ro chặn nhầm
@@ -92,12 +126,14 @@ trò này).
 - Xoá file có chủ đích mà ticket/kế hoạch không nêu đường dẫn (vd "dọn code chết") và file không
   nằm trong `owns`: bị trả về, agent không có cách "khai báo xoá" nên sau `max_rounds` sẽ escalate.
   Cách tránh: kế hoạch đưa file/thư mục cần xoá vào `owns` hoặc nêu đường dẫn.
-- Reviewer yêu cầu sửa "ở chỗ khác" mà không nêu đường dẫn: vòng sửa đụng file ngoài `owns` bị trả về.
-- Đầu việc mà agent thấy không cần sửa gì ("không sửa file nào trong phạm vi") bị coi là chưa
-  xong và chạy lại; trước đây đi thẳng tới review.
+- Reviewer yêu cầu sửa "ở chỗ khác" mà không nêu đường dẫn, và file đó không phải test,
+  lockfile hay file đi kèm: vòng sửa đụng file ngoài `owns` bị trả về.
+- Đầu việc mà agent thấy không cần sửa gì tốn thêm một lượt chạy lại trước khi tới review.
 - Thư mục cấp một nêu trần (không có `/`) không được tính là đã nêu.
+- Miễn trừ file test là theo tên: file không phải test nằm trong thư mục `tests/` cũng lọt.
 
-Tắt từng kiểm tra bằng cờ tương ứng nếu số `gate.blocks` cho thấy chặn nhầm.
+Các rủi ro trên chỉ thành chặn thật khi kiểm tra ở mức `block`; ở `warn` chúng hiện thành
+`would_block` để đối chiếu.
 
 ## Chưa làm (đề xuất)
 

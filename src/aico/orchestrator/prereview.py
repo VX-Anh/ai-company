@@ -18,13 +18,55 @@ import tarfile
 from dataclasses import dataclass, field
 from typing import Any
 
-from aico.orchestrator.workplan import ALL_FILES, WorkItem
+from aico.orchestrator.ports import NO_CHANGE_ERROR
+from aico.orchestrator.workplan import ALL_FILES, FIX_ITEM_ID, WorkItem
 
 GATE_LABEL = "cổng trước review"
 DELETIONS = "deletions"
 OUTSIDE_OWNS = "outside_owns"
 UNFINISHED_ITEMS = "unfinished_items"
 MAX_LISTED = 40  # số file tối đa liệt kê trong góp ý và event
+
+# File sinh kèm khi làm đúng việc, hiếm khi được kế hoạch hay reviewer nêu đường dẫn: lockfile
+# (thêm thư viện), file test và snapshot ("thiếu test hồi quy"). Không tính là sửa ngoài owns.
+LOCKFILES = frozenset(
+    {
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+        "bun.lockb",
+        "bun.lock",
+        "uv.lock",
+        "poetry.lock",
+        "Pipfile.lock",
+        "Cargo.lock",
+        "go.sum",
+        "composer.lock",
+        "Gemfile.lock",
+    }
+)
+TEST_DIRS = frozenset({"test", "tests", "__tests__", "__snapshots__", "spec", "specs", "e2e"})
+_TEST_NAME = re.compile(
+    r"(^test_.*\.py$)|(_test\.(py|go)$)|(^conftest\.py$)|(\.(test|spec)\.[^.]+$)|(\.snap$)"
+)
+
+
+def incidental(path: str, owned: frozenset[str] = frozenset()) -> bool:
+    """File đi kèm hợp lệ dù nằm ngoài owns.
+
+    owned: file trong owns mà nhánh đã đổi. File cùng thư mục, cùng tên gốc với một file như vậy
+    (vd `hero.png` sinh từ `hero.pixel.json`) cũng được tính là đi kèm.
+    """
+    parts = path.split("/")
+    name = parts[-1]
+    if name in LOCKFILES or _TEST_NAME.search(name) or TEST_DIRS & set(parts[:-1]):
+        return True
+    folder, stem = "/".join(parts[:-1]), name.split(".", 1)[0]
+    return any(
+        o.rsplit("/", 1)[-1].split(".", 1)[0] == stem and "/".join(o.split("/")[:-1]) == folder
+        for o in owned
+    )
 
 
 @dataclass(frozen=True)
@@ -35,6 +77,10 @@ class BranchDiff:
     changed: tuple[str, ...] = ()  # thêm mới hoặc đổi nội dung
     # File xoá thực ra là đổi tên/chuyển chỗ: có file thêm mới cùng nội dung hoặc cùng tên.
     moved: frozenset[str] = frozenset()
+
+    @property
+    def paths(self) -> tuple[str, ...]:
+        return (*self.deleted, *self.changed)
 
 
 @dataclass(frozen=True)
@@ -84,11 +130,26 @@ def branch_diff(base_b64: str, head_b64: str) -> BranchDiff:
     added = sorted(head.keys() - base.keys())
     changed = sorted(p for p in head if base.get(p) != head[p])
     added_digests = {head[p] for p in added}
-    added_names = {p.rsplit("/", 1)[-1] for p in added}
     moved = frozenset(
-        p for p in deleted if base[p] in added_digests or p.rsplit("/", 1)[-1] in added_names
+        p for p in deleted if base[p] in added_digests or any(_near_move(p, a) for a in added)
     )
     return BranchDiff(tuple(deleted), tuple(changed), moved)
+
+
+def _near_move(old: str, new: str) -> bool:
+    """Cùng tên file và chỉ đổi thư mục ở gần (mỗi bên lệch tối đa một cấp so với phần chung).
+
+    Chỉ cùng tên thôi thì không đủ: xoá `src/core/index.ts` rồi thêm `docs/index.ts` không phải
+    là chuyển chỗ.
+    """
+    a, b = old.split("/"), new.split("/")
+    if a[-1] != b[-1]:
+        return False
+    da, db = a[:-1], b[:-1]
+    common = 0
+    while common < min(len(da), len(db)) and da[common] == db[common]:
+        common += 1
+    return len(da) - common <= 1 and len(db) - common <= 1
 
 
 def mentioned(path: str, text: str) -> bool:
@@ -130,6 +191,8 @@ def check_branch(
     system_paths: tuple[str, ...] = (),
     intent_text: str = "",
     feedback_text: str = "",
+    accepted: frozenset[str] = frozenset(),
+    retried: frozenset[str] = frozenset(),
     deletions: bool = True,
     outside_owns: bool = True,
     unfinished_items: bool = True,
@@ -139,9 +202,13 @@ def check_branch(
     diff: None khi không lấy được diff (lỗi tool Git): bỏ hai kiểm tra theo diff, không chặn.
     items: đầu việc của kế hoạch (đã kẹp theo phạm vi của nhãn nếu có).
     item_results: bảng kết quả đầu việc của lần code gần nhất (ItemResult.doc_row).
-    intent_text: kế hoạch + nội dung ticket; feedback_text: góp ý của reviewer/tester/người duyệt.
+    intent_text: kế hoạch + nội dung ticket; feedback_text: mọi góp ý của reviewer/tester/người
+    duyệt ticket từng nhận (diff cộng dồn cả nhánh nên góp ý cũng cộng dồn).
+    accepted: file đã có trên nhánh ở lần gần nhất nhánh được gửi review; chỉ xét phần mới.
+    retried: đầu việc đã được chạy lại; vẫn "không sửa file nào" thì để reviewer xét, không chặn.
     """
     violations: list[Violation] = []
+    notes: list[str] = []
     owns = declared_owns(items)
     if diff is not None and deletions:
         text = f"{intent_text}\n{feedback_text}"
@@ -149,6 +216,7 @@ def check_branch(
             p
             for p in diff.deleted
             if p not in system_paths
+            and p not in accepted
             and p not in diff.moved
             and not (owns is not None and _allows(owns, p))
             and not mentioned(p, text)
@@ -157,15 +225,30 @@ def check_branch(
             violations.append(Violation(DELETIONS, bad))
     # owns không xác định thì không có chuẩn để nói file nào "ngoài phạm vi": bỏ kiểm tra này.
     if diff is not None and outside_owns and owns is not None:
+        owned = frozenset(p for p in diff.changed if _allows(owns, p))
         bad = tuple(
             p
             for p in diff.changed
-            if p not in system_paths and not _allows(owns, p) and not mentioned(p, feedback_text)
+            if p not in system_paths
+            and p not in accepted
+            and p not in owned
+            and not incidental(p, owned)
+            and not mentioned(p, feedback_text)
         )
         if bad:
             violations.append(Violation(OUTSIDE_OWNS, bad, owns))
     if unfinished_items:
-        rows = [r for r in item_results if not str(r.get("status", "")).startswith("xong")]
+        rows = []
+        for r in item_results:
+            status = str(r.get("status", ""))
+            if status.startswith("xong") or r.get("id") == FIX_ITEM_ID:
+                continue
+            if r.get("id") in retried and NO_CHANGE_ERROR in status:
+                # Chạy lại vẫn không sửa gì: agent thấy không cần sửa hoặc owns của kế hoạch sai.
+                # Không phải việc cổng phán: để reviewer xét.
+                notes.append(f"đầu việc {r['id']} chạy lại vẫn không sửa file nào: để reviewer xét")
+                continue
+            rows.append(r)
         if rows:
             violations.append(
                 Violation(
@@ -174,7 +257,7 @@ def check_branch(
                     tuple(f"{r['id']} ({r.get('title', '')}): {r.get('status', '')}" for r in rows),
                 )
             )
-    return GateResult(tuple(violations))
+    return GateResult(tuple(violations), tuple(notes))
 
 
 def _listed(paths: tuple[str, ...]) -> list[str]:

@@ -92,6 +92,8 @@ def ticket_metrics(ticket: Ticket, events: list[Event]) -> dict[str, Any]:
     gate_checks = 0
     gate_blocks = 0
     gate_stale = 0
+    gate_skipped = 0
+    gate_would_block: Counter[str] = Counter()
     gate_violations: Counter[str] = Counter()
     for e in events:
         data = e.data or {}
@@ -125,10 +127,13 @@ def ticket_metrics(ticket: Ticket, events: list[Event]) -> dict[str, Any]:
             # Cổng trước review: mỗi event là một lần kiểm (bị tắt/bỏ qua thì không có event).
             gate_checks += 1
             gate_stale += 1 if data.get("stale_base") else 0
+            gate_skipped += 1 if data.get("diff_skipped") else 0
+            gate_would_block.update(str(c) for c in data.get("would_block") or [])
             if not data.get("passed"):
                 gate_blocks += 1
                 for v in data.get("violations") or []:
-                    gate_violations[str(v.get("check"))] += 1
+                    if v.get("mode", "block") == "block":
+                        gate_violations[str(v.get("check"))] += 1
     minutes_to_merge = (
         round((reached_merge_at - ticket.created_at).total_seconds() / 60, 1)
         if reached_merge_at is not None
@@ -152,7 +157,9 @@ def ticket_metrics(ticket: Ticket, events: list[Event]) -> dict[str, Any]:
         "gate_checks": gate_checks,
         "gate_blocks": gate_blocks,
         "gate_stale_base": gate_stale,
+        "gate_skipped": gate_skipped,
         "gate_violations": dict(gate_violations),
+        "gate_would_block": dict(gate_would_block),
         # Canary: ticket thuộc cấu hình nào tính theo job đầu tiên (event cũ thiếu trường = None).
         "company_sha": jobs[0].get("company_sha") if jobs else None,
         # Mọi cấu hình ticket đã chạy qua, theo thứ tự gặp (None = job thiếu trường). Hơn một giá
@@ -235,11 +242,20 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
             "blocks": sum(r.get("gate_blocks", 0) for r in rows),
             "tickets_blocked": sum(1 for r in rows if r.get("gate_blocks")),
             "stale_base": sum(r.get("gate_stale_base", 0) for r in rows),
+            # Số lần cổng bỏ kiểm diff vì lỗi Git: cao thì số chặn/would_block đang đếm thiếu.
+            "skipped": sum(r.get("gate_skipped", 0) for r in rows),
             "violations": dict(
                 sum(
                     (Counter(r.get("gate_violations") or {}) for r in rows), Counter()
                 ).most_common()
             ),
+            # Mức warn: số lần lẽ ra đã trả về nếu bật block, theo kiểm tra; và số ticket dính.
+            "would_block": dict(
+                sum(
+                    (Counter(r.get("gate_would_block") or {}) for r in rows), Counter()
+                ).most_common()
+            ),
+            "tickets_would_block": sum(1 for r in rows if r.get("gate_would_block")),
         },
         "jobs": _job_stats(jobs),
         "jobs_by_role": _group(jobs, "role"),

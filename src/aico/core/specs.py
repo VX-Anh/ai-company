@@ -92,17 +92,34 @@ class SopLimits(_Spec):
     approval_deadline_hours: float = Field(default=48, gt=0)
 
 
+GateMode = Literal["off", "warn", "block"]
+
+
 class PrereviewGateSpec(_Spec):
-    """Cổng trước review (kiểm tất định giữa bước code và review). Thiếu khoá thì dùng mặc định:
-    ba kiểm tra chắc chắn là lỗi đều bật, nhánh dựng trên gốc cũ chỉ ghi chú."""
+    """Cổng trước review (kiểm tất định giữa bước code và review).
+
+    Mỗi kiểm tra có mức riêng: `off` không kiểm; `warn` ghi vi phạm vào event `gate` (kèm
+    `would_block`) rồi vẫn cho tới review, không gửi gì cho coder; `block` trả về bước code.
+    Mặc định `warn`: đo tỷ lệ chặn nhầm trên ticket thật trước khi owner bật `block`.
+    """
 
     enabled: bool = True
-    deletions: bool = True  # xoá file không thuộc phạm vi đầu việc
-    outside_owns: bool = True  # sửa/thêm file ngoài owns của kế hoạch
-    unfinished_items: bool = True  # còn đầu việc lỗi/bỏ qua
+    deletions: GateMode = "warn"  # xoá file không thuộc phạm vi đầu việc
+    outside_owns: GateMode = "warn"  # sửa/thêm file ngoài owns của kế hoạch
+    unfinished_items: GateMode = "warn"  # còn đầu việc lỗi/bỏ qua
     stale_base: Literal["off", "warn"] = "warn"  # nhánh không chứa đầu nhánh đích: chỉ ghi chú
     max_rounds: int = Field(default=2, ge=0)  # số lần trả về bước code liên tiếp trước khi escalate
     skip_labels: tuple[str, ...] = ()  # ticket mang nhãn này không qua cổng
+
+    @field_validator("deletions", "outside_owns", "unfinished_items", "stale_base", mode="before")
+    @classmethod
+    def _yaml_bool(cls, value: object) -> object:
+        # YAML đọc `off`/`on` trần thành bool: `off` phải tắt thật, `on` thì bắt viết rõ mức.
+        if value is False:
+            return "off"
+        if value is True:
+            raise ValueError("ghi rõ mức: off | warn | block")
+        return value
 
 
 class SopSpec(_Spec):

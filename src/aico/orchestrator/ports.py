@@ -50,6 +50,11 @@ class CodeResult:
     summary: str
 
 
+# Đầu việc chạy xong nhưng không để lại thay đổi nào trong owns (agent thấy không cần sửa, hoặc
+# owns của kế hoạch sai). Cổng trước review phân biệt lỗi này với lỗi worker.
+NO_CHANGE_ERROR = "không sửa file nào trong phạm vi"
+
+
 @dataclass(frozen=True)
 class ItemResult:
     """Kết quả một đầu việc trong kế hoạch có cấu trúc."""

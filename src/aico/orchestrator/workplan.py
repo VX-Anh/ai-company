@@ -226,10 +226,13 @@ def clamp_owns(item: WorkItem, scope: tuple[str, ...]) -> WorkItem:
     return replace(item, owns=kept or scope)
 
 
+FIX_ITEM_ID = "FIX"
+
+
 def fix_item(feedback: str, role: str = "coder") -> WorkItem:
     """Vòng sửa sau review: một đầu việc sửa được mọi file, dựa trên góp ý."""
     title = feedback.strip().splitlines()[0][:80] if feedback.strip() else "Sửa theo góp ý"
-    return WorkItem("FIX", f"Sửa theo góp ý: {title}", role, (ALL_FILES,))
+    return WorkItem(FIX_ITEM_ID, f"Sửa theo góp ý: {title}", role, (ALL_FILES,))
 
 
 def plan_doc_path(ticket_id: str) -> str:

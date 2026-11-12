@@ -25,6 +25,7 @@ from aico.agents.llm_agent import ticket_block
 from aico.core import Ticket
 from aico.llm_relay import TaskTokens
 from aico.orchestrator.ports import (
+    NO_CHANGE_ERROR,
     AgentUnavailable,
     CodeResult,
     FileChange,
@@ -572,7 +573,7 @@ class CliCoder:
             changes=tuple(kept),
             summary=summary,
             worker=str(body.get("worker", "")),
-            error="" if kept else "không sửa file nào trong phạm vi",
+            error="" if kept else NO_CHANGE_ERROR,
             rejected=tuple(rejected),
         )
 
