@@ -878,3 +878,126 @@ async def test_each_worker_attempt_is_recorded_as_job_event(company: Company) ->
         on_job=broken,
     )
     assert await runner.run("tech_lead", ticket, "lập kế hoạch") == "kế hoạch"
+
+
+async def _review_stale_branch(
+    company: Company, role_id: str = "reviewer", fail_tools: tuple[str, ...] = ()
+) -> tuple[str, dict[str, Any], list[str]]:
+    """Chấm nhánh ai/T-1 khi main đã có commit mới sau lúc nhánh tách.
+
+    Trả (prompt gửi worker, event job, các tool gitlab đã gọi). fail_tools: tool báo lỗi.
+    """
+    from aico.agents import CliReviewer
+    from aico.tools import ToolClient, ToolError, ToolSpec
+
+    class Flaky:
+        def __init__(self, inner: ToolClient) -> None:
+            self._inner = inner
+
+        async def call(self, server: str, tool: str, args: dict[str, Any]) -> dict[str, Any]:
+            if tool in fail_tools:
+                raise ToolError(f"{tool}: 502")
+            return await self._inner.call(server, tool, args)
+
+        async def list_tools(self, server: str) -> list[ToolSpec]:
+            return await self._inner.list_tools(server)
+
+    prompts: list[str] = []
+    jobs: list[dict[str, Any]] = []
+
+    async def worker(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"state": "idle"})
+        prompts.append(json.loads(request.content)["prompt"])
+        return httpx.Response(200, json={"ok": True, "result": "Ổn.\nKẾT LUẬN: ĐẠT"})
+
+    async def sink(ticket_id: str, data: dict[str, Any]) -> None:
+        jobs.append(data)
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(worker))
+    runner = CliAgentRunner(
+        company, TaskTokens(), CliSettings(WORKERS, "w", "u", 0.01, client), on_job=sink
+    )
+    h = make_harness(company, wrap_client=Flaky)
+    g = h.gitlab
+
+    def create(path: str, content: str) -> dict[str, Any]:
+        return {"action": "create", "file_path": path, "content": content}
+
+    await g.commit(PROJECT, "main", "gốc", [create("app.py", "v1\n"), create("keep.txt", "a\n")])
+    await g.create_branch(PROJECT, "ai/T-1", "main")
+    await g.commit(PROJECT, "ai/T-1", "sửa", [create("app.py", "v2\n")])
+    # Người khác merge vào main sau khi nhánh tách: file mới và sửa một file nhánh không đụng.
+    await g.commit(
+        PROJECT,
+        "main",
+        "việc khác",
+        [create("other/new.py", "x = 1\ny = 2\n"), create("keep.txt", "a\nb\n")],
+    )
+    g.calls.clear()
+    mr = {"iid": 1, "source_branch": "ai/T-1", "target_branch": "main"}
+    result = await CliReviewer(runner, h.gateway, role_id=role_id).review(
+        Ticket(id="T-1", title="Sửa app", project=PROJECT), mr
+    )
+    assert result.passed
+    return prompts[0], jobs[0], list(g.calls)
+
+
+@pytest.mark.parametrize("role_id", ["reviewer", "tester"])
+async def test_review_diff_starts_at_fork_point_when_target_moved(
+    company: Company, role_id: str
+) -> None:
+    """Commit vào main sau khi nhánh tách không hiện như bị nhánh xoá hay hoàn tác."""
+    prompt, job, calls = await _review_stale_branch(company, role_id)
+    note, _, diff = prompt.rpartition("<diff>\n")
+    assert "-v1" in diff and "+v2" in diff
+    assert "other/new.py" not in diff and "keep.txt" not in diff
+    # Chỉ một file đổi, một dòng xoá và một dòng thêm: số đo theo gốc mới.
+    assert (job["diff_files"], job["diff_lines"], job["diff_base"]) == (1, 2, "merge_base")
+    assert "merge_base" in calls
+    assert "đã có commit mới sau khi nhánh này tách ra" in note
+    assert "Không xác định được commit chung" not in note
+
+
+async def test_review_has_no_base_note_when_target_did_not_move(company: Company) -> None:
+    from aico.agents import CliReviewer
+
+    prompts: list[str] = []
+
+    async def worker(request: httpx.Request) -> httpx.Response:
+        if request.method == "GET":
+            return httpx.Response(200, json={"state": "idle"})
+        prompts.append(json.loads(request.content)["prompt"])
+        return httpx.Response(200, json={"ok": True, "result": "KẾT LUẬN: ĐẠT"})
+
+    client = httpx.AsyncClient(transport=httpx.MockTransport(worker))
+    runner = CliAgentRunner(company, TaskTokens(), CliSettings(WORKERS, "w", "u", 0.01, client))
+    h = make_harness(company)
+    create = {"action": "create", "file_path": "app.py", "content": "v1\n"}
+    await h.gitlab.commit(PROJECT, "main", "gốc", [create])
+    await h.gitlab.create_branch(PROJECT, "ai/T-1", "main")
+    await h.gitlab.commit(PROJECT, "ai/T-1", "sửa", [{**create, "content": "v2\n"}])
+    mr = {"iid": 1, "source_branch": "ai/T-1", "target_branch": "main"}
+    await CliReviewer(runner, h.gateway).review(Ticket(id="T-1", title="x", project=PROJECT), mr)
+    assert "+v2" in prompts[0]
+    assert "commit mới sau khi" not in prompts[0] and "commit chung" not in prompts[0]
+
+
+@pytest.mark.parametrize("fail_tools", [("merge_base",), ("merge_base", "branch_head")])
+async def test_review_falls_back_to_target_head_without_merge_base(
+    company: Company, fail_tools: tuple[str, ...]
+) -> None:
+    """Không lấy được commit chung: diff so với đầu nhánh đích như trước, có ghi chú giới hạn."""
+    prompt, job, _ = await _review_stale_branch(company, fail_tools=fail_tools)
+    note, _, diff = prompt.rpartition("<diff>\n")
+    assert "+v2" in diff and "other/new.py" in diff and "keep.txt" in diff
+    assert job["diff_base"] == "target_head" and job["diff_files"] == 3
+    assert "Không xác định được commit chung" in note
+    assert "đã có commit mới sau khi nhánh này tách ra; diff" not in note
+
+
+async def test_review_keeps_fork_diff_when_target_head_is_unknown(company: Company) -> None:
+    """branch_head lỗi: vẫn diff từ commit chung, chỉ không có dòng báo nhánh đích đã đổi."""
+    prompt, job, _ = await _review_stale_branch(company, fail_tools=("branch_head",))
+    assert "other/new.py" not in prompt and job["diff_base"] == "merge_base"
+    assert "commit mới sau khi" not in prompt
