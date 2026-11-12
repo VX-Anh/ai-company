@@ -14,7 +14,7 @@ import httpx
 import pytest
 from mcp.client.client import Client
 
-from mcp_gitlab.backend import FakeGitLabBackend
+from mcp_gitlab.backend import FakeGitLabBackend, GitLabError
 from mcp_gitlab.github import HttpGitHubBackend
 from mcp_gitlab.server import build_server
 from mcp_gitlab.tools import Constraints, GitLabTools
@@ -133,6 +133,23 @@ class FakeGitHub:
         if m == "DELETE" and (g := re.fullmatch(r"/git/refs/heads/(.+)", p)):
             self.refs.pop(g[1], None)
             return httpx.Response(204)
+        if m == "GET" and (g := re.fullmatch(r"/compare/(.+?)\.\.\.(.+)", p)):
+
+            def ancestors(ref: str) -> list[str]:
+                sha, out = self.refs.get(ref, ref), []
+                while sha:
+                    out.append(sha)
+                    parents = self.commits[sha]["parents"]
+                    sha = parents[0] if parents else None
+                return out
+
+            if any(self.refs.get(r, r) not in self.commits for r in (g[1], g[2])):
+                return httpx.Response(404, json={"message": "Not Found"})
+            base = set(ancestors(g[1]))
+            common = next((s for s in ancestors(g[2]) if s in base), None)
+            return httpx.Response(
+                200, json={"merge_base_commit": {"sha": common} if common else None}
+            )
         if m == "GET" and p == "/issues":
             return httpx.Response(200, json=self.issues)
         if m == "GET" and p == "/pulls":
@@ -294,3 +311,46 @@ def test_pr_view_exposes_commit_marks_for_replay() -> None:
     )
     open_pr = {**pr, "state": "open", "merged_at": None}
     assert _mr_view(_pr_view(open_pr))["merge_commit_sha"] is None
+
+
+async def test_merge_base_is_fork_point_not_pr_base_sha() -> None:
+    """main đi tiếp sau khi nhánh tách ra: merge-base là commit lúc tách, không phải đầu main."""
+    gh = FakeGitHub()
+    tools = _tools(gh)
+    fork = gh.refs["main"]
+    await tools.create_branch(REPO, "ai/T-1")
+    pushed = await tools.push(
+        REPO, "ai/T-1", "sửa", [{"path": "a.txt", "content": "a"}], "T-1:code:1"
+    )
+    # main nhận commit khác (ticket khác merge trước): base.sha của PR sẽ là commit này.
+    later = gh.next_sha()
+    gh.commits[later] = {"message": "khác", "files": {"README.md": "# 2\n"}, "parents": [fork]}
+    gh.refs["main"] = later
+
+    got = await tools.merge_base(REPO, later, pushed["commit"])
+    assert got["sha"] == fork != later
+    assert (await tools.merge_base(REPO, "main", "ai/T-1"))["sha"] == fork
+    with pytest.raises(GitLabError):
+        await tools.merge_base(REPO, "main", "f" * 40)  # commit không có trong repo
+    with pytest.raises(ValueError, match="không hợp lệ"):
+        await tools.merge_base(REPO, "main...x", "ai/T-1")
+
+
+async def test_delete_branch_pair_on_github() -> None:
+    gh = FakeGitHub()
+    backend = HttpGitHubBackend("dev-token", transport=httpx.MockTransport(gh.handler))
+    tools = GitLabTools(
+        backend,
+        Constraints(
+            allowed_projects=(REPO,),
+            branch_pattern="ai/*,base/*",
+            allowed_targets=("main", "base/*"),
+        ),
+    )
+    await tools.create_branch(REPO, "ai/T-1")
+    await tools.create_branch(REPO, "base/T-2")
+    await tools.create_branch(REPO, "ai/T-2")
+    main = gh.refs["main"]
+    got = await tools.delete_branch_pair(REPO, "ai/T-2")
+    assert got["deleted"] == ["ai/T-2", "base/T-2"]
+    assert gh.refs == {"main": main, "ai/T-1": main}

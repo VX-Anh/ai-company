@@ -1,0 +1,13 @@
+# Vai trò hệ thống: dọn cặp nhánh ai/<id> + base/<id> của ticket chạy lại đã chấm (Phòng R&D).
+# Chỉ lệnh `aico eval cleanup` gọi; không gọi model, không agent nào mang vai trò này.
+id: housekeeper
+department: rnd
+reports_to: research_lead
+worker: system
+tools:
+  - server: gitlab
+    allow: [delete_branch_pair]
+    constraints:                # MCP server kiểm tra lại: chỉ xoá khi base/<id> tồn tại
+      repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien, VX-Anh/ai-trace]
+      branch_pattern: "ai/*"
+max_risk: L2

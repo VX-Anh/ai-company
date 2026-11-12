@@ -29,7 +29,13 @@ class GitLabBackend(Protocol):
 
     async def create_branch(self, project: str, branch: str, ref: str) -> dict[str, Any]: ...
 
+    async def delete_branch(self, project: str, branch: str) -> None: ...
+
     async def recent_commits(self, project: str, branch: str) -> list[dict[str, Any]]: ...
+
+    async def merge_base(self, project: str, base: str, head: str) -> str:
+        """SHA của commit chung gần nhất giữa hai ref (branch hoặc SHA)."""
+        ...
 
     async def commit(
         self, project: str, branch: str, message: str, actions: list[dict[str, Any]]
@@ -106,12 +112,25 @@ class HttpGitLabBackend:
             params={"branch": branch, "ref": ref},
         )
 
+    async def delete_branch(self, project: str, branch: str) -> None:
+        await self._request(
+            "DELETE", f"/projects/{_pid(project)}/repository/branches/{quote(branch, safe='')}"
+        )
+
     async def recent_commits(self, project: str, branch: str) -> list[dict[str, Any]]:
         return await self._request(
             "GET",
             f"/projects/{_pid(project)}/repository/commits",
             params={"ref_name": branch, "per_page": 20},
         )
+
+    async def merge_base(self, project: str, base: str, head: str) -> str:
+        data = await self._request(
+            "GET",
+            f"/projects/{_pid(project)}/repository/merge_base",
+            params=[("refs[]", base), ("refs[]", head)],
+        )
+        return str(data["id"])
 
     async def commit(
         self, project: str, branch: str, message: str, actions: list[dict[str, Any]]
@@ -179,6 +198,7 @@ class FakeGitLabBackend:
     def __init__(self) -> None:
         self.projects: dict[str, _FakeProject] = {}
         self.merge_fails = 0
+        self.delete_fails: set[str] = set()  # tên branch mà delete_branch báo lỗi
         self.calls: list[str] = []
 
     def project(self, name: str) -> _FakeProject:
@@ -224,8 +244,43 @@ class FakeGitLabBackend:
         p.commits[branch] = list(p.commits[ref])
         return {"name": branch}
 
+    async def delete_branch(self, project: str, branch: str) -> None:
+        self.calls.append(f"delete_branch:{branch}")
+        if self.delete_fails and branch in self.delete_fails:
+            raise GitLabError(f"không xoá được branch '{branch}'", 500)
+        p = self.project(project)
+        if branch not in p.files:
+            raise GitLabError(f"không có branch '{branch}'", 404)
+        del p.files[branch]
+        p.commits.pop(branch, None)
+        for mr in p.mrs:  # như GitHub: xoá nhánh nguồn thì PR đang mở tự đóng
+            if mr["source_branch"] == branch and mr["state"] == "opened":
+                mr["state"] = "closed"
+
     async def recent_commits(self, project: str, branch: str) -> list[dict[str, Any]]:
         return list(reversed(self.project(project).commits.get(branch, [])))[:20]
+
+    def _history(self, project: str, ref: str) -> list[str]:
+        """SHA từ gốc tới ref (tên branch hoặc SHA nằm trên một branch)."""
+        commits = self.project(project).commits
+        if ref in commits:
+            return [c["id"] for c in commits[ref]]
+        for history in commits.values():
+            ids = [c["id"] for c in history]
+            if ref in ids:
+                return ids[: ids.index(ref) + 1]
+        raise GitLabError(f"không có ref {ref}", 404)
+
+    async def merge_base(self, project: str, base: str, head: str) -> str:
+        self.calls.append("merge_base")
+        common = ""
+        for a, b in zip(self._history(project, base), self._history(project, head), strict=False):
+            if a != b:
+                break
+            common = a
+        if not common:
+            raise GitLabError(f"'{base}' và '{head}' không có commit chung", 404)
+        return common
 
     async def commit(
         self, project: str, branch: str, message: str, actions: list[dict[str, Any]]

@@ -8,7 +8,7 @@ import contextlib
 import io
 import logging
 import sys
-from collections.abc import Coroutine
+from collections.abc import Coroutine, Mapping
 from pathlib import Path
 from typing import Any
 
@@ -38,12 +38,17 @@ async def _migrate(settings: Settings) -> None:
 
 
 async def _eval(settings: Settings, args: argparse.Namespace, suite: list[dict[str, Any]]) -> int:
-    """aico eval start|report: chạy lại bộ ticket chuẩn với một biến thể (Phòng R&D, R1)."""
+    """aico eval start|report|grade|cleanup: chạy lại bộ ticket chuẩn (Phòng R&D, R1)."""
     import json
 
+    import httpx
+
+    from aico.agents.remote import ExecSettings, RemoteExec
     from aico.db import create_pool
+    from aico.governance import PostgresApprovalStore, PostgresAuditLog
     from aico.rnd import evalrun
     from aico.tickets.postgres import PostgresTicketStore
+    from aico.tools import Guard, McpToolClient, ToolGateway
 
     pool = create_pool(settings.database_url)
     await pool.open()
@@ -54,8 +59,67 @@ async def _eval(settings: Settings, args: argparse.Namespace, suite: list[dict[s
             for tid, new in created:
                 print(tid, "mới" if new else "đã có")
             return 0
+        if args.eval_cmd == "cleanup":
+            # Gateway rút gọn: chỉ server Git, vẫn đủ guard + audit như aico serve.
+            company = load_company(settings.company_dir)
+            gateway = ToolGateway(
+                company,
+                Guard(company.policy, PostgresApprovalStore(pool)),
+                McpToolClient({"gitlab": settings.mcp_gitlab_url}),
+                PostgresAuditLog(pool),
+            )
+            rows = await evalrun.cleanup(
+                store,
+                args.variant,
+                evalrun.gateway_deleter(gateway),
+                default_project=settings.default_project,
+                dry_run=args.dry_run,
+            )
+            print(json.dumps(rows, ensure_ascii=False, indent=1))
+            return 1 if any("error" in r for r in rows) else 0
+        if args.eval_cmd == "grade":
+            if not settings.remote_url or not settings.worker_token:
+                raise evalrun.EvalError("chấm acceptance cần máy build (AICO_REMOTE_URL)")
+            company = load_company(settings.company_dir)
+            gateway = ToolGateway(
+                company,
+                Guard(company.policy, PostgresApprovalStore(pool)),
+                McpToolClient({"gitlab": settings.mcp_gitlab_url}),
+                PostgresAuditLog(pool),
+            )
+            async with httpx.AsyncClient() as client:
+                remote = RemoteExec(
+                    ExecSettings(settings.remote_url, settings.worker_token, client),
+                    gateway,
+                    role_id=company.sop("fix_ticket").steps["code"],
+                )
+
+                async def run_acceptance(
+                    ticket_id: str,
+                    project: str,
+                    ref: str,
+                    commands: Mapping[str, str],
+                    image: str | None,
+                ) -> dict[str, dict[str, Any]]:
+                    return await remote.run(ticket_id, project, ref, commands, image=image)
+
+                rows = await evalrun.grade(
+                    store,
+                    args.variant,
+                    suite,
+                    run_acceptance,
+                    default_project=settings.default_project,
+                    regrade=args.regrade,
+                )
+            print(json.dumps(rows, ensure_ascii=False, indent=1))
+            return 1 if any("error" in r for r in rows) else 0
         observed = {str(i["id"]): i.get("observed") or {} for i in suite if "id" in i}
-        result = await evalrun.report(store, args.variant, observed=observed, close=args.close)
+        need_grade = frozenset(
+            str(i["id"]) for i in suite if i.get("id") and evalrun.acceptance_of(i)
+        )
+        result = await evalrun.report(
+            store, args.variant, observed=observed, close=args.close, need_grade=need_grade
+        )
         print(json.dumps(result, ensure_ascii=False, indent=1))
         return 0
     finally:
@@ -176,6 +240,17 @@ def main(argv: list[str] | None = None) -> int:
     ev_report.add_argument("--variant", required=True)
     ev_report.add_argument("--suite", help="bộ chuẩn để so với số liệu chạy thật")
     ev_report.add_argument("--close", action="store_true", help="đóng ticket đã chấm")
+    ev_grade = ev_sub.add_parser(
+        "grade", help="chấm acceptance (build/test trên máy build) cho ticket đã tới chờ merge"
+    )
+    ev_grade.add_argument("--variant", required=True)
+    ev_grade.add_argument("--suite", required=True, help="bộ chuẩn có acceptance: {build, test}")
+    ev_grade.add_argument("--regrade", action="store_true", help="chấm lại ticket đã chấm")
+    ev_clean = ev_sub.add_parser(
+        "cleanup", help="xoá nhánh ai/<id>, base/<id> của ticket chạy lại đã đóng"
+    )
+    ev_clean.add_argument("--variant", required=True)
+    ev_clean.add_argument("--dry-run", action="store_true", help="chỉ liệt kê, không xoá")
     args = parser.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):
         if isinstance(stream, io.TextIOWrapper):
@@ -204,7 +279,7 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             suite: list[dict[str, Any]] = []
-            if args.suite:
+            if getattr(args, "suite", None):
                 text = (
                     sys.stdin.read() if args.suite == "-" else Path(args.suite).read_text("utf-8")
                 )

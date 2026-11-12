@@ -19,18 +19,71 @@ aico-ops bench 90 > suite.json
 docker compose --profile eval up -d aico-eval
 # 3. Chạy: mỗi mục 2 lần
 aico-ops eval-start baseline 2 < suite.json
-# 4. Xem, rồi đóng các ticket đã chấm
+# 4. Xem, chấm acceptance (mục có acceptance: {build, test}), rồi đóng các ticket đã chấm
 aico-ops eval-report baseline < suite.json
-aico-ops eval-report baseline --close
+aico-ops eval-grade baseline < suite.json
+aico-ops eval-report baseline --close < suite.json
+# 5. Dọn nhánh ai/<id>, base/<id> của ticket đã đóng (xem trước bằng --dry-run)
+aico-ops eval-cleanup baseline
 ```
 
 Đã làm: nhãn + artifact `eval`, `workplan.ticket_refs` (nhánh `ai/<id>` từ commit gốc, MR vào
 `base/<id>`), `TicketStore.claim(eval_only, eval_variant)`, `AICO_EVAL_INSTANCE`,
 `AICO_EVAL_VARIANT`, bỏ duyệt kế hoạch và chặn merge trong code (không theo luật YAML),
 mcp-gitlab/guard nhiều mẫu nhánh và ref SHA, `aico eval start|report`, service `aico-eval`
-(profile `eval`), chỉ số chung không tính ticket eval. Chưa làm: chấm acceptance (build/test trên
-máy build) tự động; dọn branch `ai/<id>` và `base/<id>` sau khi chấm; trần hạn mức riêng cho eval (hiện chỉ dựa
-vào việc owner bật/tắt `aico-eval`); `base_sha` nên là merge-base (compare API).
+(profile `eval`), chỉ số chung không tính ticket eval.
+
+Bổ sung trên nhánh `rnd-r1-gaps` (2026-11-12, chờ review + merge):
+- `base_sha` của bộ chuẩn là merge-base: tool L0 `gitlab.merge_base` (GitHub compare API,
+  GitLab `repository/merge_base`), cấp cho Reviewer (vai trò `/rnd/bench` đang dùng để đọc MR).
+  `bench` so `base_sha` của PR với `head_sha` (không so với `main`: sau merge `main` đã chứa
+  nhánh). Khác nhau thì giữ giá trị cũ ở `pr_base_sha`; `base_sha_source` = `merge_base` | `pr`
+  (`pr`: không đọc được merge-base, lý do ở `base_sha_note`). Thư mục biến thể chép từ
+  `company/` cũ không cần quyền này (bench chạy ở aico chính).
+- Dọn nhánh: `aico eval cleanup --variant <biến thể> [--dry-run]` (`aico-ops eval-cleanup`). Với
+  ticket chạy lại đã đóng hẳn (escalated/failed/done, không còn quyết định chờ xử lý) gọi tool
+  L2 `gitlab.delete_branch_pair` bằng vai trò hệ thống `housekeeper` (vai trò duy nhất được cấp;
+  guard ép `ai/*` + repo, có audit kèm SHA trước khi xoá). Server chỉ nhận tên `ai/<id>`, suy ra
+  `base/<id>`, và chỉ xoá khi `base/<id>` tồn tại: nhánh `ai/*` của ticket thường, `main`, đích
+  merge không bao giờ bị xoá; từ chối khi `ai/<id>` có MR mở vào đích khác. Xoá `ai/<id>` trước
+  (không có lúc nào nhánh làm việc tồn tại mà thiếu nhánh gốc); lỗi giữa chừng thì chạy lại xoá
+  nốt. Dọn xong ghi event `eval_cleanup`. Diff vẫn xem được ở PR đã đóng trên GitHub (GitHub tự
+  đóng PR khi nhánh nguồn bị xoá); chưa chép diff vào bản ghi thí nghiệm. Dọn **sau** khi chấm
+  acceptance (chấm cần nhánh `ai/<id>`).
+- Trần hạn mức (`aico.rnd.evalgate`): runner của instance eval chỉ nhận ticket **mới** (trạng thái
+  new) khi (1) số ticket chạy lại đã bắt đầu trong 7 ngày, mọi biến thể, còn dưới
+  `AICO_EVAL_WEEKLY_CAP` (mặc định 40; 0 = không chạy ticket mới), (2) không ticket thường nào
+  đang chạy hay chờ runner xử lý quyết định, (3) không phòng nào có agent và mọi cửa sổ hạn mức
+  dưới `AICO_EVAL_MAX_SESSION_PERCENT` (70) / `AICO_EVAL_MAX_WEEK_PERCENT` (60) — hàm
+  `rooms_free` dùng chung với bộ lập lịch dò công nghệ. Ticket đã bắt đầu vẫn chạy tiếp
+  (`claim(skip_new=True)`), kể cả quyết định `--close`. Lý do chưa chạy ghi log của `aico-eval`
+  (`chạy lại: chưa nhận ticket mới (...)`, chỉ khi lý do đổi); kết quả "chưa" giữ 60 giây. Cổng
+  không dừng ticket đang chạy dở khi hạn mức vượt ngưỡng giữa chừng.
+- Chấm acceptance: `aico eval grade --variant <biến thể> --suite suite.json [--regrade]`
+  (`aico-ops eval-grade`). Mục bộ chuẩn có `acceptance: {build, test, image?}`; với ticket chạy
+  lại đã tới chờ duyệt merge (kể cả đã đóng nhưng chưa dọn nhánh), aico tải archive nhánh
+  `ai/<id>` qua gateway (vai trò coder, có audit) và chạy từng lệnh trên máy build
+  (`RemoteExec` -> `POST /exec`, container dùng một lần, không mạng), build hỏng thì không chạy
+  test. Kết quả ghi event `eval_acceptance` (`passed`, exit code, 2.000 ký tự cuối của log);
+  lỗi hạ tầng (máy build tắt, exit 125/255) không tính là hỏng, chạy lại sẽ chấm tiếp. Agent
+  không thấy lệnh hay kết quả (chấm sau khi agent xong, không đổi trạng thái ticket).
+  `eval report` thêm `acceptance_graded`, `acceptance_pass_rate` (đạt / số lượt đã chấm),
+  `acceptance_ungraded` và chỉ số chặn `review_pass_acceptance_fail_rate` (review đạt mà
+  acceptance hỏng); `report --close` kèm bộ chuẩn không đóng lượt có acceptance mà chưa chấm
+  (`close_skipped_ungraded`).
+
+Còn thiếu sau nhánh này:
+- Chưa chạy thật `eval grade` trên máy build (mới test với máy build giả): cần thử image mặc định
+  có đủ công cụ cho từng repo và thời gian cài dependency.
+- Lệnh acceptance chạy trên nhánh của agent, nên agent sửa `package.json`/file test là tự làm
+  đề dễ đi. Cần chép file test từ `reference_head_sha` đè lên trước khi chạy (chưa làm).
+- Chỉ chấm lượt đã qua review; lượt escalate giữa chừng không chấm (đã tính trượt ở `pass_rate`).
+- Chưa có bản ghi thí nghiệm tự sinh (`document/rnd/experiments/`), tập `holdout`, so kích thước
+  diff với `reference_sha`, chép diff vào bản ghi trước khi dọn nhánh.
+- `eval cleanup` không biết bộ chuẩn: dọn trước khi `grade` thì mất nhánh để chấm (thứ tự đúng:
+  report -> grade -> report --close -> cleanup).
+- Cổng hạn mức đếm mọi agent ở các phòng, không phân biệt agent của chính instance eval: instance
+  eval nên giữ `AICO_RUNNER_CONCURRENCY=1`.
 
 ## 1. Mục tiêu
 

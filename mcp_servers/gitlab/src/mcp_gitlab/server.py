@@ -64,6 +64,10 @@ def build_server(tools: GitLabTools) -> MCPServer:
     async def branch_head(project: str, ref: str = "main") -> dict[str, Any]:
         return await _anticipated(tools.branch_head(project, ref))
 
+    @server.tool(description="Commit chung gần nhất (sha) của hai ref (branch hoặc SHA).")
+    async def merge_base(project: str, base: str, head: str) -> dict[str, Any]:
+        return await _anticipated(tools.merge_base(project, base, head))
+
     @server.tool(description="Liệt kê issue đang mở có đủ các nhãn.")
     async def list_issues(project: str, labels: list[str]) -> dict[str, Any]:
         return await _anticipated(tools.list_issues(project, labels))
@@ -71,6 +75,15 @@ def build_server(tools: GitLabTools) -> MCPServer:
     @server.tool(description="Tạo branch (chỉ branch khớp mẫu cho phép). Idempotent.")
     async def create_branch(project: str, branch: str, ref: str = "main") -> dict[str, Any]:
         return await _anticipated(tools.create_branch(project, branch, ref))
+
+    @server.tool(
+        description=(
+            "Xoá cặp nhánh ai/<id> và base/<id> (chỉ khi base/<id> tồn tại). Tham số branch là"
+            " ai/<id>. Không xoá được nhánh nào khác."
+        )
+    )
+    async def delete_branch_pair(project: str, branch: str) -> dict[str, Any]:
+        return await _anticipated(tools.delete_branch_pair(project, branch))
 
     @server.tool(
         description=(

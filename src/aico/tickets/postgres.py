@@ -260,6 +260,7 @@ class PostgresTicketStore:
         lease_seconds: float,
         eval_only: bool = False,
         eval_variant: str | None = None,
+        skip_new: bool = False,
     ) -> Ticket | None:
         async with self._pool.connection() as conn, conn.transaction():
             cur = await conn.execute(
@@ -267,6 +268,7 @@ class PostgresTicketStore:
                 " where status <> all(%(terminal)s)"
                 "   and (lease_until is null or lease_until <= now())"
                 "   and (status <> all(%(waiting)s) or pending_resume is not null)"
+                "   and (not %(skip_new)s or status <> 'new')"
                 # Ticket chạy lại = nhãn eval VÀ artifact eval (như store.eval_variant_of).
                 "   and (exists (select 1 from jsonb_array_elements_text(labels) l"
                 "                where lower(l) = 'eval')"
@@ -283,6 +285,7 @@ class PostgresTicketStore:
                     "terminal": _TERMINAL,
                     "waiting": _WAITING,
                     "eval": eval_only,
+                    "skip_new": skip_new,
                     "variant": eval_variant if eval_only else None,
                 },
             )

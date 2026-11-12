@@ -70,6 +70,7 @@ from aico.orchestrator.workplan import ticket_refs
 from aico.registry import Company, load_company
 from aico.rnd import KNOWLEDGE_ROLES, KnowledgeStore, Librarian, build_knowledge_server
 from aico.rnd.bench import candidates as bench_candidates
+from aico.rnd.evalgate import EvalGate, EvalPolicy
 from aico.rnd.scheduler import ScanPolicy, ScanScheduler
 from aico.rnd.scout import load_watchlist, scan_ticket
 from aico.settings import Settings
@@ -362,6 +363,22 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
 
         saver = AsyncPostgresSaver(saver_pool)  # type: ignore[arg-type]
         graph = build_fix_ticket(deps).compile(checkpointer=saver)
+        eval_gate: EvalGate | None = None
+        if settings.eval_instance:
+            if cli_agents is None:
+                log.warning("cổng hạn mức chạy lại: không có worker CLI, chỉ áp trần theo tuần")
+            # Một cổng dùng chung cho mọi runner của instance: cùng một trần, cùng một lần kiểm.
+            eval_gate = EvalGate(
+                tickets,
+                cli_agents.statuses if cli_agents is not None else None,
+                EvalPolicy(
+                    weekly_cap=settings.eval_weekly_cap,
+                    max_session_percent=settings.eval_max_session_percent,
+                    max_week_percent=settings.eval_max_week_percent,
+                ),
+                utcnow,
+                variant=settings.eval_variant,
+            )
         runners = tuple(
             Runner(
                 graph,
@@ -369,6 +386,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 lease_seconds=settings.lease_seconds,
                 eval_only=settings.eval_instance,
                 eval_variant=settings.eval_variant,
+                new_ticket_gate=eval_gate,
             )
             for _ in range(settings.runner_concurrency)
         )
@@ -433,8 +451,23 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                     utcnow,
                 )
 
+        async def read_merge_base(project: str, base: str, head: str) -> str:
+            result = await gateway.call(
+                sop.steps["review"],
+                "gitlab",
+                "merge_base",
+                {"project": project, "base": base, "head": head},
+                ticket_id=None,
+            )
+            return str(result["sha"])
+
         async def bench(days: int) -> list[dict[str, Any]]:
-            return await bench_candidates(tickets, read_mr, since=utcnow() - timedelta(days=days))
+            return await bench_candidates(
+                tickets,
+                read_mr,
+                since=utcnow() - timedelta(days=days),
+                read_merge_base=read_merge_base,
+            )
 
         yield Container(
             settings=settings,

@@ -146,11 +146,28 @@ class HttpGitHubBackend:
             delay = min(delay * 2, 2)
         return {"name": branch}
 
+    async def delete_branch(self, project: str, branch: str) -> None:
+        # Chỉ refs/heads/<branch>: không bao giờ đụng tag hay ref khác.
+        await self._request("DELETE", f"{_repo(project)}/git/refs/heads/{quote(branch, safe='/')}")
+
     async def recent_commits(self, project: str, branch: str) -> list[dict[str, Any]]:
         items = await self._request(
             "GET", f"{_repo(project)}/commits", params={"sha": branch, "per_page": 20}
         )
         return [{"id": c["sha"], "message": c["commit"]["message"]} for c in items]
+
+    async def merge_base(self, project: str, base: str, head: str) -> str:
+        # base.sha của PR là đầu nhánh đích lúc tạo/cập nhật PR, không phải điểm tách nhánh;
+        # compare API mới trả merge-base thật.
+        data = await self._request(
+            "GET",
+            f"{_repo(project)}/compare/{quote(base, safe='/')}...{quote(head, safe='/')}",
+            params={"per_page": 1},
+        )
+        sha = (data.get("merge_base_commit") or {}).get("sha")
+        if not sha:
+            raise GitLabError(f"'{base}' và '{head}' không có commit chung", 404)
+        return str(sha)
 
     async def commit(
         self, project: str, branch: str, message: str, actions: list[dict[str, Any]]

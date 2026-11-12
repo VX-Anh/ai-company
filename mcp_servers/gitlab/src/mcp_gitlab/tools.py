@@ -167,6 +167,16 @@ class GitLabTools:
             raise GitLabError(f"branch {ref} không có commit", 404)
         return {"project": project, "ref": ref, "sha": str(commits[0]["id"])}
 
+    async def merge_base(self, project: str, base: str, head: str) -> dict[str, Any]:
+        """Commit chung gần nhất của hai ref: điểm một nhánh tách khỏi nhánh kia."""
+        self._c.check_project(project)
+        for ref in (base, head):
+            # '...' ngăn hai ref trong URL compare của GitHub: ref chứa '..' làm lệch cặp so sánh.
+            if not ref or ".." in ref or ref.startswith(("/", "-")):
+                raise ValueError(f"ref '{ref}' không hợp lệ")
+        sha = await self._backend.merge_base(project, base, head)
+        return {"project": project, "base": base, "head": head, "sha": sha}
+
     async def list_issues(self, project: str, labels: list[str]) -> dict[str, Any]:
         self._c.check_project(project)
         issues = await self._backend.list_issues(project, labels)
@@ -190,6 +200,47 @@ class GitLabTools:
             return {"branch": branch, "created": False}
         await self._backend.create_branch(project, branch, ref)
         return {"branch": branch, "created": True}
+
+    async def delete_branch_pair(self, project: str, branch: str) -> dict[str, Any]:
+        """Xoá cặp nhánh của một ticket chạy lại đã chấm: ai/<x> rồi base/<x>.
+
+        Chỉ nhận tên ai/<x>; nhánh thứ hai luôn là base/<x> suy ra từ đó, nên tool không có cách
+        nào trỏ tới main hay một nhánh tuỳ ý. ai/<x> chỉ bị xoá khi base/<x> đang tồn tại (dấu
+        hiệu trên repo của ticket chạy lại): nhánh ai/* của ticket thường không có base/<x> nên
+        luôn bị từ chối. Xoá ai/<x> trước: nếu xoá base/<x> trước mà bước sau lỗi thì ai/<x> trông
+        như nhánh thường và mở được MR vào main. Gọi lại sau lỗi giữa chừng sẽ xoá nốt base/<x>.
+        """
+        self._c.check_project(project)
+        base = base_of(branch)
+        if base is None or "/" in branch[3:]:
+            raise ConstraintError(f"chỉ xoá được cặp nhánh ai/<id>, không phải '{branch}'")
+        self._c.check_branch(branch)
+        self._c.check_branch(base)  # server chưa bật mẫu base/* thì không có cặp nào để xoá
+        for name in (branch, base):
+            if any(fnmatchcase(name, t) for t in (*self._c.merge_targets, "main", "master")):
+                raise ConstraintError(f"không bao giờ xoá '{name}'")
+        if not await self._backend.branch_exists(project, base):
+            if await self._backend.branch_exists(project, branch):
+                raise ConstraintError(
+                    f"'{branch}' không có nhánh gốc '{base}': là nhánh của ticket thường, không xoá"
+                )
+            return {"project": project, "deleted": [], "heads": {}}
+        open_mr = await self._backend.find_open_mr(project, branch)
+        if open_mr is not None and open_mr.get("target_branch") != base:
+            raise ConstraintError(
+                f"'{branch}' đang có MR mở vào '{open_mr.get('target_branch')}', không xoá"
+            )
+        deleted: list[str] = []
+        heads: dict[str, str] = {}  # SHA trước khi xoá, ghi vào audit để dựng lại khi cần
+        for name in (branch, base):
+            if not await self._backend.branch_exists(project, name):
+                continue
+            commits = await self._backend.recent_commits(project, name)
+            if commits:
+                heads[name] = str(commits[0]["id"])
+            await self._backend.delete_branch(project, name)
+            deleted.append(name)
+        return {"project": project, "deleted": deleted, "heads": heads}
 
     async def push(
         self,

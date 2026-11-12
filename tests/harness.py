@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -74,6 +74,7 @@ def make_harness(
     label_review_rounds: dict[str, int] | None = None,
     label_scopes: dict[str, tuple[str, ...]] | None = None,
     eval_only: bool = False,
+    new_ticket_gate: Callable[[], Awaitable[bool]] | None = None,
 ) -> Harness:
     tickets = tickets or InMemoryTicketStore()
     approvals = approvals or InMemoryApprovalStore()
@@ -118,7 +119,14 @@ def make_harness(
         label_scopes=label_scopes or {},
     )
     graph = build_fix_ticket(deps).compile(checkpointer=checkpointer or InMemorySaver())
-    runner = Runner(graph, tickets, owner=owner, lease_seconds=lease_seconds, eval_only=eval_only)
+    runner = Runner(
+        graph,
+        tickets,
+        owner=owner,
+        lease_seconds=lease_seconds,
+        eval_only=eval_only,
+        new_ticket_gate=new_ticket_gate,
+    )
     return Harness(company, tickets, approvals, audit, gitlab, reviewer, gateway, runner)
 
 

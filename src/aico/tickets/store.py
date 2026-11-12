@@ -67,10 +67,13 @@ class TicketStore(Protocol):
         lease_seconds: float,
         eval_only: bool = False,
         eval_variant: str | None = None,
+        skip_new: bool = False,
     ) -> Ticket | None:
         """Nhận một ticket cần chạy. eval_only=False (aico chính) bỏ qua ticket chạy lại (nhãn +
         artifact eval); True (instance chạy lại) chỉ nhận chúng, và chỉ của `eval_variant` nếu có
-        (instance đang mount cấu hình của biến thể nào thì chỉ chạy biến thể đó)."""
+        (instance đang mount cấu hình của biến thể nào thì chỉ chạy biến thể đó).
+        skip_new=True: không nhận ticket trạng thái new (cổng hạn mức của instance chạy lại đang
+        đóng), chỉ nhận ticket đã bắt đầu."""
         ...
 
     async def renew(self, ticket_id: str, *, owner: str, lease_seconds: float) -> bool: ...
@@ -231,10 +234,13 @@ class InMemoryTicketStore:
         lease_seconds: float,
         eval_only: bool = False,
         eval_variant: str | None = None,
+        skip_new: bool = False,
     ) -> Ticket | None:
         async with self._lock:
             now = utcnow()
             for ticket in sorted(self._tickets.values(), key=lambda t: t.updated_at):
+                if skip_new and ticket.status is TicketStatus.NEW:
+                    continue
                 variant = eval_variant_of(ticket)
                 if (variant is not None) != eval_only:
                     continue
