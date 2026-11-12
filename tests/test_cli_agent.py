@@ -445,13 +445,16 @@ async def test_cli_coder_without_changes_escalates(company: Company) -> None:
 
 
 def test_archive_diff_and_verdict_parsing() -> None:
-    from aico.agents.cli_agent import archive_diff, parse_verdict
+    from aico.agents.cli_agent import archive_diff, diff_size, file_diffs, parse_verdict
 
     base = _tar_gz({"a.ts": "1\n2\n", "gone.ts": "x\n", "same.ts": "s\n"})
     head = _tar_gz({"a.ts": "1\n3\n", "new.ts": "n\n", "same.ts": "s\n"}, root="other-root")
     diff = archive_diff(base, head)
     assert "-2\n+3\n" in diff and "+++ b/new.ts" in diff and "--- a/gone.ts" in diff
     assert "same.ts" not in diff
+    # Cỡ thay đổi ghi vào event job của lần review: 3 file, a.ts -1 +1, gone.ts -1, new.ts +1.
+    assert diff_size(file_diffs(base, head)) == {"diff_files": 3, "diff_lines": 4}
+    assert diff_size(file_diffs(base, base)) == {"diff_files": 0, "diff_lines": 0}
 
     assert parse_verdict("Ổn.\n\n**KẾT LUẬN: ĐẠT**") == (True, "Ổn.")
     assert parse_verdict("Thiếu test cho tên rỗng.\nKẾT LUẬN: CẦN SỬA") == (
@@ -494,9 +497,17 @@ async def test_cli_reviewer_requests_changes_then_passes(company: Company) -> No
         assert "<plan>" in job["prompt"] and "Gợi ý ngoài kế hoạch" in job["prompt"]
         return httpx.Response(200, json={"ok": True, "result": verdicts.pop(0)})
 
+    jobs: list[dict[str, Any]] = []
+
+    async def sink(ticket_id: str, data: dict[str, Any]) -> None:
+        jobs.append(data)
+
     client = httpx.AsyncClient(transport=httpx.MockTransport(worker))
     runner = CliAgentRunner(
-        company, TaskTokens(), CliSettings(WORKERS, "worker-secret", "u", 0.01, client)
+        company,
+        TaskTokens(),
+        CliSettings(WORKERS, "worker-secret", "u", 0.01, client),
+        on_job=sink,
     )
     h = make_harness(
         company,
@@ -508,6 +519,12 @@ async def test_cli_reviewer_requests_changes_then_passes(company: Company) -> No
     await h.runner.run_until_idle()
 
     assert (await h.tickets.get("T-1")).status is TicketStatus.AWAITING_MERGE_APPROVAL
+    # Job review ghi cỡ MR lúc chấm; job khác không có trường này.
+    reviews = [j for j in jobs if j["role"] == "reviewer"]
+    # MR gồm cả tài liệu kế hoạch hệ thống ghi vào branch, nên nhiều hơn một file README.
+    assert len(reviews) == 2
+    assert all(j["diff_files"] >= 1 and j["diff_lines"] >= 2 for j in reviews)
+    assert all("diff_lines" not in j for j in jobs if j["role"] != "reviewer")
     assert calls == [
         ("claude", "coder"),
         ("codex", "reviewer"),
@@ -847,6 +864,8 @@ async def test_each_worker_attempt_is_recorded_as_job_event(company: Company) ->
     assert (ok["tokens_in"], ok["tokens_out"], ok["duration_seconds"]) == (1200, 300, 42.5)
     assert ok["prompt_sha"] == prompt_sha(company.prompt_text("tech_lead"))
     assert len(ok["prompt_sha"]) == 12 and ok["knowledge"] is False
+    # Canary: mỗi job mang dấu vân tay cấu hình công ty đang chạy.
+    assert ok["company_sha"] == failed["company_sha"] == company.sha and len(company.sha) == 12
 
     async def broken(ticket_id: str, data: dict[str, Any]) -> None:
         raise RuntimeError("db lỗi")

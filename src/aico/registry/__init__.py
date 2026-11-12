@@ -1,3 +1,3 @@
-from aico.registry.loader import Company, RegistryError, load_company
+from aico.registry.loader import Company, RegistryError, company_fingerprint, load_company
 
-__all__ = ["Company", "RegistryError", "load_company"]
+__all__ = ["Company", "RegistryError", "company_fingerprint", "load_company"]

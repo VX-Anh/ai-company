@@ -11,6 +11,9 @@ Các chỉ số chính và lý do:
 - escalations theo lớp lý do: biết lỗi nào lặp lại để thành giả thuyết thí nghiệm.
 - jobs theo vai trò / phòng / prompt_sha: tỷ lệ lỗi, hết hạn mức, token, thời gian; so trước–sau
   khi đổi prompt (prompt_sha đổi).
+- diff_lines / diff_files (job review ghi kích thước MR lúc chấm): tỷ lệ đạt vòng đầu theo cỡ
+  thay đổi (giả thuyết P4: đầu việc diff nhỏ đạt vòng đầu nhiều hơn). Chỉ là tương quan.
+- company_sha của job đầu tiên: ticket chạy bằng cấu hình nào (canary, xem rnd/canary.py).
 """
 
 from __future__ import annotations
@@ -80,6 +83,7 @@ def ticket_metrics(ticket: Ticket, events: list[Event]) -> dict[str, Any]:
     escalation = ""
     waiting = None  # trạng thái chờ người gần nhất: biết quyết định thuộc bước nào
     reached_merge_at: datetime | None = None
+    first_job_at: datetime | None = None
     jobs: list[dict[str, Any]] = []
     for e in events:
         data = e.data or {}
@@ -105,12 +109,15 @@ def ticket_metrics(ticket: Ticket, events: list[Event]) -> dict[str, Any]:
             elif waiting is S.AWAITING_PLAN_APPROVAL:
                 plan_reviews += 1
         elif e.kind == "job":
+            if first_job_at is None:
+                first_job_at = e.at
             jobs.append(dict(data))
     minutes_to_merge = (
         round((reached_merge_at - ticket.created_at).total_seconds() / 60, 1)
         if reached_merge_at is not None
         else None
     )
+    first_diff = next((j for j in jobs if isinstance(j.get("diff_lines"), int)), {})
     return {
         "id": ticket.id,
         "project": ticket.project,
@@ -125,6 +132,12 @@ def ticket_metrics(ticket: Ticket, events: list[Event]) -> dict[str, Any]:
         "escalation": escalation,
         "escalation_class": classify_escalation(escalation) if escalation else None,
         "minutes_to_merge_approval": minutes_to_merge,
+        # Canary: ticket thuộc cấu hình nào tính theo job đầu tiên (event cũ thiếu trường = None).
+        "company_sha": jobs[0].get("company_sha") if jobs else None,
+        "started_at": first_job_at.isoformat() if first_job_at is not None else None,
+        # Cỡ MR ở lần review ĐẦU (bài nộp vòng một): các vòng sau đã cộng cả phần sửa theo góp ý.
+        "diff_lines": first_diff.get("diff_lines"),
+        "diff_files": first_diff.get("diff_files"),
         "jobs": jobs,
     }
 
@@ -211,8 +224,61 @@ def knowledge_effect(rows: list[dict[str, Any]]) -> dict[str, Any]:
     return {"with_knowledge": _short(aggregate(with_k)), "without": _short(aggregate(without))}
 
 
+# Bậc kích thước diff (dòng thêm + xoá): (tên, cận trên gồm cả nó; None = không giới hạn).
+DIFF_BUCKETS: tuple[tuple[str, int | None], ...] = (
+    ("0-50", 50),
+    ("51-200", 200),
+    ("201-1000", 1000),
+    (">1000", None),
+)
+
+
+def diff_bucket(lines: int) -> str:
+    return next(name for name, top in DIFF_BUCKETS if top is None or lines <= top)
+
+
+def diff_size_effect(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    """Giả thuyết P4: ticket có diff nhỏ đạt vòng đầu nhiều hơn. Tách theo bậc và theo trung vị.
+
+    Chỉ tính ticket đã kết thúc có số đo diff (job review từ khi có trường diff_lines; ticket
+    hỏng trước lần review đầu không có số đo nên không vào bảng). Tương quan, không phải nhân
+    quả: việc khó thường vừa diff lớn vừa nhiều vòng, chia nhỏ đầu việc chưa chắc đổi kết quả.
+    """
+    measured = [
+        r
+        for r in rows
+        if r.get("diff_lines") is not None and r["status"] in ("done", "failed", "escalated")
+    ]
+    by_bucket: dict[str, list[dict[str, Any]]] = {name: [] for name, _ in DIFF_BUCKETS}
+    for r in measured:
+        by_bucket[diff_bucket(r["diff_lines"])].append(r)
+    mid = median(r["diff_lines"] for r in measured) if measured else None
+    small = [r for r in measured if mid is not None and r["diff_lines"] <= mid]
+    large = [r for r in measured if mid is not None and r["diff_lines"] > mid]
+
+    def cell(group: list[dict[str, Any]]) -> dict[str, Any]:
+        agg = aggregate(group)
+        return {
+            "tickets": len(group),
+            "done": agg["done"],
+            "first_pass_rate": agg["first_pass_rate"],
+            "avg_review_rounds": agg["avg_review_rounds"],
+            "avg_diff_lines": _avg(r["diff_lines"] for r in group),
+            "avg_diff_files": _avg(r["diff_files"] for r in group if r.get("diff_files")),
+        }
+
+    return {
+        "measured": len(measured),
+        "median_diff_lines": mid,
+        "by_bucket": {name: cell(group) for name, group in by_bucket.items()},
+        "at_or_below_median": cell(small),
+        "above_median": cell(large),
+        "note": "Tương quan, không phải nhân quả; mẫu nhỏ thì chênh lệch không có ý nghĩa.",
+    }
+
+
 def metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
-    """Tổng và tách theo nhãn chính, repo; kèm so sánh có/không chèn tri thức."""
+    """Tổng và tách theo nhãn chính, repo; kèm so sánh có/không chèn tri thức, cỡ diff."""
     by_label: dict[str, list[dict[str, Any]]] = defaultdict(list)
     by_project: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for r in rows:
@@ -223,6 +289,7 @@ def metrics(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "by_label": {k: _short(aggregate(v)) for k, v in sorted(by_label.items())},
         "by_project": {k: _short(aggregate(v)) for k, v in sorted(by_project.items())},
         "knowledge_effect": knowledge_effect(rows),
+        "diff_size": diff_size_effect(rows),
     }
 
 

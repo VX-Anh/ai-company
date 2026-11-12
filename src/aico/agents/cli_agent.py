@@ -47,6 +47,17 @@ def prompt_sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
 
+def company_sha(content_sha: str, deploy_sha: str | None = None) -> str | None:
+    """Mốc cấu hình đang chạy ghi vào event `job`: "<mốc deploy>-<dấu vân tay company/>".
+
+    Mốc deploy (AICO_COMPANY_SHA, vd git sha) tách cả lần deploy chỉ đổi code; thiếu thì chỉ còn
+    dấu vân tay nội dung. Cả hai đều thiếu (Company dựng tay) thì None.
+    """
+    deploy = "".join(ch for ch in (deploy_sha or "") if ch.isalnum())[:12]
+    parts = [p for p in (deploy, content_sha) if p]
+    return "-".join(parts) or None
+
+
 def job_record(
     *,
     role_id: str,
@@ -55,6 +66,7 @@ def job_record(
     system_prompt: str,
     outcome: Mapping[str, Any],
     critical: bool,
+    company_sha: str | None = None,
 ) -> dict[str, Any]:
     """Dữ liệu của event `job`: đủ để tính chỉ số theo vai trò, phòng, phiên bản prompt."""
     tokens = outcome.get("tokens")
@@ -69,6 +81,7 @@ def job_record(
         "mode": mode,
         "room": room,
         "prompt_sha": prompt_sha(system_prompt),
+        "company_sha": company_sha,
         "ok": ok,
         "critical": critical,
         "tokens_in": tokens_in,
@@ -102,6 +115,8 @@ class CliSettings:
     # các vai trò trong knowledge_roles. Trả None khi không có thẻ nào đủ liên quan.
     knowledge: Callable[[Ticket, str], Awaitable[str | None]] | None = None
     knowledge_roles: tuple[str, ...] = ()
+    # Mốc deploy (AICO_COMPANY_SHA) ghi kèm dấu vân tay company/ vào event job; xem company_sha.
+    deploy_sha: str | None = None
 
 
 class CliAgentRunner:
@@ -117,6 +132,7 @@ class CliAgentRunner:
         self._tokens = tokens
         self._settings = settings
         self._on_job = on_job
+        self._company_sha = company_sha(company.sha, settings.deploy_sha)
         self._client = settings.http_client or httpx.AsyncClient()
         self._ranks: tuple[float, dict[str, int]] = (float("-inf"), {})
 
@@ -137,12 +153,14 @@ class CliAgentRunner:
         workspace: dict[str, Any] | None = None,
         spread: int = 0,
         critical: bool = False,
+        extra: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Giao việc cho một agent con ở phòng provider còn chỗ; trả nguyên kết quả của worker.
 
         workspace: mã nguồn (tar.gz base64) để agent sửa code tại chỗ (mode="write").
         spread: xoay thứ tự phòng ưu tiên, để các đầu việc song song rải sang nhiều phòng.
         critical: việc găng (việc khác đang chờ nó): phòng chậm xếp sau các phòng cùng hạng.
+        extra: số đo thêm ghi vào event `job` (vd diff_lines của MR đang review); không gửi worker.
         """
         role = self._company.role(role_id)
         if role.worker != "cli" or not role.workers:
@@ -182,7 +200,7 @@ class CliAgentRunner:
                     outcome = await self._try(name, job, timeout)
                     if outcome is not None:
                         await self._record(
-                            ticket, role_id, mode, name, job, outcome, critical, knowledge
+                            ticket, role_id, mode, name, job, outcome, critical, knowledge, extra
                         )
                     if outcome is not None and "error" not in outcome:
                         return {**outcome, "worker": name}
@@ -206,6 +224,7 @@ class CliAgentRunner:
         outcome: Mapping[str, Any],
         critical: bool,
         knowledge: bool,
+        extra: Mapping[str, Any] | None = None,
     ) -> None:
         if self._on_job is None:
             return
@@ -216,8 +235,11 @@ class CliAgentRunner:
             system_prompt=str(job.get("system_prompt") or ""),
             outcome=outcome,
             critical=critical,
+            company_sha=self._company_sha,
         )
         data["knowledge"] = knowledge
+        # Số đo thêm không được đè trường chuẩn của bản ghi.
+        data.update({k: v for k, v in (extra or {}).items() if k not in data})
         try:
             await self._on_job(ticket.id, data)
         except Exception as exc:  # số liệu đo không được làm hỏng job thật
@@ -610,26 +632,50 @@ def _archive_files(archive_b64: str) -> dict[str, str]:
     return files
 
 
-def archive_diff(base_b64: str, head_b64: str) -> str:
-    """Unified diff giữa hai bản mã nguồn (tar.gz base64), cắt bớt nếu quá dài."""
+def file_diffs(base_b64: str, head_b64: str) -> list[list[str]]:
+    """Unified diff từng file đổi giữa hai bản mã nguồn (tar.gz base64), theo thứ tự đường dẫn."""
     base, head = _archive_files(base_b64), _archive_files(head_b64)
-    chunks: list[str] = []
+    out: list[list[str]] = []
     for path in sorted(base.keys() | head.keys()):
         old, new = base.get(path), head.get(path)
         if old == new:
             continue
-        chunks.extend(
-            difflib.unified_diff(
-                (old or "").splitlines(keepends=True),
-                (new or "").splitlines(keepends=True),
-                fromfile=f"a/{path}" if old is not None else "/dev/null",
-                tofile=f"b/{path}" if new is not None else "/dev/null",
+        out.append(
+            list(
+                difflib.unified_diff(
+                    (old or "").splitlines(keepends=True),
+                    (new or "").splitlines(keepends=True),
+                    fromfile=f"a/{path}" if old is not None else "/dev/null",
+                    tofile=f"b/{path}" if new is not None else "/dev/null",
+                )
             )
         )
-    diff = "".join(chunks)
+    return out
+
+
+def diff_size(diffs: list[list[str]]) -> dict[str, int]:
+    """Kích thước thay đổi của MR ghi vào event `job` của lần review: số file đổi và số dòng
+    thêm + xoá (đếm trên diff đầy đủ, trước khi cắt). File nhị phân đổi nội dung không đếm được.
+    """
+    lines = sum(
+        1
+        for chunk in diffs
+        for line in chunk
+        if line[:1] in "+-" and not line.startswith(("+++ ", "--- "))
+    )
+    return {"diff_files": len(diffs), "diff_lines": lines}
+
+
+def join_diff(diffs: list[list[str]]) -> str:
+    diff = "".join(line for chunk in diffs for line in chunk)
     if len(diff) > MAX_DIFF_CHARS:
         diff = diff[:MAX_DIFF_CHARS] + "\n... (diff bị cắt, xem thêm trong thư mục)\n"
     return diff
+
+
+def archive_diff(base_b64: str, head_b64: str) -> str:
+    """Unified diff giữa hai bản mã nguồn (tar.gz base64), cắt bớt nếu quá dài."""
+    return join_diff(file_diffs(base_b64, head_b64))
 
 
 def parse_verdict(text: str) -> tuple[bool, str] | None:
@@ -733,7 +779,8 @@ class CliReviewer:
             raise AgentUnavailable("ticket không có repo")
         head = await self._archive(ticket, project, mr["source_branch"])
         base = await self._archive(ticket, project, mr["target_branch"])
-        diff = archive_diff(base["data"], head["data"])
+        diffs = file_diffs(base["data"], head["data"])
+        diff = join_diff(diffs)
         brief = next(
             (
                 self._label_briefs[x.lower()]
@@ -768,6 +815,7 @@ class CliReviewer:
             mode="review",
             workspace=workspace,
             critical=True,
+            extra=diff_size(diffs),
         )
         shots = body.get("shots")
         if self._shot_sink is not None and isinstance(shots, list) and shots:

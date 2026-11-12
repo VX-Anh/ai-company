@@ -185,6 +185,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                     http_client=worker_client,
                     knowledge=knowledge.prompt_block if knowledge is not None else None,
                     knowledge_roles=KNOWLEDGE_ROLES,
+                    deploy_sha=settings.deploy_sha,
                 ),
                 on_job=lambda ticket_id, data: tickets.record(
                     ticket_id, "job", actor=str(data.get("role") or "aico"), data=data

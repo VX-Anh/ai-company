@@ -42,6 +42,13 @@ deploy() {
         --exclude=./.ruff_cache --exclude=./.ssh --exclude=./.claude --exclude=./deploy/secrets \
         --exclude=./deploy/.env --exclude='__pycache__' -cf - .) | tar -xf - -C ~/ai-company
     cd "$STACK" || return 1
+    # Mốc deploy cho canary (event job ghi company_sha): sha commit của bản nguồn, thêm "d" khi có
+    # sửa chưa commit. Prompt nằm cả trong code, nên đổi code cũng mở đợt canary mới.
+    AICO_COMPANY_SHA="$(git -c safe.directory='*' -C "$SRC" rev-parse --short=11 HEAD 2>/dev/null)"
+    if [ -n "$AICO_COMPANY_SHA" ] && ! git -c safe.directory='*' -C "$SRC" diff --quiet HEAD 2>/dev/null; then
+        AICO_COMPANY_SHA="${AICO_COMPANY_SHA}d"
+    fi
+    export AICO_COMPANY_SHA
     docker compose up -d --build 2>&1 | grep -E 'Started|rror'
     # Cache build cũ làm ổ ảo WSL phình (từng lên 23 GB): chỉ giữ 3 ngày gần nhất.
     docker builder prune -f --filter until=72h >/dev/null
@@ -117,9 +124,33 @@ k = d["knowledge_effect"]
 print("chèn tri thức: có {} ticket (đạt ngay {}, review TB {}) | không {} ticket (đạt ngay {}, review TB {})".format(
     k["with_knowledge"]["tickets"], k["with_knowledge"]["first_pass_rate"], k["with_knowledge"]["avg_review_rounds"],
     k["without"]["tickets"], k["without"]["first_pass_rate"], k["without"]["avg_review_rounds"]))
+s = d.get("diff_size") or {}
+if s.get("measured"):
+    print("theo cỡ diff ở lần review đầu ({} ticket có số đo, trung vị {} dòng; tương quan, không phải nhân quả):".format(s["measured"], s["median_diff_lines"]))
+    cells = list(s["by_bucket"].items()) + [("<= trung vị", s["at_or_below_median"]), ("> trung vị", s["above_median"])]
+    for k, v in cells:
+        if v["tickets"]:
+            print("  {} dòng: {tickets} ticket, đạt ngay {first_pass_rate}, review TB {avg_review_rounds}, TB {avg_diff_lines} dòng / {avg_diff_files} file".format(k, **v))
 print("theo nhãn:")
 for k, v in d["by_label"].items():
     print("  {}: {tickets} ticket, đạt ngay {first_pass_rate}, review TB {avg_review_rounds}, escalate {escalated}".format(k, **v))
+' ;;
+    canary)  # canary [sha] [n]: n ticket đầu của cấu hình sha (bỏ trống: mới nhất) so với n ticket trước; chỉ đọc
+        api GET "/rnd/canary?n=${3:-10}${2:+&sha=$2}" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+if "after" not in d:
+    sys.exit("lỗi: " + json.dumps(d, ensure_ascii=False))
+print("canary {} (n={}, {} ngày)".format(d["sha"], d["n"], d["days"]))
+for name, key in (("sau  ", "after"), ("trước", "before")):
+    g = d[key]
+    print("  {}: {tickets} ticket (xong {done}, escalate {escalated}, lỗi {failed}), đạt vòng đầu {first_pass_rate}, vòng review TB {avg_review_rounds}, người trả lại {owner_return_rate}, token TB {avg_tokens}".format(name, **g))
+    print("         ticket:", " ".join(g["ids"]) or "-", "| cấu hình:", g["company_shas"])
+verdict = {True: "XẤU ĐI: xem lại thay đổi, cân nhắc revert (không tự revert)", False: "không xấu đi quá ngưỡng", None: "chưa kết luận"}[d["regressed"]]
+print("kết quả:", verdict)
+for r in d["reasons"]:
+    print("  -", r)
+print("ghi chú:", d["note"])
 ' ;;
     bench)  # bench [số ngày]: ứng viên bộ ticket chuẩn (JSON), chọn 10–15 lưu vào eval/tickets/
         api GET "/rnd/bench?days=${2:-90}" | python3 -m json.tool --no-ensure-ascii ;;
@@ -141,7 +172,7 @@ for k, v in d["by_label"].items():
             "$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "actor": "owner", "comment": sys.argv[2]}))' "$3" "${4:-}")" \
             | python3 -c "$summary" ;;
     *)
-        echo "lệnh: safe | deploy [--force] | tickets [n] | ticket <id> | workers | logs [service] [since] | metrics [ngày] | bench [ngày] | scan [ngày]"
+        echo "lệnh: safe | deploy [--force] | tickets [n] | ticket <id> | workers | logs [service] [since] | metrics [ngày] | canary [sha] [n] | bench [ngày] | scan [ngày]"
         echo "      eval-start <biến thể> [lần] < suite.json | eval-report <biến thể> [--close] (cần: docker compose --profile eval up -d aico-eval)"
         echo "      create <file.json> | decide <id> <approved|revise|changes_requested|rejected> [ghi chú] | escalate <id> <action> [ghi chú]"
         echo "      remote-image (dựng image Node + Chromium trên máy build, chạy lại khi sửa node-playwright.Dockerfile)"

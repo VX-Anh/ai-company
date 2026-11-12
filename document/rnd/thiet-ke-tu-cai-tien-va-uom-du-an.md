@@ -31,7 +31,7 @@ Việc phải làm:
 | 2.1 | Vai trò `experimenter` (workers `[codex, claude]`, L2, chỉ repo `VX-Anh/ai-company`, branch `rnd/*`) và `evaluator` (L0 + chạy eval) | mcp-gitlab cần cho phép `rnd/*` cho riêng repo này (`GITLAB_BRANCH_PATTERN` hiện là một mẫu chung `ai/*`: cần đổi thành ánh xạ repo → mẫu) |
 | 2.2 | `SelfImprovePlanner` (mẫu `RetroPlanner`): đầu vào `<metrics>` + giả thuyết; đầu ra kế hoạch theo mẫu bản ghi thí nghiệm | Luật rủi ro `selfimprove = high`, `projects: [VX-Anh/ai-company]` |
 | 2.3 | `label_scopes`: `selfimprove → (company/prompts/, company/roles/)` (dùng lại cơ chế đã có cho research) | Lớp chặn thứ hai sau CI |
-| 2.4 | Canary: sau deploy, ghi `company_sha` vào event `job`; `/rnd/metrics?since_company=<sha>` so N ticket kế tiếp với N ticket trước; xấu đi quá ngưỡng thì tạo ticket escalated "đề xuất revert" kèm lệnh | Không tự revert |
+| 2.4 | Canary: sau deploy, ghi `company_sha` vào event `job`; `/rnd/metrics?since_company=<sha>` so N ticket kế tiếp với N ticket trước; xấu đi quá ngưỡng thì tạo ticket escalated "đề xuất revert" kèm lệnh | Không tự revert. **Phần báo cáo đã code (nhánh `rnd-canary`, 2026-11-12, chưa merge):** event `job` mang `company_sha` = `<AICO_COMPANY_SHA 12 ký tự>-<dấu vân tay company/>` (thiếu biến môi trường thì chỉ có dấu vân tay; dấu vân tay băm `org.yaml`, `roles/`, `prompts/`, `sops/`, `policies/`, không tính `rnd/watchlist.yaml`); `GET /rnd/canary?sha=&n=10&first_pass_drop=15&review_increase=0.5` (thay cho `since_company`) và `aico-ops canary [sha] [n]`: ticket thuộc cấu hình của job đầu tiên, xếp theo lúc job đầu chạy, chỉ tính ticket đã kết thúc, bỏ ticket eval và nhãn research/docs/retro; `regressed` là `null` khi nhóm sau chưa đủ N. **Chưa làm (chờ owner duyệt):** tự tạo ticket escalated "đề xuất revert"; `aico-ops deploy` chưa tự đặt `AICO_COMPANY_SHA` |
 | 2.5 | Hàng đợi giả thuyết `rnd_topics` (migration): nguồn, mục tiêu, chỉ số, trạng thái `open/testing/confirmed/refuted` | Retro và ticket dò đẩy vào đây; owner chọn cái đem thử |
 
 **Câu hỏi cho owner:**
@@ -63,3 +63,10 @@ decisions/NNNN-<slug>.md: đi tiếp / dừng / đổi hướng, số đo, rủi
 Tỷ lệ đạt vòng đầu, vòng review, tỷ lệ owner trả lại, token/ticket (theo tháng) · số thí nghiệm,
 tỷ lệ confirmed/refuted · thay đổi giữ được sau canary · spike có quyết định trong trần · hạn mức
 R&D tiêu mỗi tuần.
+
+Quan sát kèm theo (nhánh `rnd-canary`, 2026-11-12, chưa merge): job review ghi `diff_files`,
+`diff_lines` (dòng thêm + xoá của MR so với nhánh đích lúc chấm, gồm cả tài liệu kế hoạch hệ thống
+ghi vào branch); `/rnd/metrics` có mục `diff_size`: tỷ lệ đạt vòng đầu theo cỡ diff ở lần review
+đầu (bậc 0-50 / 51-200 / 201-1000 / >1000 dòng, và dưới/trên trung vị), để thử giả thuyết P4
+"đầu việc diff nhỏ đạt vòng đầu nhiều hơn". Đây là tương quan, không phải nhân quả: việc khó
+thường vừa diff lớn vừa nhiều vòng. Ticket hỏng trước lần review đầu không có số đo.
