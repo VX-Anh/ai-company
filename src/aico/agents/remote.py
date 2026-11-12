@@ -19,6 +19,7 @@ from typing import Any
 import httpx
 
 from aico.core import Artifact
+from aico.orchestrator.ports import StepRunError
 from aico.tickets import TicketStore
 from aico.tools import ToolError, ToolGateway
 
@@ -68,7 +69,7 @@ class PreviewSettings:
     timeout_seconds: float = 900
 
 
-class RemoteExecError(RuntimeError):
+class RemoteExecError(StepRunError):
     """Máy build không chạy được lệnh (không tải được mã nguồn, không phản hồi, lỗi hạ tầng):
     khác với lệnh chạy xong mà exit khác 0."""
 
@@ -187,10 +188,13 @@ class RemoteExec:
         commands: Mapping[str, str],
         *,
         image: str | None = None,
+        timeout_seconds: float | None = None,
     ) -> ExecRun:
         """Chạy các lệnh (tên bước -> lệnh) nối tiếp trong một container trên mã nguồn của `ref`;
         dừng ở bước đầu tiên exit khác 0. `ref` là nhánh thì ghim về SHA đầu nhánh trước khi tải:
-        kết quả gắn với đúng một commit dù nhánh đổi sau đó."""
+        kết quả gắn với đúng một commit dù nhánh đổi sau đó. `timeout_seconds` thay giới hạn
+        chung của ExecSettings cho lần chạy này."""
+        timeout = timeout_seconds or self._s.timeout_seconds
         sha = ref
         try:
             if not _SHA.fullmatch(ref):
@@ -218,7 +222,7 @@ class RemoteExec:
             "command": steps_script(commands, nonce),
             "archive": archive["data"],
             "strip": 1,  # archive GitHub/GitLab có một thư mục gốc
-            "timeout_seconds": self._s.timeout_seconds,
+            "timeout_seconds": timeout,
         }
         if image:
             job["image"] = image
@@ -227,7 +231,7 @@ class RemoteExec:
                 f"{self._s.url.rstrip('/')}/exec",
                 json=job,
                 headers={"Authorization": f"Bearer {self._s.token}"},
-                timeout=self._s.timeout_seconds + 120,
+                timeout=timeout + 120,
             )
             result: dict[str, Any] = resp.json()
         except (httpx.HTTPError, ValueError) as exc:

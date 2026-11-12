@@ -45,6 +45,7 @@ from aico.agents import (
     RetroPlanner,
     SiteWatcher,
 )
+from aico.agents.remote import ExecSettings, RemoteExec
 from aico.api import ApiDeps
 from aico.core import Ticket, utcnow
 from aico.db import create_pool
@@ -237,6 +238,24 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 tickets,
                 role_id=sop.steps["code"],
             )
+        # Kiểm tra `checks` của cổng trước review: build/test của repo chạy trên máy build.
+        step_runner: RemoteExec | None = None
+        gate_cfg = sop.prereview_gate
+        if (
+            remote
+            and settings.remote_url
+            and settings.worker_token
+            and gate_cfg.enabled
+            and gate_cfg.checks != "off"
+            and gate_cfg.check_projects
+        ):
+            exec_client = httpx.AsyncClient()
+            exit_stack.push_async_callback(exec_client.aclose)
+            step_runner = RemoteExec(
+                ExecSettings(settings.remote_url, settings.worker_token, exec_client),
+                gateway,
+                role_id=sop.steps["code"],  # như các lần gọi Git khác của cổng
+            )
         site_watcher: SiteWatcher | None = None
         if previewer is not None and settings.site_watch_seconds > 0 and not settings.eval_instance:
             site_watcher = SiteWatcher(
@@ -312,6 +331,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             test_skip_labels=(DOCS_LABEL, RESEARCH_LABEL),
             label_review_rounds={RESEARCH_LABEL: RESEARCH_REVIEW_ROUNDS} if research_on else {},
             label_scopes={RESEARCH_LABEL: (CARDS_DIR,)} if research_on else {},
+            step_runner=step_runner,
         )
 
         async def preview_ticket(ticket_id: str, site: bool) -> dict[str, Any]:

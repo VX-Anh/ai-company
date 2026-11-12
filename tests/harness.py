@@ -21,7 +21,7 @@ from aico.orchestrator import (
     StaticPlanner,
     build_fix_ticket,
 )
-from aico.orchestrator.ports import Analyst, Coder, Planner, Previewer, Reviewer
+from aico.orchestrator.ports import Analyst, Coder, Planner, Previewer, Reviewer, StepRunner
 from aico.orchestrator.runner import NewTicketGate
 from aico.registry import Company
 from aico.tickets import InMemoryTicketStore, TicketStore
@@ -88,6 +88,7 @@ def make_harness(
     eval_only: bool = False,
     new_ticket_gate: NewTicketGate | None = None,
     prereview_gate: PrereviewGateSpec | None = None,
+    step_runner: Callable[[ToolGateway], StepRunner] | None = None,
 ) -> Harness:
     tickets = tickets or InMemoryTicketStore()
     approvals = approvals or InMemoryApprovalStore()
@@ -134,6 +135,7 @@ def make_harness(
         test_skip_labels=test_skip_labels,
         label_review_rounds=label_review_rounds or {},
         label_scopes=label_scopes or {},
+        step_runner=step_runner(gateway) if step_runner is not None else None,
     )
     graph = build_fix_ticket(deps).compile(checkpointer=checkpointer or InMemorySaver())
     runner = Runner(

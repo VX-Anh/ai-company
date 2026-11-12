@@ -25,5 +25,29 @@ prereview_gate:
   outside_owns: warn            # sửa/thêm file ngoài owns (bỏ qua khi kế hoạch không chia owns)
   unfinished_items: warn        # bảng đầu việc còn dòng lỗi/bỏ qua
   stale_base: warn              # off | warn: nhánh dựng trên gốc cũ chỉ ghi chú vào event gate
+  # checks: chạy build/test/typecheck của repo trên đầu nhánh ai/<id> ở máy build (một lần chạy
+  # gộp các bước mỗi lượt qua cổng, không gọi model). Máy build lỗi/bận/hết giờ thì bỏ, không chặn.
+  checks: warn                  # off | warn | block
+  checks_timeout: 900           # giây cho cả lần chạy khi repo không đặt timeout riêng
+  checks_skip_labels: [research, docs, retro]   # ticket không phải code: không chạy checks
+  # Lệnh theo repo; repo không có ở đây thì bỏ kiểm tra checks. Máy build đã cài dependency theo
+  # lockfile (npm ci / pnpm install --frozen-lockfile) trước khi chạy, các bước chạy KHÔNG có mạng:
+  # không ghi lệnh cài ở đây. Bước hỏng thì dừng, bước sau không chạy.
+  check_projects:
+    VX-Anh/aico-office:
+      steps:
+        - {name: typecheck, run: npm run typecheck}
+        - {name: build, run: npm run build}
+        - {name: test, run: npm test}
+    VX-Anh/ai-trace:
+      steps:                    # build trước: typecheck của gói phụ thuộc cần dist/ của model
+        - {name: build, run: pnpm -r build}
+        - {name: typecheck, run: pnpm -r typecheck}
+        - {name: test, run: pnpm test}
+    VX-Anh/linh-hoa-vien:
+      steps:                    # không chạy test:e2e/test:perf (Playwright, chậm): để Tester
+        - {name: typecheck, run: npm run typecheck}
+        - {name: build, run: npm run build}
+        - {name: test, run: npm test}
   max_rounds: 2
   skip_labels: []               # nhãn không qua cổng (research đã bị kẹp trong cards/ bởi label_scopes)
