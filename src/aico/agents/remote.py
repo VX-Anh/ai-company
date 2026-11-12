@@ -9,7 +9,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -64,6 +64,89 @@ class PreviewSettings:
     build: str = DEFAULT_PREVIEW_BUILD
     output: str = "dist"
     timeout_seconds: float = 900
+
+
+class RemoteExecError(RuntimeError):
+    """Máy build không chạy được lệnh (không tải được mã nguồn, không phản hồi, lỗi hạ tầng):
+    khác với lệnh chạy xong mà exit khác 0."""
+
+
+# Mã thoát của máy build khi lỗi nằm ở hạ tầng (docker volume/network, SSH), không phải ở lệnh.
+INFRA_EXIT_CODES = frozenset({125, 255})
+
+
+@dataclass(frozen=True)
+class ExecSettings:
+    url: str  # remote runner, ví dụ http://remote-runner:8500
+    token: str
+    http_client: httpx.AsyncClient
+    timeout_seconds: float = 1200
+
+
+class RemoteExec:
+    """Chạy lệnh trên mã nguồn của một ref trong container dùng một lần của máy build (POST /exec).
+
+    aico tải archive qua gateway (guard + audit) rồi gửi lên máy build; máy build không có token
+    Git. Dùng để chấm acceptance của ticket chạy lại sau khi agent đã xong việc.
+    """
+
+    def __init__(
+        self, settings: ExecSettings, gateway: ToolGateway, role_id: str = "coder"
+    ) -> None:
+        self._s = settings
+        self._gateway = gateway
+        self._role = role_id
+
+    async def run(
+        self,
+        ticket_id: str | None,
+        project: str,
+        ref: str,
+        commands: Mapping[str, str],
+        *,
+        image: str | None = None,
+    ) -> dict[str, dict[str, Any]]:
+        """Chạy lần lượt từng lệnh (tên bước -> lệnh) trên cùng một archive, mỗi lệnh một
+        container mới; dừng ở bước đầu tiên exit khác 0. Trả tên bước -> kết quả của máy build."""
+        try:
+            archive = await self._gateway.call(
+                self._role,
+                "gitlab",
+                "download_archive",
+                {"project": project, "ref": ref},
+                ticket_id=ticket_id,
+            )
+        except ToolError as exc:
+            raise RemoteExecError(f"không tải được {ref}: {exc}") from exc
+        steps: dict[str, dict[str, Any]] = {}
+        for name, command in commands.items():
+            job: dict[str, Any] = {
+                "command": command,
+                "archive": archive["data"],
+                "strip": 1,  # archive GitHub/GitLab có một thư mục gốc
+                "timeout_seconds": self._s.timeout_seconds,
+            }
+            if image:
+                job["image"] = image
+            try:
+                resp = await self._s.http_client.post(
+                    f"{self._s.url.rstrip('/')}/exec",
+                    json=job,
+                    headers={"Authorization": f"Bearer {self._s.token}"},
+                    timeout=self._s.timeout_seconds + 120,
+                )
+                result: dict[str, Any] = resp.json()
+            except (httpx.HTTPError, ValueError) as exc:
+                raise RemoteExecError(f"máy build không phản hồi: {exc}") from exc
+            code = result.get("exit_code")
+            if resp.status_code != 200 or not isinstance(code, int):
+                raise RemoteExecError(str(result.get("error") or f"HTTP {resp.status_code}"))
+            if code in INFRA_EXIT_CODES:
+                raise RemoteExecError(f"máy build lỗi hạ tầng (exit {code}) ở bước {name}")
+            steps[name] = result
+            if code != 0:
+                break
+        return steps
 
 
 class RemotePreviewer:

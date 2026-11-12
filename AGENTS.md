@@ -39,7 +39,8 @@ src/aico/rnd            Phòng R&D GĐ2: đọc thẻ tri thức (cards), chỉ 
                         metrics (chỉ số hiệu năng agent từ event, /rnd/metrics), bench (ứng viên
                         bộ ticket chuẩn, /rnd/bench), scout + scheduler (ticket dò công nghệ từ
                         watchlist, tự động mặc định tắt), guardrails (aico check-selfimprove: PR
-                        nhánh rnd/* chỉ sửa prompt và workers/limits)
+                        nhánh rnd/* chỉ sửa prompt và workers/limits), evalrun + evalgate (chạy
+                        lại bộ chuẩn: aico eval start|report|grade|cleanup, cổng hạn mức)
 src/aico/jira           đồng bộ một chiều ticket -> Jira (issue, trạng thái, nhãn chờ người, link PR)
 src/aico/llm_relay      model relay (token theo task, ngân sách)
 mcp_servers/gitlab      MCP server Git (GitHub backend mặc định, MR = PR)

@@ -134,6 +134,8 @@ for k, v in d["by_label"].items():
         else
             docker compose exec -T aico aico eval report --variant "$2" --suite - ${3:-}
         fi ;;
+    eval-grade)  # eval-grade <biến thể> [--regrade] < suite.json: chấm acceptance {build, test} trên máy build
+        cd "$STACK" && docker compose exec -T aico aico eval grade --variant "$2" --suite - ${3:-} ;;
     eval-cleanup)  # eval-cleanup <biến thể> [--dry-run]: xoá nhánh ai/<id>, base/<id> của ticket chạy lại đã đóng
         cd "$STACK" && docker compose exec -T aico aico eval cleanup --variant "$2" ${3:-} ;;
     remote-image)  # dựng image build mặc định (Node + thư viện Chromium) trên server
@@ -144,7 +146,7 @@ for k, v in d["by_label"].items():
             | python3 -c "$summary" ;;
     *)
         echo "lệnh: safe | deploy [--force] | tickets [n] | ticket <id> | workers | logs [service] [since] | metrics [ngày] | bench [ngày] | scan [ngày]"
-        echo "      eval-start <biến thể> [lần] < suite.json | eval-report <biến thể> [--close] | eval-cleanup <biến thể> [--dry-run] (cần: docker compose --profile eval up -d aico-eval)"
+        echo "      eval-start <biến thể> [lần] < suite.json | eval-report <biến thể> [--close] | eval-grade <biến thể> < suite.json | eval-cleanup <biến thể> [--dry-run] (cần: docker compose --profile eval up -d aico-eval)"
         echo "      create <file.json> | decide <id> <approved|revise|changes_requested|rejected> [ghi chú] | escalate <id> <action> [ghi chú]"
         echo "      remote-image (dựng image Node + Chromium trên máy build, chạy lại khi sửa node-playwright.Dockerfile)"
         exit 2 ;;
