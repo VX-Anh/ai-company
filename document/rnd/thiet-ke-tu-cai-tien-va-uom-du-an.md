@@ -63,3 +63,10 @@ decisions/NNNN-<slug>.md: đi tiếp / dừng / đổi hướng, số đo, rủi
 Tỷ lệ đạt vòng đầu, vòng review, tỷ lệ owner trả lại, token/ticket (theo tháng) · số thí nghiệm,
 tỷ lệ confirmed/refuted · thay đổi giữ được sau canary · spike có quyết định trong trần · hạn mức
 R&D tiêu mỗi tuần.
+
+Quan sát kèm theo (nhánh `rnd-canary`, 2026-11-12, chưa merge): job review ghi `diff_files`,
+`diff_lines` (dòng thêm + xoá của MR so với nhánh đích lúc chấm, gồm cả tài liệu kế hoạch hệ thống
+ghi vào branch); `/rnd/metrics` có mục `diff_size`: tỷ lệ đạt vòng đầu theo cỡ diff ở lần review
+đầu (bậc 0-50 / 51-200 / 201-1000 / >1000 dòng, và dưới/trên trung vị), để thử giả thuyết P4
+"đầu việc diff nhỏ đạt vòng đầu nhiều hơn". Đây là tương quan, không phải nhân quả: việc khó
+thường vừa diff lớn vừa nhiều vòng. Ticket hỏng trước lần review đầu không có số đo.

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import timedelta
+from typing import Any
 
 import httpx
 
@@ -180,3 +181,67 @@ def test_knowledge_effect_splits_tickets_by_injected_jobs() -> None:
     assert effect["with_knowledge"]["first_pass_rate"] == 1.0
     assert effect["without"]["tickets"] == 1  # C không có event job (trước R0): không tính
     assert effect["without"]["avg_review_rounds"] == 3
+
+
+async def test_diff_size_effect_groups_first_pass_by_first_review_diff() -> None:
+    from aico.rnd.metrics import diff_bucket, diff_size_effect, metrics
+
+    assert [diff_bucket(n) for n in (0, 50, 51, 200, 1000, 1001)] == [
+        "0-50",
+        "0-50",
+        "51-200",
+        "51-200",
+        "201-1000",
+        ">1000",
+    ]
+    # Cỡ diff lấy ở lần review ĐẦU, không phải lần sau (đã cộng phần sửa).
+    store = InMemoryTicketStore()
+    await store.create(Ticket(id="T-9", title="a", project="x/app"), actor="t")
+    await store.record("T-9", "job", actor="coder", data=job("coder", "claude"))
+    for lines in (40, 90):
+        data = job("reviewer", "codex", diff_lines=lines, diff_files=2)
+        await store.record("T-9", "job", actor="reviewer", data=data)
+    measured = ticket_metrics(await store.get("T-9"), await store.events("T-9"))
+    assert (measured["diff_lines"], measured["diff_files"]) == (40, 2)
+
+    def row(tid: str, lines: int | None, rounds: int, status: str = "done") -> dict[str, Any]:
+        return {
+            "id": tid,
+            "project": "x",
+            "labels": [],
+            "status": status,
+            "code_rounds": rounds,
+            "review_rounds": rounds,
+            "merge_reviews": 1,
+            "owner_returns": 0,
+            "escalation_class": None,
+            "minutes_to_merge_approval": 5.0,
+            "diff_lines": lines,
+            "diff_files": 1 if lines is not None else None,
+            "jobs": [],
+        }
+
+    rows = [
+        row("A", 10, 1),
+        row("B", 30, 1),
+        row("C", 300, 1),
+        row("D", 400, 3),
+        row("E", 5000, 2),
+        row("old", None, 1),  # event trước khi có trường: không vào bảng
+        row("run", 20, 1, status="in_review"),  # chưa kết thúc: không vào bảng
+    ]
+    effect = diff_size_effect(rows)
+    assert effect["measured"] == 5 and effect["median_diff_lines"] == 300
+    buckets = effect["by_bucket"]
+    assert [buckets[k]["tickets"] for k in buckets] == [2, 0, 2, 1]
+    assert (
+        buckets["0-50"]["first_pass_rate"] == 1.0 and buckets["51-200"]["first_pass_rate"] is None
+    )
+    assert (
+        buckets["201-1000"]["first_pass_rate"] == 0.5 and buckets[">1000"]["first_pass_rate"] == 0
+    )
+    assert effect["at_or_below_median"]["tickets"] == 3 and effect["above_median"]["tickets"] == 2
+    assert effect["above_median"]["avg_review_rounds"] == 2.5
+    assert "không phải nhân quả" in effect["note"]
+    assert metrics(rows)["diff_size"]["measured"] == 5
+    assert diff_size_effect([])["median_diff_lines"] is None

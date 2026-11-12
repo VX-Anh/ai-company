@@ -117,6 +117,13 @@ k = d["knowledge_effect"]
 print("chèn tri thức: có {} ticket (đạt ngay {}, review TB {}) | không {} ticket (đạt ngay {}, review TB {})".format(
     k["with_knowledge"]["tickets"], k["with_knowledge"]["first_pass_rate"], k["with_knowledge"]["avg_review_rounds"],
     k["without"]["tickets"], k["without"]["first_pass_rate"], k["without"]["avg_review_rounds"]))
+s = d.get("diff_size") or {}
+if s.get("measured"):
+    print("theo cỡ diff ở lần review đầu ({} ticket có số đo, trung vị {} dòng; tương quan, không phải nhân quả):".format(s["measured"], s["median_diff_lines"]))
+    cells = list(s["by_bucket"].items()) + [("<= trung vị", s["at_or_below_median"]), ("> trung vị", s["above_median"])]
+    for k, v in cells:
+        if v["tickets"]:
+            print("  {} dòng: {tickets} ticket, đạt ngay {first_pass_rate}, review TB {avg_review_rounds}, TB {avg_diff_lines} dòng / {avg_diff_files} file".format(k, **v))
 print("theo nhãn:")
 for k, v in d["by_label"].items():
     print("  {}: {tickets} ticket, đạt ngay {first_pass_rate}, review TB {avg_review_rounds}, escalate {escalated}".format(k, **v))
