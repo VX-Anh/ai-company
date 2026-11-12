@@ -122,6 +122,7 @@ async def test_tools_for_hides_l3_and_ungranted(company: Company) -> None:
         "read_file",
         "download_archive",
         "branch_head",
+        "merge_base",
         "create_branch",
         "push",
         "open_merge_request",

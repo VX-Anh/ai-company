@@ -9,6 +9,7 @@ from langgraph.checkpoint.base import BaseCheckpointSaver
 from langgraph.checkpoint.memory import InMemorySaver
 
 from aico.core import Ticket
+from aico.core.specs import PrereviewGateSpec
 from aico.governance import ApprovalStore, InMemoryApprovalStore, InMemoryAuditLog
 from aico.governance.verify import verify_merge_approval
 from aico.orchestrator import (
@@ -86,6 +87,7 @@ def make_harness(
     label_scopes: dict[str, tuple[str, ...]] | None = None,
     eval_only: bool = False,
     new_ticket_gate: NewTicketGate | None = None,
+    prereview_gate: PrereviewGateSpec | None = None,
 ) -> Harness:
     tickets = tickets or InMemoryTicketStore()
     approvals = approvals or InMemoryApprovalStore()
@@ -110,6 +112,8 @@ def make_harness(
         client = wrap_client(client)
     gateway = ToolGateway(company, Guard(company.policy, approvals), client, audit)
     sop = company.sop("fix_ticket")
+    if prereview_gate is not None:  # test đổi cấu hình cổng trước review mà không sửa company/
+        sop = sop.model_copy(update={"prereview_gate": prereview_gate})
     deps = Deps(
         sop=sop,
         tickets=tickets,

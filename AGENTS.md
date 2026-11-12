@@ -21,7 +21,8 @@ company/                cấu hình công ty: org, roles/*.yaml, prompts/*.md, s
 src/aico/core           model dữ liệu chung (Ticket, Event, spec của role/SOP)
 src/aico/registry       nạp + kiểm tra company/
 src/aico/tickets        ticket store Postgres, bảng chuyển trạng thái
-src/aico/orchestrator   graph LangGraph của SOP (builder), runner, state, workplan (chia đầu việc)
+src/aico/orchestrator   graph LangGraph của SOP (builder), runner, state, workplan (chia đầu việc),
+                        prereview (cổng trước review: kiểm tất định diff nhánh giữa code và review)
 src/aico/agents         cli_agent: giao việc cho worker (CliAgentRunner, CliCoder, CliReviewer, cũng là
                         Tester với TEST_BRIEF); llm_agent (LlmPlanner, LlmAnalyst = BA);
                         retro (Researcher hồi cứu); docs (ticket nhãn docs: Researcher web, BA,

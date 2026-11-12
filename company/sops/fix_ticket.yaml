@@ -15,3 +15,15 @@ limits:
   max_test_rounds: 2
   max_merge_attempts: 2
   approval_deadline_hours: 48
+# Cổng trước review: kiểm tất định (không gọi model) nhánh ai/<ticket> sau bước code.
+# Mức của từng kiểm tra: off | warn | block. warn = ghi vi phạm vào event `gate` (would_block)
+# rồi vẫn cho tới review; block = trả về bước code kèm danh sách file, quá max_rounds lần liên
+# tiếp thì escalate. Đang để warn để đo tỷ lệ chặn nhầm (/rnd/metrics, khối gate) trước khi bật block.
+prereview_gate:
+  enabled: true
+  deletions: warn               # xoá file ngoài owns mà kế hoạch/ticket/góp ý không nêu
+  outside_owns: warn            # sửa/thêm file ngoài owns (bỏ qua khi kế hoạch không chia owns)
+  unfinished_items: warn        # bảng đầu việc còn dòng lỗi/bỏ qua
+  stale_base: warn              # off | warn: nhánh dựng trên gốc cũ chỉ ghi chú vào event gate
+  max_rounds: 2
+  skip_labels: []               # nhãn không qua cổng (research đã bị kẹp trong cards/ bởi label_scopes)
