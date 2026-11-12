@@ -217,3 +217,26 @@ async def test_replay_branch_cannot_open_or_merge_into_main() -> None:
     sneaky = await backend.create_mr(PROJECT, "ai/T-2", "main", "x", "")
     with pytest.raises(ConstraintError, match="base/T-2"):
         await tools.merge_mr(PROJECT, sneaky["iid"], "A-1")
+
+
+async def test_merge_base_on_fake_backend() -> None:
+    tools, backend = _tools()
+    await backend.commit(
+        PROJECT, "main", "gốc", [{"action": "create", "file_path": "a", "content": "1"}]
+    )
+    fork = (await tools.branch_head(PROJECT))["sha"]
+    await tools.create_branch(PROJECT, "ai/T-1")
+    await tools.push(PROJECT, "ai/T-1", "sửa", [{"path": "a", "content": "2"}], "k1")
+    await backend.commit(
+        PROJECT, "main", "khác", [{"action": "create", "file_path": "b", "content": "1"}]
+    )
+    main_now = (await tools.branch_head(PROJECT))["sha"]
+    assert main_now != fork
+    assert (await tools.merge_base(PROJECT, "main", "ai/T-1"))["sha"] == fork
+    assert (await tools.merge_base(PROJECT, main_now, "ai/T-1"))["sha"] == fork
+    with pytest.raises(ConstraintError):
+        await tools.merge_base("other/repo", "main", "ai/T-1")
+    with pytest.raises(GitLabError):
+        await tools.merge_base(PROJECT, "main", "khong-co")
+    async with Client(build_server(tools)) as client:
+        assert "merge_base" in {t.name for t in (await client.list_tools()).tools}

@@ -432,8 +432,23 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                     utcnow,
                 )
 
+        async def read_merge_base(project: str, base: str, head: str) -> str:
+            result = await gateway.call(
+                sop.steps["review"],
+                "gitlab",
+                "merge_base",
+                {"project": project, "base": base, "head": head},
+                ticket_id=None,
+            )
+            return str(result["sha"])
+
         async def bench(days: int) -> list[dict[str, Any]]:
-            return await bench_candidates(tickets, read_mr, since=utcnow() - timedelta(days=days))
+            return await bench_candidates(
+                tickets,
+                read_mr,
+                since=utcnow() - timedelta(days=days),
+                read_merge_base=read_merge_base,
+            )
 
         yield Container(
             settings=settings,

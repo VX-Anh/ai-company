@@ -152,6 +152,19 @@ class HttpGitHubBackend:
         )
         return [{"id": c["sha"], "message": c["commit"]["message"]} for c in items]
 
+    async def merge_base(self, project: str, base: str, head: str) -> str:
+        # base.sha của PR là đầu nhánh đích lúc tạo/cập nhật PR, không phải điểm tách nhánh;
+        # compare API mới trả merge-base thật.
+        data = await self._request(
+            "GET",
+            f"{_repo(project)}/compare/{quote(base, safe='/')}...{quote(head, safe='/')}",
+            params={"per_page": 1},
+        )
+        sha = (data.get("merge_base_commit") or {}).get("sha")
+        if not sha:
+            raise GitLabError(f"'{base}' và '{head}' không có commit chung", 404)
+        return str(sha)
+
     async def commit(
         self, project: str, branch: str, message: str, actions: list[dict[str, Any]]
     ) -> dict[str, Any]:

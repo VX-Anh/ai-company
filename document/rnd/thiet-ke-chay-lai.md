@@ -30,7 +30,15 @@ aico-ops eval-report baseline --close
 mcp-gitlab/guard nhiều mẫu nhánh và ref SHA, `aico eval start|report`, service `aico-eval`
 (profile `eval`), chỉ số chung không tính ticket eval. Chưa làm: chấm acceptance (build/test trên
 máy build) tự động; dọn branch `ai/<id>` và `base/<id>` sau khi chấm; trần hạn mức riêng cho eval (hiện chỉ dựa
-vào việc owner bật/tắt `aico-eval`); `base_sha` nên là merge-base (compare API).
+vào việc owner bật/tắt `aico-eval`).
+
+Bổ sung trên nhánh `rnd-r1-gaps` (2026-11-12, chờ review + merge):
+- `base_sha` của bộ chuẩn là merge-base: tool L0 `gitlab.merge_base` (GitHub compare API,
+  GitLab `repository/merge_base`), cấp cho Reviewer (vai trò `/rnd/bench` đang dùng để đọc MR).
+  `bench` so `base_sha` của PR với `head_sha` (không so với `main`: sau merge `main` đã chứa
+  nhánh). Khác nhau thì giữ giá trị cũ ở `pr_base_sha`; `base_sha_source` = `merge_base` | `pr`
+  (`pr`: không đọc được merge-base, lý do ở `base_sha_note`). Thư mục biến thể chép từ
+  `company/` cũ không cần quyền này (bench chạy ở aico chính).
 
 ## 1. Mục tiêu
 

@@ -167,6 +167,16 @@ class GitLabTools:
             raise GitLabError(f"branch {ref} không có commit", 404)
         return {"project": project, "ref": ref, "sha": str(commits[0]["id"])}
 
+    async def merge_base(self, project: str, base: str, head: str) -> dict[str, Any]:
+        """Commit chung gần nhất của hai ref: điểm một nhánh tách khỏi nhánh kia."""
+        self._c.check_project(project)
+        for ref in (base, head):
+            # '...' ngăn hai ref trong URL compare của GitHub: ref chứa '..' làm lệch cặp so sánh.
+            if not ref or ".." in ref or ref.startswith(("/", "-")):
+                raise ValueError(f"ref '{ref}' không hợp lệ")
+        sha = await self._backend.merge_base(project, base, head)
+        return {"project": project, "base": base, "head": head, "sha": sha}
+
     async def list_issues(self, project: str, labels: list[str]) -> dict[str, Any]:
         self._c.check_project(project)
         issues = await self._backend.list_issues(project, labels)

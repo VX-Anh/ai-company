@@ -64,6 +64,10 @@ def build_server(tools: GitLabTools) -> MCPServer:
     async def branch_head(project: str, ref: str = "main") -> dict[str, Any]:
         return await _anticipated(tools.branch_head(project, ref))
 
+    @server.tool(description="Commit chung gần nhất (sha) của hai ref (branch hoặc SHA).")
+    async def merge_base(project: str, base: str, head: str) -> dict[str, Any]:
+        return await _anticipated(tools.merge_base(project, base, head))
+
     @server.tool(description="Liệt kê issue đang mở có đủ các nhãn.")
     async def list_issues(project: str, labels: list[str]) -> dict[str, Any]:
         return await _anticipated(tools.list_issues(project, labels))

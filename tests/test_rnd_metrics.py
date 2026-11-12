@@ -136,6 +136,30 @@ async def test_bench_candidates_need_merged_mr_with_base_sha() -> None:
     assert [r["id"] for r in rows] == ["T-1"]
     assert rows[0]["base_sha"] == "b" * 40 and rows[0]["observed"]["owner_returns"] == 1
     assert rows[0]["observed"]["tokens"] == 1200
+    assert rows[0]["base_sha_source"] == "pr" and "pr_base_sha" not in rows[0]
+
+    # Có tool merge-base: base_sha là điểm tách nhánh, base_sha của PR giữ làm trường phụ.
+    async def fork(project: str, base: str, head: str) -> str:
+        assert (project, base, head) == ("x/app", "b" * 40, "h" * 40)
+        return "f" * 40
+
+    since = utcnow() - timedelta(days=1)
+    row = (await candidates(store, read_mr, since=since, read_merge_base=fork))[0]
+    assert (row["base_sha"], row["pr_base_sha"]) == ("f" * 40, "b" * 40)
+    assert row["base_sha_source"] == "merge_base"
+
+    async def same(project: str, base: str, head: str) -> str:
+        return base
+
+    row = (await candidates(store, read_mr, since=since, read_merge_base=same))[0]
+    assert row["base_sha"] == "b" * 40 and "pr_base_sha" not in row
+
+    async def no_compare(project: str, base: str, head: str) -> str:
+        raise RuntimeError("GitHub 404")
+
+    row = (await candidates(store, read_mr, since=since, read_merge_base=no_compare))[0]
+    assert (row["base_sha"], row["base_sha_source"]) == ("b" * 40, "pr")
+    assert row["base_sha_note"] == "GitHub 404"
 
     async def broken(project: str, iid: int) -> dict[str, object]:
         raise RuntimeError("GitHub 502")
