@@ -167,8 +167,13 @@ print("ghi chú:", d["note"])
         fi ;;
     eval-grade)  # eval-grade <biến thể> [--regrade] < suite.json: chấm acceptance {build, test} trên máy build
         cd "$STACK" && docker compose exec -T aico aico eval grade --variant "$2" --suite - ${3:-} ;;
-    eval-cleanup)  # eval-cleanup <biến thể> [--dry-run]: xoá nhánh ai/<id>, base/<id> của ticket chạy lại đã đóng
-        cd "$STACK" && docker compose exec -T aico aico eval cleanup --variant "$2" ${3:-} ;;
+    eval-cleanup)  # eval-cleanup <biến thể> [--dry-run] [--force] [--escalated] [< suite.json]: xoá nhánh ai/<id>, base/<id> của ticket chạy lại đã đóng; lượt chưa chấm acceptance thì giữ (kèm suite: chỉ mục có acceptance)
+        variant="$2"; shift 2
+        cd "$STACK" && if [ -t 0 ]; then
+            docker compose exec -T aico aico eval cleanup --variant "$variant" "$@"
+        else
+            docker compose exec -T aico aico eval cleanup --variant "$variant" --suite - "$@"
+        fi ;;
     remote-image)  # dựng image build mặc định (Node + thư viện Chromium) trên server
         cd "$STACK" && docker compose exec -T remote-runner             python3 /opt/remote_runner.py build-image aico/node-playwright:22             < "$STACK/remote/node-playwright.Dockerfile" ;;
     escalate)  # escalate <id> <merge|retry_push|...> [ghi chú]
@@ -177,7 +182,7 @@ print("ghi chú:", d["note"])
             | python3 -c "$summary" ;;
     *)
         echo "lệnh: safe | deploy [--force] | tickets [n] | ticket <id> | workers | logs [service] [since] | metrics [ngày] | canary [sha] [n] | bench [ngày] | scan [ngày]"
-        echo "      eval-start <biến thể> [lần] < suite.json | eval-report <biến thể> [--close] | eval-grade <biến thể> < suite.json | eval-cleanup <biến thể> [--dry-run] (cần: docker compose --profile eval up -d aico-eval)"
+        echo "      eval-start <biến thể> [lần] < suite.json | eval-report <biến thể> [--close] | eval-grade <biến thể> < suite.json | eval-cleanup <biến thể> [--dry-run] [--force] [--escalated] [< suite.json] (cần: docker compose --profile eval up -d aico-eval)"
         echo "      create <file.json> | decide <id> <approved|revise|changes_requested|rejected> [ghi chú] | escalate <id> <action> [ghi chú]"
         echo "      remote-image (dựng image Node + Chromium trên máy build, chạy lại khi sửa node-playwright.Dockerfile)"
         exit 2 ;;

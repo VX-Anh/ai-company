@@ -3,6 +3,7 @@ mức và chưa chạm trần 7 ngày; ticket đã bắt đầu vẫn chạy ti�
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from datetime import UTC, datetime, timedelta
 from typing import Any
@@ -103,7 +104,12 @@ async def test_gate_counts_week_and_waits_for_real_tickets(
         return rooms
 
     gate = EvalGate(
-        store, read_rooms, EvalPolicy(weekly_cap=2), lambda: now[0], variant="thu-prompt"
+        store,
+        read_rooms,
+        EvalPolicy(weekly_cap=2),
+        lambda: now[0],
+        variant="thu-prompt",
+        open_seconds=0,  # kết quả "được" không giữ: mỗi lần hỏi là một lần kiểm
     )
     caplog.set_level(logging.INFO, logger="aico.rnd.evalgate")
     assert await gate() is False and gate.last_reason == "không có ticket mới"
@@ -160,10 +166,17 @@ async def test_gate_counts_week_and_waits_for_real_tickets(
 async def test_runner_with_closed_gate_still_finishes_started_tickets(company: Company) -> None:
     open_gate = [True]
 
-    async def gate() -> bool:
-        return open_gate[0]
+    class Switch:
+        def __init__(self) -> None:
+            self.lock = asyncio.Lock()
 
-    h = make_harness(company, eval_only=True, new_ticket_gate=gate)
+        async def __call__(self) -> bool:
+            return open_gate[0]
+
+        def claimed(self) -> None:
+            pass
+
+    h = make_harness(company, eval_only=True, new_ticket_gate=Switch())
     h.gitlab.project(PROJECT).files["main"]["app.py"] = "x\n"
     await h.tickets.create(eval_ticket("T-1"), actor="eval")
     await h.runner.run_until_idle()
@@ -190,3 +203,56 @@ async def test_gate_window_uses_start_time_not_creation() -> None:
     await store.create(eval_ticket("T-2"), actor="eval")
     gate = EvalGate(store, None, EvalPolicy(weekly_cap=1), utcnow)
     assert await gate.check() == (False, "đã chạy 1/1 ticket trong 7 ngày")
+
+
+async def test_runners_sharing_a_gate_do_not_pass_the_cap_together(company: Company) -> None:
+    """Hai runner cùng rảnh, trần còn 1: chỉ một ticket mới được bắt đầu."""
+    h = make_harness(company, eval_only=True)
+    h.gitlab.project(PROJECT).files["main"]["app.py"] = "x\n"
+    checks = 0
+
+    async def slow_rooms() -> list[dict[str, Any]]:
+        nonlocal checks
+        checks += 1
+        for _ in range(5):  # nhường lượt giữa lúc kiểm: runner kia kịp chen vào nếu không có khoá
+            await asyncio.sleep(0)
+        return [_room()]
+
+    gate = EvalGate(h.tickets, slow_rooms, EvalPolicy(weekly_cap=1), utcnow, variant="thu-prompt")
+    a = make_harness(
+        company, tickets=h.tickets, eval_only=True, new_ticket_gate=gate, gitlab=h.gitlab
+    )
+    b = make_harness(
+        company, tickets=h.tickets, eval_only=True, new_ticket_gate=gate, gitlab=h.gitlab
+    )
+    await h.tickets.create(eval_ticket("T-1"), actor="eval")
+    await h.tickets.create(eval_ticket("T-2"), actor="eval")
+    await asyncio.gather(a.runner.run_once(), b.runner.run_once())
+    statuses = sorted([(await h.tickets.get(tid)).status.value for tid in ("T-1", "T-2")])
+    assert statuses == ["awaiting_merge_approval", "new"]
+    assert gate.last_reason == "đã chạy 1/1 ticket trong 7 ngày"
+
+
+async def test_gate_keeps_open_result_briefly_and_counts_claimed_new_ticket() -> None:
+    store = InMemoryTicketStore()
+    now = [utcnow()]
+    calls = 0
+
+    async def read_rooms() -> list[dict[str, Any]]:
+        nonlocal calls
+        calls += 1
+        return [_room()]
+
+    gate = EvalGate(store, read_rooms, EvalPolicy(weekly_cap=1), lambda: now[0])
+    await store.create(eval_ticket("T-1"), actor="eval")
+    await store.create(eval_ticket("T-2"), actor="eval")
+    # "Được" giữ 10 giây: runner hỏi lại mỗi vài giây mà chưa nhận được gì thì không gọi các phòng.
+    assert await gate() is True and await gate() is True and calls == 1
+    now[0] += timedelta(seconds=11)
+    assert await gate() is True and calls == 2
+    # Runner nhận ticket mới (còn ở trạng thái new, đang giữ lease): kết quả "được" mất ngay và
+    # ticket đó đã tính vào trần, dù chưa kịp đổi trạng thái.
+    got = await store.claim(owner="r1", lease_seconds=30, eval_only=True)
+    assert got is not None and got.status is S.NEW
+    gate.claimed()
+    assert await gate() is False and gate.last_reason == "đã chạy 1/1 ticket trong 7 ngày"

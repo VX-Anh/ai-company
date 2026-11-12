@@ -21,7 +21,9 @@ Biến môi trường:
   bản xem trước ở gốc "/" (bản main của GUI). Request tới tên miền công khai chỉ được GET.
 
 POST /exec {command, archive (tar.gz base64), strip?, image?, timeout_seconds?}
-  -> {exit_code, output, truncated, duration_seconds}
+  -> {exit_code, output, truncated, duration_seconds, infra_error}
+  infra_error = true: lỗi của máy build (docker volume/network, container không khởi động, mất
+  SSH), không phải của lệnh; mã thoát của chính lệnh (kể cả 125, 255) đi kèm infra_error = false.
 POST /preview {name, archive, strip?, image?, build?, output?, meta?} -> {url, output, ...}
 POST /shots {name: img-..., files: [{name: *.png, data: base64}]} -> {files: [{name, url}]}
 GET /preview/ (danh sách), GET /preview/<tên>/... (file tĩnh), GET /health
@@ -37,6 +39,7 @@ import json
 import mimetypes
 import os
 import re
+import secrets
 import shlex
 import shutil
 import subprocess
@@ -138,6 +141,9 @@ class Config:
 RUN_CAPS = ("SETUID", "SETGID")
 # Biến môi trường pha run nhận URL quản trị PostgreSQL dùng chung (xem Config.test_pg).
 TEST_PG_ENV = "LHV_PG_ADMIN_URL"
+# Dòng đánh dấu của /exec, kèm chuỗi ngẫu nhiên của lần chạy (remote_script, classify_exec).
+EXIT_MARK = "::aico-exit"
+INFRA_MARK = "::aico-infra"
 
 
 def container_flags(cfg: Config, name: str, volume: str, caps: tuple[str, ...] = ()) -> list[str]:
@@ -193,11 +199,16 @@ def remote_script(
     strip: int,
     *,
     preview_output: str | None = None,
+    marker: str | None = None,
 ) -> str:
     """Script sh chạy trên server. Mã nguồn (tar.gz) đi vào stdin của pha setup.
 
     preview_output: thư mục build cần lấy về; khi có, stdout chỉ chứa tar.gz của thư mục đó,
     log của cả hai pha đi ra stderr.
+    marker (chỉ khi chạy lệnh): chuỗi ngẫu nhiên của lần chạy. Lệnh chạy xong thì sh trong
+    container in dòng `::aico-exit <marker> <mã>`; hạ tầng hỏng thì script in
+    `::aico-infra <marker> <chỗ hỏng>`. Runner dựa vào hai dòng này (không đoán từ mã thoát) để
+    biết mã thoát là của lệnh hay của máy build.
     """
     volume = f"aico-ws-{run_id}"
     setup = SETUP_SCRIPT.format(strip=f"--strip-components={strip}" if strip else "")
@@ -215,7 +226,14 @@ def remote_script(
     )
     # Shim pnpm của corepack nằm trong container setup đã xoá; tạo lại (không cần mạng).
     shims = "if [ -f pnpm-lock.yaml ] && command -v corepack >/dev/null; then corepack enable; fi; "
-    if preview_output is None:
+    if preview_output is None and marker is not None:
+        # Lệnh chạy trong subshell (xuống dòng trước ")": lệnh có thể kết thúc bằng chú thích);
+        # sh ngoài luôn in được mã thoát của nó, kể cả khi lệnh gọi exit.
+        run = (
+            f"(set -e; {shims}{command}\n); c=$?; "
+            f"printf '\\n{EXIT_MARK} {marker} %s\\n' $c; exit $c"
+        )
+    elif preview_output is None:
         run = f"set -e; {shims}{command}"
     else:
         out = shlex.quote(preview_output)
@@ -250,14 +268,51 @@ def remote_script(
             f"{TEST_PG_ENV}=$(cat {shlex.quote(cfg.test_pg_url_file)} 2>/dev/null) && "
             f"export {TEST_PG_ENV}; "
         )
+    marked = marker is not None and preview_output is None
+
+    def infra(where: str) -> str:
+        if not marked:
+            return "exit 125"
+        return f"{{ echo '{INFRA_MARK} {marker} {where}'; exit 125; }}"
+
+    # Pha setup thoát 125 = docker không chạy được container (npm ci, uv sync không trả mã này).
+    setup_fail = "exit $?"
+    if marked:
+        setup_fail = f"{{ c=$?; [ $c -ne 125 ] || echo '{INFRA_MARK} {marker} setup'; exit $c; }}"
     return (
-        f"{merge}v={volume}; n=aico-net-{run_id}; docker volume create $v >/dev/null || exit 125; "
+        f"{merge}v={volume}; n=aico-net-{run_id}; "
+        f"docker volume create $v >/dev/null || {infra('volume')}; "
         f"trap '{pg}docker volume rm -f $v >/dev/null 2>&1; "
         "docker network rm $n >/dev/null 2>&1' EXIT; "
-        "docker network create --internal $n >/dev/null || exit 125; "
-        f"{setup_cmd}{redirect} || exit $?; "
+        f"docker network create --internal $n >/dev/null || {infra('network')}; "
+        f"{setup_cmd}{redirect} || {setup_fail}; "
         f"{attach}{run_cmd} </dev/null"
     )
+
+
+def classify_exec(output: str, marker: str, code: int, *, ssh: bool) -> tuple[str, bool]:
+    """(log đã bỏ dòng đánh dấu, lỗi hạ tầng?) của một lần /exec.
+
+    - Có `::aico-exit <marker>`: lệnh đã chạy xong trong container, mã thoát là của lệnh (kể cả
+      125, 255) -> không phải lỗi hạ tầng.
+    - Có `::aico-infra <marker>`: docker volume/network hoặc container setup hỏng.
+    - Không có dòng nào: mã 125 là docker không khởi động được container chạy lệnh, mã 255 qua
+      SSH là mất kết nối tới server. Mã khác (vd 137 hết bộ nhớ, pha setup cài dependency
+      hỏng) tính cho bài làm.
+    """
+    ran = infra = False
+    kept: list[str] = []
+    for line in output.splitlines(keepends=True):
+        text = line.strip()
+        if text.startswith(f"{EXIT_MARK} {marker} "):
+            ran = True
+        elif text.startswith(f"{INFRA_MARK} {marker} "):
+            infra = True
+        else:
+            kept.append(line)
+    if not ran and not infra:
+        infra = code == 125 or (ssh and code == 255)
+    return "".join(kept), infra and not ran
 
 
 def ssh_command(cfg: Config, script: str) -> list[str]:
@@ -370,9 +425,10 @@ class Runner:
         image = self._image(job.get("image"))
         strip = int(job.get("strip") or 0)
         started = time.monotonic()
+        marker = secrets.token_hex(8)
         try:
             code, stdout, stderr = self._run(
-                lambda rid: remote_script(self.cfg, rid, image, command, strip),
+                lambda rid: remote_script(self.cfg, rid, image, command, strip, marker=marker),
                 archive,
                 self._timeout(job.get("timeout_seconds")),
             )
@@ -381,16 +437,26 @@ class Runner:
                 "exit_code": 124,
                 "output": "hết thời gian, đã dừng container",
                 "truncated": False,
+                "infra_error": False,
             }
-        output = (stdout + stderr).decode("utf-8", "replace")
-        if code == 255 and self.cfg.backend == "ssh":
+        output, infra = classify_exec(
+            (stdout + stderr).decode("utf-8", "replace"),
+            marker,
+            code,
+            ssh=self.cfg.backend == "ssh",
+        )
+        if infra and code == 255:
             output += "\n[aico-remote] không kết nối được server qua SSH"
+        elif infra:
+            output += "\n[aico-remote] máy build lỗi (docker), không phải lỗi của lệnh"
         text, truncated = tail(output)
         return {
             "exit_code": code,
             "output": text,
             "truncated": truncated,
             "duration_seconds": round(time.monotonic() - started, 1),
+            # Tách khỏi exit_code: lệnh của bài làm cũng có thể thoát 125/255.
+            "infra_error": infra,
         }
 
     def preview(self, job: dict[str, Any]) -> dict[str, Any]:
@@ -617,8 +683,8 @@ class Handler(BaseHTTPRequestHandler):
                 return self._json(200, self.runner.shots(job))
         except (ValueError, TypeError) as exc:
             return self._json(400, {"error": str(exc)})
-        except RuntimeError as exc:
-            return self._json(503, {"error": str(exc)})
+        except RuntimeError as exc:  # hết slot: lỗi của máy build, không phải của lệnh
+            return self._json(503, {"error": str(exc), "infra_error": True})
         return self._json(404, {"error": "không có endpoint này"})
 
     def log_message(self, format: str, *args: Any) -> None:  # noqa: A002

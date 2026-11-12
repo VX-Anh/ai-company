@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import re
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from fnmatch import fnmatchcase
@@ -27,6 +28,7 @@ class ConstraintError(PermissionError):
 
 # Nhánh gốc của ticket chạy lại (Phòng R&D): ai/<x> có base/<x> thì chỉ được vào base/<x>.
 BASE_PREFIX = "base/"
+_FULL_SHA = re.compile(r"[0-9a-f]{40}")
 
 
 def base_of(source: str) -> str | None:
@@ -64,7 +66,7 @@ class Constraints:
     def check_push(self, branch: str) -> None:
         self.check_branch(branch)
         if branch.startswith(BASE_PREFIX):
-            raise ConstraintError("không push vào base/* (nhánh gốc của lượt chạy lại)")
+            raise ConstraintError("không push vào base/*")
 
     def check_merge_target(self, branch: str) -> None:
         if not any(fnmatchcase(branch, t) for t in self.merge_targets):
@@ -194,10 +196,22 @@ class GitLabTools:
         }
 
     async def create_branch(self, project: str, branch: str, ref: str = "main") -> dict[str, Any]:
+        """Tạo nhánh nếu chưa có. Nhánh base/<x> đánh dấu ai/<x> là nhánh không bao giờ vào main
+        (và xoá được bằng delete_branch_pair), nên chỉ tạo được ở một commit cố định (SHA đủ 40 ký
+        tự) và trước khi ai/<x> tồn tại: không ai biến nhánh của một ticket đang làm thành cặp đó.
+        Quyền tạo base/* do guard quyết định (vai trò hệ thống, không phải agent)."""
         self._c.check_project(project)
         self._c.check_branch(branch)
         if await self._backend.branch_exists(project, branch):
             return {"branch": branch, "created": False}
+        if branch.startswith(BASE_PREFIX):
+            name = branch[len(BASE_PREFIX) :]
+            if not name or "/" in name:
+                raise ConstraintError(f"tên nhánh '{branch}' không hợp lệ (base/<id>)")
+            if not _FULL_SHA.fullmatch(ref):
+                raise ConstraintError(f"'{branch}' phải tạo từ SHA đủ 40 ký tự, không phải '{ref}'")
+            if await self._backend.branch_exists(project, f"ai/{name}"):
+                raise ConstraintError(f"'ai/{name}' đã tồn tại, không tạo '{branch}'")
         await self._backend.create_branch(project, branch, ref)
         return {"branch": branch, "created": True}
 

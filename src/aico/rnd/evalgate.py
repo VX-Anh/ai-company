@@ -12,6 +12,7 @@ bỏ dở việc. Quyết định nằm trong hàm thuần `should_start`; lý d
 
 from __future__ import annotations
 
+import asyncio
 import logging
 from collections.abc import Awaitable, Callable, Iterable, Mapping
 from dataclasses import dataclass
@@ -66,8 +67,13 @@ class EvalGate:
     """Cổng cho Runner của instance chạy lại: `await gate()` trả True khi được nhận ticket mới.
 
     Kết quả "chưa" được giữ `recheck_seconds` (runner hỏi mỗi vài giây khi rảnh; mỗi lần kiểm phải
-    đọc danh sách ticket và trạng thái các phòng). Kết quả "được" không giữ: mỗi ticket mới đều
-    qua kiểm tra, nên không vượt trần. Kiểm tra lỗi thì coi như chưa được (an toàn cho hạn mức).
+    đọc danh sách ticket và trạng thái các phòng). Kết quả "được" chỉ giữ `open_seconds` và mất
+    ngay khi có runner nhận một ticket mới (`claimed`): mỗi ticket mới đều qua một lần kiểm riêng,
+    nên không vượt trần. Kiểm tra lỗi thì coi như chưa được (an toàn cho hạn mức).
+
+    Nhiều runner dùng chung một cổng: runner giữ `lock` suốt đoạn hỏi cổng + claim, để hai runner
+    không cùng thấy "được" rồi mỗi bên nhận một ticket mới. Ticket new đang có runner giữ lease
+    (đã nhận, chưa kịp đổi trạng thái) được đếm là đã bắt đầu.
     """
 
     def __init__(
@@ -79,6 +85,7 @@ class EvalGate:
         *,
         variant: str | None = None,
         recheck_seconds: float = 60,
+        open_seconds: float = 10,
     ) -> None:
         self._tickets = tickets
         self._rooms = rooms
@@ -86,8 +93,15 @@ class EvalGate:
         self._clock = clock
         self._variant = variant
         self._recheck = timedelta(seconds=recheck_seconds)
+        self._open = timedelta(seconds=open_seconds)
         self._closed_until: datetime | None = None
+        self._open_until: datetime | None = None
+        self.lock = asyncio.Lock()
         self.last_reason = ""
+
+    def claimed(self) -> None:
+        """Runner vừa nhận một ticket mới: lần hỏi sau phải kiểm lại (trần, hệ rảnh, hạn mức)."""
+        self._open_until = None
 
     async def _started_at(self, ticket_id: str) -> datetime | None:
         """Lúc ticket rời trạng thái new (bắt đầu tốn hạn mức)."""
@@ -106,7 +120,9 @@ class EvalGate:
                 if ticket.status in ACTIVE or ticket.pending_resume:
                     active += 1
             elif ticket.status is TicketStatus.NEW:
-                if self._variant is None or spec[0] == self._variant:
+                if ticket.lease_owner and ticket.lease_until and ticket.lease_until > now:
+                    started += 1  # runner khác vừa nhận, chưa kịp đổi trạng thái
+                elif self._variant is None or spec[0] == self._variant:
                     pending_new += 1
             elif ticket.updated_at >= since:  # bắt đầu trong 7 ngày thì cũng cập nhật trong 7 ngày
                 at = await self._started_at(ticket.id)
@@ -126,6 +142,8 @@ class EvalGate:
         now = self._clock()
         if self._closed_until is not None and now < self._closed_until:
             return False
+        if self._open_until is not None and now < self._open_until:
+            return True
         try:
             ok, reason = await self.check()
         except Exception as exc:
@@ -133,8 +151,10 @@ class EvalGate:
             ok, reason = False, f"kiểm tra lỗi: {type(exc).__name__}"
         if ok:
             self._closed_until = None
+            self._open_until = now + self._open
             log.info("chạy lại: nhận ticket mới (%s)", reason)
         else:
+            self._open_until = None
             self._closed_until = now + self._recheck
             # Lý do đổi mới ghi log: runner hỏi liên tục, không lặp cùng một dòng mỗi phút.
             if reason != self.last_reason:

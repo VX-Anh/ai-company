@@ -10,9 +10,9 @@ import asyncio
 import contextlib
 import logging
 import uuid
-from collections.abc import Awaitable, Callable
+from collections.abc import Callable
 from datetime import timedelta
-from typing import Any
+from typing import Any, Protocol
 
 from langchain_core.runnables import RunnableConfig
 from langgraph.graph.state import CompiledStateGraph
@@ -26,6 +26,17 @@ log = logging.getLogger(__name__)
 CallbacksFactory = Callable[[Ticket], list[Any]]
 
 
+class NewTicketGate(Protocol):
+    """Cổng nhận ticket mới (instance chạy lại): `await gate()` False thì chỉ nhận ticket đã bắt
+    đầu. `lock` bọc đoạn hỏi cổng + claim; `claimed()` báo vừa nhận một ticket mới."""
+
+    lock: asyncio.Lock
+
+    async def __call__(self) -> bool: ...
+
+    def claimed(self) -> None: ...
+
+
 class Runner:
     def __init__(
         self,
@@ -37,7 +48,7 @@ class Runner:
         callbacks: CallbacksFactory | None = None,
         eval_only: bool = False,
         eval_variant: str | None = None,
-        new_ticket_gate: Callable[[], Awaitable[bool]] | None = None,
+        new_ticket_gate: NewTicketGate | None = None,
     ) -> None:
         self._graph = graph
         # Cổng hạn mức (instance chạy lại): trả False thì chỉ nhận ticket đã bắt đầu.
@@ -52,13 +63,7 @@ class Runner:
 
     async def run_once(self) -> Ticket | None:
         """Nhận và chạy một ticket. Trả ticket đã xử lý, hoặc None nếu không có việc."""
-        ticket = await self._tickets.claim(
-            owner=self.owner,
-            lease_seconds=self._lease,
-            eval_only=self._eval_only,
-            eval_variant=self._eval_variant,
-            skip_new=self._gate is not None and not await self._gate(),
-        )
+        ticket = await self._claim()
         if ticket is None:
             return None
         heartbeat = asyncio.create_task(self._heartbeat(ticket.id))
@@ -80,6 +85,28 @@ class Runner:
                 await heartbeat
             await self._tickets.release(ticket.id, owner=self.owner)
         return await self._tickets.get(ticket.id)
+
+    async def _claim(self) -> Ticket | None:
+        if self._gate is None:
+            return await self._tickets.claim(
+                owner=self.owner,
+                lease_seconds=self._lease,
+                eval_only=self._eval_only,
+                eval_variant=self._eval_variant,
+            )
+        # Hỏi cổng và claim trong một khoá: các runner dùng chung cổng không cùng thấy "được" rồi
+        # mỗi bên nhận một ticket mới (vượt trần). Khoá không giữ trong lúc chạy ticket.
+        async with self._gate.lock:
+            ticket = await self._tickets.claim(
+                owner=self.owner,
+                lease_seconds=self._lease,
+                eval_only=self._eval_only,
+                eval_variant=self._eval_variant,
+                skip_new=not await self._gate(),
+            )
+            if ticket is not None and ticket.status is TicketStatus.NEW:
+                self._gate.claimed()
+            return ticket
 
     async def run_until_idle(self, max_steps: int = 100) -> int:
         steps = 0

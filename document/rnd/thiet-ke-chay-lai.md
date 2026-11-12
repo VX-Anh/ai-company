@@ -2,7 +2,8 @@
 
 Trạng thái (2026-11-12): **đã code trên nhánh `rnd-r1`** (tách từ `rnd-r0`), theo mặc định ở
 mục 6 (branch trên repo thật, không fork). Đã merge vào `main` và deploy (2026-11-12).
-Chưa chạy thật: cần bật `aico-eval`.
+Chưa chạy thật: cần bật `aico-eval`. Các lỗi review độc lập tìm ra được sửa ở nhánh `rnd-r1-fix`
+(mục "Sửa sau review độc lập" bên dưới), chưa merge.
 
 **Tên trung tính (2026-11-12):** agent có thể đổi hành vi khi biết mình bị chấm, nên ticket chạy
 lại không lộ dấu hiệu nào trong prompt: nhánh `ai/<id>` như ticket thường, đích `base/<id>`, tiêu
@@ -23,8 +24,10 @@ aico-ops eval-start baseline 2 < suite.json
 aico-ops eval-report baseline < suite.json
 aico-ops eval-grade baseline < suite.json
 aico-ops eval-report baseline --close < suite.json
-# 5. Dọn nhánh ai/<id>, base/<id> của ticket đã đóng (xem trước bằng --dry-run)
-aico-ops eval-cleanup baseline
+# 5. Dọn nhánh ai/<id>, base/<id> của ticket đã đóng (xem trước bằng --dry-run). Kèm bộ chuẩn
+#    để lượt của mục có acceptance mà chưa chấm được giữ lại (không kèm: mọi lượt chưa chấm đều giữ)
+aico-ops eval-cleanup baseline --dry-run < suite.json
+aico-ops eval-cleanup baseline < suite.json
 ```
 
 Đã làm: nhãn + artifact `eval`, `workplan.ticket_refs` (nhánh `ai/<id>` từ commit gốc, MR vào
@@ -72,7 +75,56 @@ Bổ sung trên nhánh `rnd-r1-gaps` (2026-11-12, chờ review + merge):
   acceptance hỏng); `report --close` kèm bộ chuẩn không đóng lượt có acceptance mà chưa chấm
   (`close_skipped_ungraded`).
 
+Sửa sau review độc lập, nhánh `rnd-r1-fix` (2026-11-12, chờ review + merge; các đoạn mô tả ở
+trên đã cũ ở những điểm này):
+- **`base/<id>` do vai trò hệ thống tạo, không phải agent.** Vai trò `coder` chỉ còn mẫu nhánh
+  `ai/*`; builder tạo `base/<id>` bằng `housekeeper` (trước khi coder tạo `ai/<id>`). mcp-gitlab
+  `create_branch base/<x>` chỉ nhận ref là SHA đủ 40 ký tự và từ chối khi `ai/<x>` đã tồn tại (gọi
+  lại khi `base/<x>` đã có thì trả `created: false`). Lý do: `base/<x>` là dấu hiệu "nhánh `ai/<x>`
+  không vào `main` và xoá được"; agent tạo được nó thì chặn được ticket thường vào `main` và làm
+  `delete_branch_pair` xoá nhầm nhánh đang làm. `housekeeper` nay có `create_branch`,
+  `branch_head`, `download_archive`, `delete_branch_pair`, mẫu `ai/*,base/*`. `base_sha` của bộ
+  chuẩn bắt buộc là SHA đủ 40 ký tự (`eval start` từ chối tên nhánh). **Thư mục biến thể
+  (`AICO_EVAL_COMPANY_DIR`) chép từ `company/` cũ phải cập nhật `roles/housekeeper.yaml` và
+  `roles/coder.yaml`**, nếu không bước tạo `base/<id>` bị guard từ chối và ticket escalate.
+- **Lỗi hạ tầng của máy build là trường riêng.** `POST /exec` trả `infra_error`; runner bọc lệnh
+  để sh trong container in `::aico-exit <chuỗi ngẫu nhiên> <mã>` khi lệnh chạy xong, và in
+  `::aico-infra ...` khi docker volume/network/container setup hỏng. Có dòng `::aico-exit` thì mã
+  thoát là của lệnh (kể cả 125, 255) và được ghi là kết quả acceptance; trước đây 125/255 của
+  chính lệnh bị coi là lỗi hạ tầng nên lượt không bao giờ được chấm. Không có dòng nào: 125 =
+  docker không khởi động container, 255 qua SSH = mất kết nối. Hết slot trả 503 kèm
+  `infra_error`. Lệnh `aico-remote` của worker không đổi (trường thừa, log đã bỏ dòng đánh dấu).
+  `RemoteExec` gặp máy build bản cũ (thiếu trường) vẫn đoán theo 125/255 như trước.
+- **build và test chạy trong một container.** `RemoteExec` gửi một lệnh gộp (`steps_script`): mỗi
+  bước trong subshell `set -e`, có dòng `::aico-step <chuỗi ngẫu nhiên> <bước> start|exit <mã>` để
+  tách log, mã thoát, thời gian từng bước (`split_steps`); bước hỏng thì dừng. Một volume, một lần
+  cài dependency: test thấy sản phẩm của build. Thời hạn (`timeout_seconds`, mặc định 1.200 giây)
+  nay tính cho cả lần chạy, không phải từng bước. Cài dependency hỏng hoặc hết giờ trước bước đầu
+  tính cho bước đầu.
+- **Chấm trên một commit, bằng vai trò hệ thống.** `eval grade` đọc SHA đầu nhánh `ai/<id>`
+  (`branch_head`), tải archive theo SHA đó, ghi `sha` vào event `eval_acceptance`; gọi bằng
+  `housekeeper`, không mượn quyền `coder`.
+- **`eval cleanup` chỉ dọn lượt đã đóng thật.** Đã đóng = `done`/`failed`, hoặc `escalated` mà lần
+  đổi trạng thái gần nhất là chờ duyệt merge -> escalated do quyết định `rejected` của actor
+  `eval` (`report --close`). Ticket escalated vì lý do khác (hết vòng review, người từ chối, lỗi
+  Git) có thể được xử lý tiếp nên giữ nhánh; bỏ hẳn thì `--escalated`. Lượt đã tới chờ duyệt merge
+  mà chưa có `eval_acceptance` cũng giữ (kèm bộ chuẩn: chỉ mục có `acceptance`), trừ `--force`.
+  Event `eval_cleanup` chỉ có hiệu lực khi mới hơn lần đổi trạng thái gần nhất: ticket chạy tiếp
+  sau khi dọn không bị khoá ở "đã dọn" (áp dụng cho cả `grade`).
+- **Cổng hạn mức không bị hai runner vượt cùng lúc.** Runner giữ `EvalGate.lock` suốt đoạn hỏi cổng
+  + claim; ticket `new` đang có lease được đếm là đã bắt đầu; kết quả "được" giữ 10 giây và mất
+  ngay khi một runner nhận ticket mới.
+- Thông báo `push` vào `base/*` trả cho agent chỉ còn "không push vào base/*" (bản cũ lộ chữ
+  "lượt chạy lại").
+
 Còn thiếu sau nhánh này:
+- Ticket chạy lại escalated giữa chừng (không tới chờ duyệt merge) không có lệnh đóng riêng:
+  `eval cleanup --escalated` dọn mọi ticket escalated của biến thể, owner phải tự chắc không còn
+  lượt nào định chạy tiếp.
+- Dòng đánh dấu của `/exec` nằm trong tham số của sh trong container, nên mã của bài làm đọc được
+  qua `/proc/1/cmdline` và in được dòng giả. Dòng thật in sau cùng và mã thoát lấy từ `docker
+  run`, nên giả chỉ đổi được phân loại hạ tầng trong trường hợp container chết bất thường; chưa
+  xử lý vì lợi ích cho agent gần như không có (chỉ làm lượt không được chấm).
 - Chưa chạy thật `eval grade` trên máy build (mới test với máy build giả): cần thử image mặc định
   có đủ công cụ cho từng repo và thời gian cài dependency.
 - Lệnh acceptance chạy trên nhánh của agent, nên agent sửa `package.json`/file test là tự làm
@@ -80,8 +132,8 @@ Còn thiếu sau nhánh này:
 - Chỉ chấm lượt đã qua review; lượt escalate giữa chừng không chấm (đã tính trượt ở `pass_rate`).
 - Chưa có bản ghi thí nghiệm tự sinh (`document/rnd/experiments/`), tập `holdout`, so kích thước
   diff với `reference_sha`, chép diff vào bản ghi trước khi dọn nhánh.
-- `eval cleanup` không biết bộ chuẩn: dọn trước khi `grade` thì mất nhánh để chấm (thứ tự đúng:
-  report -> grade -> report --close -> cleanup).
+- Thứ tự đúng vẫn là report -> grade -> report --close -> cleanup; `cleanup` nay tự giữ lượt
+  chưa chấm (xem trên).
 - Cổng hạn mức đếm mọi agent ở các phòng, không phân biệt agent của chính instance eval: instance
   eval nên giữ `AICO_RUNNER_CONCURRENCY=1`.
 

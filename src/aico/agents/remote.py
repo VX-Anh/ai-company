@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import secrets
 import time
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -71,8 +73,83 @@ class RemoteExecError(RuntimeError):
     khác với lệnh chạy xong mà exit khác 0."""
 
 
-# Mã thoát của máy build khi lỗi nằm ở hạ tầng (docker volume/network, SSH), không phải ở lệnh.
-INFRA_EXIT_CODES = frozenset({125, 255})
+# Máy build bản cũ chưa trả trường `infra_error`: khi thiếu trường đó mới đoán theo mã thoát.
+LEGACY_INFRA_EXIT_CODES = frozenset({125, 255})
+STEP_MARK = "::aico-step"
+_SHA = re.compile(r"[0-9a-f]{40}")
+
+
+def steps_script(commands: Mapping[str, str], nonce: str) -> str:
+    """Gộp các bước thành một lệnh sh chạy trong MỘT container (một volume, một lần cài
+    dependency): bước sau thấy sản phẩm của bước trước. Mỗi bước chạy trong subshell `set -e`,
+    trước và sau có dòng đánh dấu kèm `nonce` (log của bài làm không biết trước) để tách log và mã
+    thoát từng bước; bước hỏng thì dừng, các bước sau không chạy."""
+    parts = ["set +e"]
+    for name, command in commands.items():
+        mark = f"{STEP_MARK} {nonce} {name}"
+        parts.append(
+            f"printf '\\n{mark} start %s\\n' \"$(date +%s)\"\n"
+            f"(set -e\n{command}\n)\n"
+            f'c=$?; printf \'\\n{mark} exit %s %s\\n\' "$c" "$(date +%s)"\n'
+            '[ "$c" -eq 0 ] || exit "$c"'
+        )
+    return "\n".join(parts)
+
+
+def split_steps(
+    output: str, exit_code: int, names: Sequence[str], nonce: str
+) -> dict[str, dict[str, Any]]:
+    """Tách kết quả một lần chạy `steps_script` thành tên bước -> {exit_code, output,
+    duration_seconds}. Bước chưa chạy (bước trước hỏng) không có mặt.
+
+    Không thấy dòng đánh dấu nào (cài dependency hỏng, hết giờ trước khi bước đầu chạy): tính cho
+    bước đầu với mã thoát chung. Bước cuối cùng đã bắt đầu mà thiếu dòng kết thúc (container bị
+    dừng giữa chừng) nhận mã thoát chung; bước trước nó mất dòng kết thúc (log bị cắt đầu) thì
+    đã đạt, vì bước sau chỉ chạy khi bước trước exit 0.
+    """
+    prefix = f"{STEP_MARK} {nonce} "
+    logs: dict[str, list[str]] = {}
+    codes: dict[str, int] = {}
+    times: dict[str, list[int]] = {}
+    current: str | None = None
+    for line in output.splitlines(keepends=True):
+        text = line.strip()
+        if text.startswith(prefix):
+            fields = text[len(prefix) :].split()
+            if len(fields) >= 2 and fields[0] in names and fields[1] in ("start", "exit"):
+                name = fields[0]
+                logs.setdefault(name, [])
+                stamps = [int(x) for x in fields[2:] if x.isdigit()]
+                if fields[1] == "start":
+                    current = name
+                    times.setdefault(name, []).extend(stamps[:1])
+                else:
+                    current = None
+                    if stamps:
+                        codes[name] = stamps[0]
+                        times.setdefault(name, []).extend(stamps[1:2])
+                continue
+        if current is not None:
+            logs[current].append(line)
+    if not logs:
+        if exit_code == 0 or not names:
+            return {}  # không có gì để tách: người gọi coi là thiếu bước (hỏng)
+        return {names[0]: {"exit_code": exit_code, "output": output, "duration_seconds": None}}
+    last = max(i for i, name in enumerate(names) if name in logs)
+    steps: dict[str, dict[str, Any]] = {}
+    for i, name in enumerate(names[: last + 1]):
+        code = codes.get(name)
+        if code is None:
+            code = 0 if i < last else (exit_code or -1)
+        stamps = times.get(name, [])
+        steps[name] = {
+            "exit_code": code,
+            "output": "".join(logs.get(name, [])).strip("\n"),
+            "duration_seconds": stamps[1] - stamps[0] if len(stamps) == 2 else None,
+        }
+        if code != 0:
+            break
+    return steps
 
 
 @dataclass(frozen=True)
@@ -80,19 +157,24 @@ class ExecSettings:
     url: str  # remote runner, ví dụ http://remote-runner:8500
     token: str
     http_client: httpx.AsyncClient
-    timeout_seconds: float = 1200
+    timeout_seconds: float = 1200  # cho cả lần chạy (mọi bước)
+
+
+@dataclass(frozen=True)
+class ExecRun:
+    sha: str  # commit đã chạy (ghim trước khi tải mã nguồn)
+    steps: dict[str, dict[str, Any]]
 
 
 class RemoteExec:
     """Chạy lệnh trên mã nguồn của một ref trong container dùng một lần của máy build (POST /exec).
 
     aico tải archive qua gateway (guard + audit) rồi gửi lên máy build; máy build không có token
-    Git. Dùng để chấm acceptance của ticket chạy lại sau khi agent đã xong việc.
+    Git. Dùng để chấm acceptance của ticket chạy lại sau khi agent đã xong việc, nên gọi bằng vai
+    trò hệ thống (`role_id`), không mượn quyền của vai trò agent.
     """
 
-    def __init__(
-        self, settings: ExecSettings, gateway: ToolGateway, role_id: str = "coder"
-    ) -> None:
+    def __init__(self, settings: ExecSettings, gateway: ToolGateway, role_id: str) -> None:
         self._s = settings
         self._gateway = gateway
         self._role = role_id
@@ -105,48 +187,64 @@ class RemoteExec:
         commands: Mapping[str, str],
         *,
         image: str | None = None,
-    ) -> dict[str, dict[str, Any]]:
-        """Chạy lần lượt từng lệnh (tên bước -> lệnh) trên cùng một archive, mỗi lệnh một
-        container mới; dừng ở bước đầu tiên exit khác 0. Trả tên bước -> kết quả của máy build."""
+    ) -> ExecRun:
+        """Chạy các lệnh (tên bước -> lệnh) nối tiếp trong một container trên mã nguồn của `ref`;
+        dừng ở bước đầu tiên exit khác 0. `ref` là nhánh thì ghim về SHA đầu nhánh trước khi tải:
+        kết quả gắn với đúng một commit dù nhánh đổi sau đó."""
+        sha = ref
         try:
+            if not _SHA.fullmatch(ref):
+                head = await self._gateway.call(
+                    self._role,
+                    "gitlab",
+                    "branch_head",
+                    {"project": project, "ref": ref},
+                    ticket_id=ticket_id,
+                )
+                sha = str(head.get("sha") or "")
+                if not _SHA.fullmatch(sha):
+                    raise RemoteExecError(f"không đọc được commit của {ref}")
             archive = await self._gateway.call(
                 self._role,
                 "gitlab",
                 "download_archive",
-                {"project": project, "ref": ref},
+                {"project": project, "ref": sha},
                 ticket_id=ticket_id,
             )
         except ToolError as exc:
             raise RemoteExecError(f"không tải được {ref}: {exc}") from exc
-        steps: dict[str, dict[str, Any]] = {}
-        for name, command in commands.items():
-            job: dict[str, Any] = {
-                "command": command,
-                "archive": archive["data"],
-                "strip": 1,  # archive GitHub/GitLab có một thư mục gốc
-                "timeout_seconds": self._s.timeout_seconds,
-            }
-            if image:
-                job["image"] = image
-            try:
-                resp = await self._s.http_client.post(
-                    f"{self._s.url.rstrip('/')}/exec",
-                    json=job,
-                    headers={"Authorization": f"Bearer {self._s.token}"},
-                    timeout=self._s.timeout_seconds + 120,
-                )
-                result: dict[str, Any] = resp.json()
-            except (httpx.HTTPError, ValueError) as exc:
-                raise RemoteExecError(f"máy build không phản hồi: {exc}") from exc
-            code = result.get("exit_code")
-            if resp.status_code != 200 or not isinstance(code, int):
-                raise RemoteExecError(str(result.get("error") or f"HTTP {resp.status_code}"))
-            if code in INFRA_EXIT_CODES:
-                raise RemoteExecError(f"máy build lỗi hạ tầng (exit {code}) ở bước {name}")
-            steps[name] = result
-            if code != 0:
-                break
-        return steps
+        nonce = secrets.token_hex(8)
+        job: dict[str, Any] = {
+            "command": steps_script(commands, nonce),
+            "archive": archive["data"],
+            "strip": 1,  # archive GitHub/GitLab có một thư mục gốc
+            "timeout_seconds": self._s.timeout_seconds,
+        }
+        if image:
+            job["image"] = image
+        try:
+            resp = await self._s.http_client.post(
+                f"{self._s.url.rstrip('/')}/exec",
+                json=job,
+                headers={"Authorization": f"Bearer {self._s.token}"},
+                timeout=self._s.timeout_seconds + 120,
+            )
+            result: dict[str, Any] = resp.json()
+        except (httpx.HTTPError, ValueError) as exc:
+            raise RemoteExecError(f"máy build không phản hồi: {exc}") from exc
+        code = result.get("exit_code")
+        if resp.status_code != 200 or not isinstance(code, int):
+            raise RemoteExecError(str(result.get("error") or f"HTTP {resp.status_code}"))
+        # Lỗi hạ tầng do máy build tự báo; mã thoát 125/255 của chính lệnh là kết quả của bài làm.
+        infra = result.get("infra_error")
+        if infra is None:
+            infra = code in LEGACY_INFRA_EXIT_CODES
+        if infra:
+            tail = str(result.get("output") or "").strip()[-300:]
+            raise RemoteExecError(f"máy build lỗi hạ tầng (exit {code}): {tail}")
+        return ExecRun(
+            sha, split_steps(str(result.get("output") or ""), code, list(commands), nonce)
+        )
 
 
 class RemotePreviewer:

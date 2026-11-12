@@ -328,6 +328,9 @@ def eval_spec(ticket: Any) -> tuple[str, str] | None:
 # Nhánh gốc của ticket chạy lại: tên trung tính để agent không biết mình đang bị chấm (agent có
 # thể đổi hành vi khi biết bị đánh giá). mcp-gitlab nhận ra cặp ai/<id> -> base/<id>, chặn vào main.
 EVAL_BASE_PREFIX = "base/"
+# Vai trò hệ thống của lượt chạy lại: tạo base/<id>, tải mã nguồn để chấm, dọn cặp nhánh. Agent
+# (coder) không được cấp base/*: không agent nào biến nhánh của ticket thường thành cặp chạy lại.
+EVAL_SYSTEM_ROLE = "housekeeper"
 
 
 def ticket_refs(ticket: Any, target_branch: str = "main") -> TicketRefs:

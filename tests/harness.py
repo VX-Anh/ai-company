@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 
 from langgraph.checkpoint.base import BaseCheckpointSaver
@@ -21,6 +21,7 @@ from aico.orchestrator import (
     build_fix_ticket,
 )
 from aico.orchestrator.ports import Analyst, Coder, Planner, Previewer, Reviewer
+from aico.orchestrator.runner import NewTicketGate
 from aico.registry import Company
 from aico.tickets import InMemoryTicketStore, TicketStore
 from aico.tools import Guard, McpToolClient, ToolClient, ToolGateway
@@ -29,6 +30,16 @@ from mcp_gitlab.server import build_server
 from mcp_gitlab.tools import Constraints, GitLabTools
 
 PROJECT = "VX-Anh/aico-office"
+# Commit gốc của ticket chạy lại trong test: nhánh base/<id> chỉ tạo được từ SHA đủ 40 ký tự.
+BASE_SHA = "b" * 40
+
+
+def seed_base(gitlab: FakeGitLabBackend, project: str = PROJECT) -> str:
+    """Đặt commit BASE_SHA làm commit đầu của main (gọi lại không thêm lần nữa)."""
+    commits = gitlab.project(project).commits["main"]
+    if not any(c["id"] == BASE_SHA for c in commits):
+        commits.insert(0, {"id": BASE_SHA, "message": "khởi tạo"})
+    return BASE_SHA
 
 
 @dataclass
@@ -74,12 +85,14 @@ def make_harness(
     label_review_rounds: dict[str, int] | None = None,
     label_scopes: dict[str, tuple[str, ...]] | None = None,
     eval_only: bool = False,
-    new_ticket_gate: Callable[[], Awaitable[bool]] | None = None,
+    new_ticket_gate: NewTicketGate | None = None,
 ) -> Harness:
     tickets = tickets or InMemoryTicketStore()
     approvals = approvals or InMemoryApprovalStore()
     gitlab = gitlab or FakeGitLabBackend()
     gitlab.project(PROJECT)
+    if eval_only:
+        seed_base(gitlab)
     reviewer = reviewer or ScriptedReviewer()
     audit = InMemoryAuditLog()
 
