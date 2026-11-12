@@ -141,10 +141,9 @@ Các rủi ro trên chỉ thành chặn thật khi kiểm tra ở mức `block`;
   linh-hoa-vien, không đưa vào aico. Đề xuất: thêm kiểm tra vào CI/`npm test` của chính repo đó
   (so số dòng `- [x]` của file với nhánh đích, giảm thì fail), hoặc sau này cho cổng một danh sách
   luật theo repo khai báo trong `company/`.
-- **Diff của Reviewer so hai đầu nhánh**: `CliReviewer` so `source_branch` với đầu `target_branch`.
-  Khi nhánh dựng trên gốc cũ, việc người khác đã merge hiện ra như bị nhánh xoá. Nhiều ghi chú
-  "xoá việc đã merge" có thể đến từ đây chứ không phải agent xoá thật. Đề xuất: Reviewer cũng diff
-  từ `merge_base`, và hệ thống tự cập nhật nhánh (merge đích vào `ai/<id>`) khi cổng báo
-  `stale_base`, vì agent ở worker không có Git để rebase.
+- **Cập nhật nhánh khi gốc cũ**: Reviewer/Tester đã diff từ commit chung (nhánh
+  `rnd-review-mergebase`), nên gốc cũ không còn hiện thành "xoá việc đã merge". Còn lại: khi cổng
+  báo `stale_base`, hệ thống nên tự merge đích vào `ai/<id>`, vì agent ở worker không có Git để
+  rebase.
 - **Tự khôi phục**: với `deletions`/`outside_owns`, hệ thống có thể tự đẩy commit trả file về bản
   gốc thay vì tốn một lượt agent.
