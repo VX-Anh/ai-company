@@ -126,6 +126,8 @@ for k, v in d["by_label"].items():
     scan)  # scan [số ngày]: tạo ticket research dò công nghệ theo company/rnd/watchlist.yaml
         body="$(api GET "/rnd/scan-ticket?days=${2:-7}")"
         api POST /tickets "$body" | python3 -c "$summary" ;;
+    recall)  # recall [--json]: recall@5 của tìm kiếm tri thức trên company/rnd/recall-questions.yaml, chỉ đọc
+        cd "$STACK" && docker compose exec -T aico aico recall ${2:-} ;;
     eval-start)  # eval-start <biến thể> [số lần] < suite.json: tạo ticket chạy lại (instance aico-eval chạy)
         cd "$STACK" && docker compose exec -T aico aico eval start --variant "$2" --suite - --repeat "${3:-2}" ;;
     eval-report)  # eval-report <biến thể> [--close] [< suite.json]: kết quả; --close đóng ticket đã chấm
@@ -141,7 +143,7 @@ for k, v in d["by_label"].items():
             "$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "actor": "owner", "comment": sys.argv[2]}))' "$3" "${4:-}")" \
             | python3 -c "$summary" ;;
     *)
-        echo "lệnh: safe | deploy [--force] | tickets [n] | ticket <id> | workers | logs [service] [since] | metrics [ngày] | bench [ngày] | scan [ngày]"
+        echo "lệnh: safe | deploy [--force] | tickets [n] | ticket <id> | workers | logs [service] [since] | metrics [ngày] | bench [ngày] | scan [ngày] | recall"
         echo "      eval-start <biến thể> [lần] < suite.json | eval-report <biến thể> [--close] (cần: docker compose --profile eval up -d aico-eval)"
         echo "      create <file.json> | decide <id> <approved|revise|changes_requested|rejected> [ghi chú] | escalate <id> <action> [ghi chú]"
         echo "      remote-image (dựng image Node + Chromium trên máy build, chạy lại khi sửa node-playwright.Dockerfile)"

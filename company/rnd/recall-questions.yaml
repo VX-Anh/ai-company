@@ -1,0 +1,122 @@
+# Bộ câu hỏi chuẩn đo recall@5 của tìm kiếm tri thức (kế hoạch R&D mục 8, nghiệm thu GĐ2: >= 0,8).
+# Chạy: `aico recall` (chỉ mục đang chạy) hoặc `aico recall --cards <bản checkout aico-knowledge>`.
+#
+# Mỗi câu: câu hỏi kiểu người/agent sẽ gõ vào search_knowledge, và id thẻ phải nằm trong 5 kết quả
+# đầu. Câu hỏi viết từ nội dung thẻ thật của VX-Anh/aico-knowledge (main 024f578, nhánh
+# ai/T-ca63c2d6 ce3547c, ai/T-8391da15 2e3e8b8), cố ý không chép tiêu đề thẻ, có câu không dấu và
+# câu tiếng Anh. Câu mà thẻ mong đợi chưa merge vào main bị loại khỏi mẫu số khi đo.
+#
+# Quy tắc sửa: thêm câu khi có thẻ mới hoặc khi một lần tìm thật trượt; KHÔNG sửa câu chữ của câu
+# đang trượt cho khớp thẻ (như vậy là chỉnh đề theo đáp án), hãy sửa tìm kiếm hoặc thẻ.
+questions:
+  # --- technique/prompt-caching (main) ---
+  - id: cache-ttl
+    query: TTL của prompt cache Anthropic là bao lâu, có được gia hạn không
+    expect: [technique/prompt-caching]
+  - id: cache-headless
+    query: claude -p và codex exec có tự bật prompt caching không
+    expect: [technique/prompt-caching]
+  - id: cache-gia
+    query: giá ghi và đọc cache so với giá input thường
+    expect: [technique/prompt-caching]
+
+  # --- practice/sap-xep-prompt-cho-cache (main) ---
+  - id: cache-miss
+    query: đổi tool hoặc system prompt có làm mất cache không
+    expect: [practice/sap-xep-prompt-cho-cache]
+  - id: cache-bo-tri
+    query: nen dat phan co dinh va du lieu thay doi o dau trong prompt de trung cache
+    expect: [practice/sap-xep-prompt-cho-cache]
+  - id: cache-breakpoint
+    query: where to put the cache_control breakpoint
+    expect: [practice/sap-xep-prompt-cho-cache, technique/prompt-caching]
+
+  # --- technique/mcp-transport (main) ---
+  - id: mcp-transport-nao
+    query: MCP có những transport nào, HTTP+SSE còn nên dùng không
+    expect: [technique/mcp-transport]
+  - id: mcp-session
+    query: Mcp-Session-Id bị bỏ từ revision nào
+    expect: [technique/mcp-transport]
+  - id: mcp-lui-ban-cu
+    query: client MCP gặp server đời cũ thì dò và lùi về giao thức cũ thế nào
+    expect: [technique/mcp-transport]
+  - id: mcp-cau-noi
+    query: cau noi stdio sang streamable http
+    expect: [technique/mcp-transport]
+
+  # --- practice/eval-coding-agent-bang-ticket-cu (PR aico-knowledge#4) ---
+  - id: eval-swebench
+    query: dựng eval kiểu SWE-bench từ issue thật như thế nào
+    expect: [practice/eval-coding-agent-bang-ticket-cu]
+  - id: eval-ro-dap-an
+    query: chạy lại ticket cũ làm sao để agent không tìm thấy đáp án trong lịch sử git
+    expect: [practice/eval-coding-agent-bang-ticket-cu]
+  - id: eval-pass-k
+    query: pass@k khác pass^k thế nào khi chấm agent nhiều lần
+    expect: [practice/eval-coding-agent-bang-ticket-cu]
+
+  # --- practice/review-pr-tu-dong-bang-agent (PR aico-knowledge#4) ---
+  - id: review-cac-buoc
+    query: review PR tự động bằng agent gồm những bước nào
+    expect: [practice/review-pr-tu-dong-bang-agent]
+  - id: review-bao-sai
+    query: giam bao sai khi agent review code
+    expect: [practice/review-pr-tu-dong-bang-agent]
+  - id: review-thay-nguoi
+    query: agent review có thay được người duyệt PR không
+    expect: [practice/review-pr-tu-dong-bang-agent]
+
+  # --- tool/claude-code (PR aico-knowledge#4) ---
+  - id: claude-bare
+    query: cờ --bare của Claude Code ảnh hưởng gì tới MCP và tác vụ nền
+    expect: [tool/claude-code]
+  - id: claude-thay-doi
+    query: Claude Code gần đây thay đổi gì ảnh hưởng worker headless
+    expect: [tool/claude-code]
+
+  # --- tool/codex-cli (PR aico-knowledge#4) ---
+  - id: codex-jsonl
+    query: codex exec xuất sự kiện JSONL và ép schema cho câu trả lời cuối
+    expect: [tool/codex-cli]
+  - id: codex-hook-stdin
+    query: Codex hook bị treo khi chờ stdin đã sửa ở bản nào
+    expect: [tool/codex-cli]
+
+  # --- tool/cursor-cli (PR aico-knowledge#4) ---
+  - id: cursor-print
+    query: Cursor CLI chạy trong script không tương tác thì có hỏi quyền không
+    expect: [tool/cursor-cli]
+  - id: cursor-timeout
+    query: chỉnh timeout tool MCP cho cursor agent worker
+    expect: [tool/cursor-cli]
+
+  # --- technique/dieu-phoi-nhieu-coding-agent-song-song (nhánh ai/T-8391da15) ---
+  - id: songsong-worktree
+    query: chạy nhiều coding agent cùng lúc trên một repo bằng git worktree
+    expect: [technique/dieu-phoi-nhieu-coding-agent-song-song]
+  - id: songsong-so-huu-file
+    query: chia quyền sở hữu file để các agent không sửa chồng lên nhau
+    expect: [technique/dieu-phoi-nhieu-coding-agent-song-song]
+
+  # --- technique/giao-viec-theo-han-muc-va-do-tre (nhánh ai/T-8391da15) ---
+  - id: hanmuc-giao-viec
+    query: giao việc cho agent nào còn dư hạn mức subscription
+    expect: [technique/giao-viec-theo-han-muc-va-do-tre]
+  - id: hanmuc-429-529
+    query: phân biệt lỗi rate limit 429 với overloaded 529
+    expect: [technique/giao-viec-theo-han-muc-va-do-tre]
+  - id: hanmuc-claude
+    query: doc han muc 5 gio va 7 ngay cua Claude Code o dau
+    expect: [technique/giao-viec-theo-han-muc-va-do-tre]
+
+  # --- tool/langgraph (nhánh ai/T-8391da15) ---
+  - id: langgraph-interrupt
+    query: LangGraph interrupt chờ người duyệt rồi resume
+    expect: [tool/langgraph]
+  - id: langgraph-prune
+    query: dọn checkpoint cũ trong Postgres của LangGraph
+    expect: [tool/langgraph]
+  - id: langgraph-nang-cap
+    query: nâng langgraph lên bản mới nhất có breaking change không
+    expect: [tool/langgraph]

@@ -111,6 +111,11 @@ def query_terms(text: str, limit: int = 30) -> list[str]:
     return out
 
 
+def block_query(text: str) -> str:
+    """Câu truy vấn của khối <knowledge>: bỏ từ có trong gần như mọi thẻ (BLOCK_STOP_TERMS)."""
+    return " ".join(w for w in _WORD.findall(text) if fold(w) not in BLOCK_STOP_TERMS)
+
+
 def _hit(term: str, tokens: set[str]) -> bool:
     if term in tokens:
         return True
@@ -376,6 +381,20 @@ class KnowledgeStore:
 
     # --- chèn vào prompt ------------------------------------------------------------------------
 
+    async def block_search(
+        self, query: str, *, today: dt.date | None = None
+    ) -> list[dict[str, Any]]:
+        """Lượt tìm của khối <knowledge> (chặt hơn tool search_knowledge): bỏ thẻ gốc, cần ít
+        nhất 2 từ khoá khớp ở id/tiêu đề/tag/tóm tắt. Tách riêng để đo recall đúng lượt này."""
+        return await self.search(
+            block_query(query),
+            k=BLOCK_CARDS,
+            exclude_kinds=ANCHOR_KINDS,
+            min_match=2,
+            head_only=True,
+            today=today,
+        )
+
     async def prompt_block(self, ticket: Ticket, role_id: str) -> str | None:
         """Khối <knowledge> cho prompt của agent: tối đa 5 thẻ, BLOCK_MAX_CHARS ký tự.
 
@@ -383,11 +402,8 @@ class KnowledgeStore:
         đề, tag hoặc tóm tắt của thẻ để không chèn thẻ chỉ trùng từ chung trong thân bài.
         """
         repo = (ticket.project or "").rpartition("/")[2]
-        query = " ".join((ticket.title, " ".join(ticket.labels), repo))
-        query = " ".join(w for w in _WORD.findall(query) if fold(w).lower() not in BLOCK_STOP_TERMS)
-        hits = await self.search(
-            query, k=BLOCK_CARDS, exclude_kinds=ANCHOR_KINDS, min_match=2, head_only=True
-        )
+        query = block_query(" ".join((ticket.title, " ".join(ticket.labels), repo)))
+        hits = await self.block_search(query)
         if not hits:
             return None
         lines: list[str] = []

@@ -1,4 +1,4 @@
-"""aico migrate | check-config | serve | check-selfimprove | eval"""
+"""aico migrate | check-config | serve | check-selfimprove | eval | recall"""
 
 from __future__ import annotations
 
@@ -60,6 +60,63 @@ async def _eval(settings: Settings, args: argparse.Namespace, suite: list[dict[s
         return 0
     finally:
         await pool.close()
+
+
+async def _recall(database_url: str, args: argparse.Namespace) -> int:
+    """aico recall: recall@k của tìm kiếm tri thức trên bộ câu hỏi chuẩn (Phòng R&D, GĐ2)."""
+    import json
+
+    from aico.db import create_pool
+    from aico.rnd import recall
+    from aico.rnd.cards import cards_from_dir
+    from aico.rnd.store import KnowledgeStore
+
+    questions = recall.load_questions(Path(args.questions))
+    pool = create_pool(database_url)
+    await pool.open()
+    try:
+        store = KnowledgeStore(pool)
+        if args.cards:
+            cards, skipped = cards_from_dir(Path(args.cards))
+            for reason in skipped:
+                print(f"bỏ qua thẻ: {reason}", file=sys.stderr)
+            if not cards:
+                raise recall.RecallError(f"không có thẻ nào trong {args.cards}/cards")
+            await store.rebuild(cards, commit="local", skipped=skipped)
+        results = [
+            await recall.measure(store, questions, k=args.k, mode=mode) for mode in recall.MODES
+        ]
+    finally:
+        await pool.close()
+    if args.json:
+        print(json.dumps(results, ensure_ascii=False, indent=1))
+    else:
+        print(recall.format_report(results, args.min))
+    # Chỉ lượt của tool search_knowledge quyết định đạt/không; inject là số tham khảo.
+    score = results[0]["recall"]
+    return 0 if score is not None and score >= args.min else 1
+
+
+def _recall_offline(args: argparse.Namespace) -> int:
+    """Đo trên một bản checkout kho tri thức: dựng Postgres tạm bằng pgserver (gói dev), không
+    đụng chỉ mục đang chạy."""
+    import importlib
+    import tempfile
+
+    try:
+        pgserver: Any = importlib.import_module("pgserver")
+    except ImportError:
+        print("LỖI: --cards cần pgserver (uv sync, nhóm dev); image aico không có", file=sys.stderr)
+        return 1
+    server = pgserver.get_server(
+        Path(tempfile.mkdtemp(prefix="aico-recall-")), cleanup_mode="delete"
+    )
+    try:
+        url = server.get_uri()
+        _run(migrate(url))
+        return _run(_recall(url, args))
+    finally:
+        server.cleanup()
 
 
 async def _deadlines(container: Any, every: float = 60) -> None:
@@ -176,6 +233,12 @@ def main(argv: list[str] | None = None) -> int:
     ev_report.add_argument("--variant", required=True)
     ev_report.add_argument("--suite", help="bộ chuẩn để so với số liệu chạy thật")
     ev_report.add_argument("--close", action="store_true", help="đóng ticket đã chấm")
+    rc = sub.add_parser("recall", help="recall@k của tìm kiếm tri thức trên bộ câu hỏi chuẩn")
+    rc.add_argument("--questions", default="company/rnd/recall-questions.yaml")
+    rc.add_argument("--cards", help="bản checkout kho tri thức: đo ngoại tuyến bằng Postgres tạm")
+    rc.add_argument("--k", type=int, default=5)
+    rc.add_argument("--min", type=float, default=0.8, help="dưới ngưỡng này thì mã thoát 1")
+    rc.add_argument("--json", action="store_true")
     args = parser.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):
         if isinstance(stream, io.TextIOWrapper):
@@ -198,6 +261,14 @@ def main(argv: list[str] | None = None) -> int:
             print(line, file=sys.stderr)
         print("OK" if not problems else f"LỖI: {len(problems)} thay đổi ngoài phạm vi")
         return 1 if problems else 0
+    if args.cmd == "recall":
+        try:
+            if args.cards:
+                return _recall_offline(args)
+            return _run(_recall(Settings.from_env().database_url, args))
+        except ValueError as exc:  # RecallError: bộ câu hỏi hoặc tham số sai
+            print(f"LỖI: {exc}", file=sys.stderr)
+            return 1
     settings = Settings.from_env()
     if args.cmd == "eval":
         import json

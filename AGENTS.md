@@ -17,7 +17,8 @@ Cả ba phải sạch trước khi báo xong. Sửa hành vi thì thêm hoặc s
 
 ```text
 company/                cấu hình công ty: org, roles/*.yaml, prompts/*.md, sops/, policies/,
-                        rnd/watchlist.yaml (nguồn dò công nghệ của Phòng R&D)
+                        rnd/watchlist.yaml (nguồn dò công nghệ của Phòng R&D),
+                        rnd/recall-questions.yaml (bộ câu hỏi chuẩn đo tìm kiếm tri thức)
 src/aico/core           model dữ liệu chung (Ticket, Event, spec của role/SOP)
 src/aico/registry       nạp + kiểm tra company/
 src/aico/tickets        ticket store Postgres, bảng chuyển trạng thái
@@ -39,7 +40,8 @@ src/aico/rnd            Phòng R&D GĐ2: đọc thẻ tri thức (cards), chỉ 
                         metrics (chỉ số hiệu năng agent từ event, /rnd/metrics), bench (ứng viên
                         bộ ticket chuẩn, /rnd/bench), scout + scheduler (ticket dò công nghệ từ
                         watchlist, tự động mặc định tắt), guardrails (aico check-selfimprove: PR
-                        nhánh rnd/* chỉ sửa prompt và workers/limits)
+                        nhánh rnd/* chỉ sửa prompt và workers/limits), recall (aico recall:
+                        recall@5 của tìm kiếm trên company/rnd/recall-questions.yaml)
 src/aico/jira           đồng bộ một chiều ticket -> Jira (issue, trạng thái, nhãn chờ người, link PR)
 src/aico/llm_relay      model relay (token theo task, ngân sách)
 mcp_servers/gitlab      MCP server Git (GitHub backend mặc định, MR = PR)

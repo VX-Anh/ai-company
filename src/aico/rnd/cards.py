@@ -11,7 +11,9 @@ import io
 import re
 import tarfile
 import unicodedata
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import yaml
@@ -160,11 +162,26 @@ def parse_card(path: str, text: str) -> Card:
     )
 
 
-def cards_from_archive(data: bytes) -> tuple[list[Card], list[str]]:
-    """Thẻ trong tar.gz của kho (một thư mục gốc, như GitHub/GitLab trả): (thẻ, lỗi bỏ qua)."""
+def _collect(files: Iterable[tuple[str, bytes]]) -> tuple[list[Card], list[str]]:
     cards: list[Card] = []
     skipped: list[str] = []
     seen: set[str] = set()
+    for path, raw in files:
+        try:
+            card = parse_card(path, raw.decode("utf-8"))
+        except (CardError, UnicodeDecodeError, ValueError, TypeError) as exc:
+            # Thẻ sai kiểu (trust: high, sources: 5...) chỉ bỏ thẻ đó, không làm hỏng chỉ mục.
+            skipped.append(f"{exc}")
+            continue
+        if card.id in seen:
+            skipped.append(f"{path}: trùng id '{card.id}'")
+            continue
+        seen.add(card.id)
+        cards.append(card)
+    return cards, skipped
+
+
+def _archive_files(data: bytes) -> Iterator[tuple[str, bytes]]:
     with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
         for member in tar.getmembers():
             parts = member.name.split("/", 1)
@@ -172,17 +189,19 @@ def cards_from_archive(data: bytes) -> tuple[list[Card], list[str]]:
             if not member.isfile() or not path.startswith("cards/") or not path.endswith(".md"):
                 continue
             handle = tar.extractfile(member)
-            if handle is None:
-                continue
-            try:
-                card = parse_card(path, handle.read().decode("utf-8"))
-            except (CardError, UnicodeDecodeError, ValueError, TypeError) as exc:
-                # Thẻ sai kiểu (trust: high, sources: 5...) chỉ bỏ thẻ đó, không làm hỏng chỉ mục.
-                skipped.append(f"{exc}")
-                continue
-            if card.id in seen:
-                skipped.append(f"{path}: trùng id '{card.id}'")
-                continue
-            seen.add(card.id)
-            cards.append(card)
-    return cards, skipped
+            if handle is not None:
+                yield path, handle.read()
+
+
+def cards_from_archive(data: bytes) -> tuple[list[Card], list[str]]:
+    """Thẻ trong tar.gz của kho (một thư mục gốc, như GitHub/GitLab trả): (thẻ, lỗi bỏ qua)."""
+    return _collect(_archive_files(data))
+
+
+def cards_from_dir(root: Path) -> tuple[list[Card], list[str]]:
+    """Thẻ trong một bản checkout của kho tri thức (thư mục chứa `cards/`): (thẻ, lỗi bỏ qua).
+
+    Chỉ dùng để đo ngoại tuyến (`aico recall --cards`); chỉ mục thật luôn dựng từ archive của main.
+    """
+    files = sorted((root / "cards").rglob("*.md"))
+    return _collect((f.relative_to(root).as_posix(), f.read_bytes()) for f in files)
