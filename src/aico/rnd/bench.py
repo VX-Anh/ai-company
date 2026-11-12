@@ -17,7 +17,7 @@ from aico.rnd.metrics import ticket_metrics
 from aico.tickets import TicketStore
 
 # Ticket không phải code (thẻ tri thức, tài liệu, hồi cứu): không đo được bằng chạy lại + test.
-EXCLUDED_LABELS = frozenset({"research", "docs", "retro"})
+EXCLUDED_LABELS = frozenset({"research", "docs", "retro", "eval"})
 
 # (project, mr_iid) -> view của MR (tool gitlab.get_merge_request: base_sha, head_sha, ...).
 MrReader = Callable[[str, int], Awaitable[dict[str, Any]]]

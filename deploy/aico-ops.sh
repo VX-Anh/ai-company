@@ -126,6 +126,14 @@ for k, v in d["by_label"].items():
     scan)  # scan [số ngày]: tạo ticket research dò công nghệ theo company/rnd/watchlist.yaml
         body="$(api GET "/rnd/scan-ticket?days=${2:-7}")"
         api POST /tickets "$body" | python3 -c "$summary" ;;
+    eval-start)  # eval-start <biến thể> [số lần] < suite.json: tạo ticket chạy lại (instance aico-eval chạy)
+        cd "$STACK" && docker compose exec -T aico aico eval start --variant "$2" --suite - --repeat "${3:-2}" ;;
+    eval-report)  # eval-report <biến thể> [--close] [< suite.json]: kết quả; --close đóng ticket đã chấm
+        cd "$STACK" && if [ -t 0 ]; then
+            docker compose exec -T aico aico eval report --variant "$2" ${3:-}
+        else
+            docker compose exec -T aico aico eval report --variant "$2" --suite - ${3:-}
+        fi ;;
     remote-image)  # dựng image build mặc định (Node + thư viện Chromium) trên server
         cd "$STACK" && docker compose exec -T remote-runner             python3 /opt/remote_runner.py build-image aico/node-playwright:22             < "$STACK/remote/node-playwright.Dockerfile" ;;
     escalate)  # escalate <id> <merge|retry_push|...> [ghi chú]
@@ -134,6 +142,7 @@ for k, v in d["by_label"].items():
             | python3 -c "$summary" ;;
     *)
         echo "lệnh: safe | deploy [--force] | tickets [n] | ticket <id> | workers | logs [service] [since] | metrics [ngày] | bench [ngày] | scan [ngày]"
+        echo "      eval-start <biến thể> [lần] < suite.json | eval-report <biến thể> [--close] (cần: docker compose --profile eval up -d aico-eval)"
         echo "      create <file.json> | decide <id> <approved|revise|changes_requested|rejected> [ghi chú] | escalate <id> <action> [ghi chú]"
         echo "      remote-image (dựng image Node + Chromium trên máy build, chạy lại khi sửa node-playwright.Dockerfile)"
         exit 2 ;;

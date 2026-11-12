@@ -56,7 +56,12 @@ class GitLabIssuePoller:
                     source=TicketSource.GITLAB,
                     source_ref=f"gitlab:{project}#{issue['iid']}",
                     project=project,
-                    labels=[lbl for lbl in issue.get("labels", []) if lbl != self._label],
+                    # Nhãn eval dành cho ticket chạy lại của R&D, không nhận từ issue.
+                    labels=[
+                        lbl
+                        for lbl in issue.get("labels", [])
+                        if lbl != self._label and lbl.lower() != "eval"
+                    ],
                     budget_usd=self._budget,
                 )
                 saved, is_new = await self._tickets.create_from_source(ticket, actor=self._role)

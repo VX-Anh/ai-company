@@ -21,7 +21,7 @@ def test_sample_company_loads(company: Company) -> None:
     assert coder.max_risk is ActionLevel.L2
     grant = coder.grant_for("gitlab")
     assert grant is not None
-    assert grant.constraints.branch_pattern == "ai/*"
+    assert grant.constraints.branch_pattern == "ai/*,eval/*"
     assert company.sop("fix_ticket").steps["merge"] == "merge_bot"
     assert "Coder" in company.prompt_text("coder")
 

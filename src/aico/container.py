@@ -66,6 +66,7 @@ from aico.orchestrator import (
 )
 from aico.orchestrator.escalation import merge_escalated, retry_push
 from aico.orchestrator.ports import Analyst, Coder, Planner, Reviewer
+from aico.orchestrator.workplan import ticket_refs
 from aico.registry import Company, load_company
 from aico.rnd import KNOWLEDGE_ROLES, KnowledgeStore, Librarian, build_knowledge_server
 from aico.rnd.bench import candidates as bench_candidates
@@ -142,7 +143,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
         )
         librarian = (
             Librarian(knowledge, gateway, settings.knowledge_project)
-            if knowledge is not None and settings.knowledge_project
+            if knowledge is not None and settings.knowledge_project and not settings.eval_instance
             else None
         )
         tokens = TaskTokens()
@@ -235,7 +236,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 role_id=sop.steps["code"],
             )
         site_watcher: SiteWatcher | None = None
-        if previewer is not None and settings.site_watch_seconds > 0:
+        if previewer is not None and settings.site_watch_seconds > 0 and not settings.eval_instance:
             site_watcher = SiteWatcher(
                 previewer, gateway, settings.preview_projects, role_id=sop.steps["code"]
             )
@@ -355,13 +356,19 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             mrs = [a for a in ticket.artifacts if a.kind == "merge_request"]
             if previewer is not None and mrs:
                 project = mrs[-1].ref.rpartition("!")[0]
-                previewer.schedule(ticket_id, project, f"ai/{ticket_id}")
+                previewer.schedule(ticket_id, project, ticket_refs(ticket).work)
             return ticket
 
         saver = AsyncPostgresSaver(saver_pool)  # type: ignore[arg-type]
         graph = build_fix_ticket(deps).compile(checkpointer=saver)
         runners = tuple(
-            Runner(graph, tickets, lease_seconds=settings.lease_seconds)
+            Runner(
+                graph,
+                tickets,
+                lease_seconds=settings.lease_seconds,
+                eval_only=settings.eval_instance,
+                eval_variant=settings.eval_variant,
+            )
             for _ in range(settings.runner_concurrency)
         )
         runner = runners[0]
@@ -369,11 +376,11 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             GitLabIssuePoller(
                 gateway, tickets, settings.intake_projects, label=settings.intake_label
             )
-            if settings.intake_projects
+            if settings.intake_projects and not settings.eval_instance
             else None
         )
         jira_sync = None
-        if settings.jira_enabled:
+        if settings.jira_enabled and not settings.eval_instance:
             assert settings.jira_url and settings.jira_email and settings.jira_token
             jira_client = HttpJiraClient(
                 settings.jira_url, settings.jira_email, settings.jira_token
@@ -409,7 +416,11 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             )
 
         scan_scheduler: ScanScheduler | None = None
-        if settings.rnd_scan_interval_days > 0 and settings.knowledge_project:
+        if (
+            settings.rnd_scan_interval_days > 0
+            and settings.knowledge_project
+            and not settings.eval_instance
+        ):
             if cli_agents is None:
                 log.warning("bỏ dò công nghệ tự động: cần worker CLI để đọc hạn mức các phòng")
             else:

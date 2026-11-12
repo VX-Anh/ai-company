@@ -31,7 +31,7 @@ from aico.orchestrator.ports import (
     ItemResult,
     ReviewResult,
 )
-from aico.orchestrator.workplan import ARCHITECTURE_DOC, WorkItem, plan_doc_path
+from aico.orchestrator.workplan import ARCHITECTURE_DOC, WorkItem, plan_doc_path, ticket_refs
 from aico.registry import Company
 from aico.tools import ToolError, ToolGateway
 
@@ -362,7 +362,10 @@ class CliCoder:
         self._build_hint = (build_hint,) if build_hint else ()
 
     async def _workspace(self, ticket: Ticket, project: str) -> dict[str, Any]:
-        for ref in (f"ai/{ticket.id}", "main"):
+        refs = ticket_refs(ticket)
+        # Vòng sau dựa trên nhánh làm việc nếu đã có; lần đầu từ ref gốc (main, hoặc commit gốc
+        # của ticket chạy lại).
+        for ref in (refs.work, refs.base):
             try:
                 archive = await self._gateway.call(
                     self._role,

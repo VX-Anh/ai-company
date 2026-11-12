@@ -1,8 +1,31 @@
 # Thiết kế R1: chạy lại ticket cũ để đo thay đổi của aico
 
-Trạng thái: **bản đề xuất, chờ owner duyệt** (2026-11-12). Phần này sửa lõi orchestrator nên
-chưa code; các mảnh nền đã có trên nhánh `rnd-r0` (event `job`, `/rnd/metrics`, `/rnd/bench`,
-mốc `base_sha`/`merge_commit_sha` của MR).
+Trạng thái (2026-11-12): **đã code trên nhánh `rnd-r1`** (tách từ `rnd-r0`), theo mặc định ở
+mục 6 (branch `eval/*` trên repo thật, không fork). Owner duyệt nhánh này riêng; `rnd-r0` merge
+được độc lập. Chưa chạy thật: cần merge, deploy, bật `aico-eval`.
+
+**Cách dùng (sau khi merge + deploy):**
+
+```bash
+# 1. Bộ chuẩn: lấy ứng viên, chọn 10–15 mục, lưu suite.json (giữ trường base_sha, observed)
+aico-ops bench 90 > suite.json
+# 2. Biến thể: thư mục company/ đã sửa (prompt, workers, limits), đặt trong .env
+#    AICO_EVAL_COMPANY_DIR=/đường/dẫn/biến-thể   (để trống = company/ hiện tại = baseline)
+docker compose --profile eval up -d aico-eval
+# 3. Chạy: mỗi mục 2 lần
+aico-ops eval-start baseline 2 < suite.json
+# 4. Xem, rồi đóng các ticket đã chấm
+aico-ops eval-report baseline < suite.json
+aico-ops eval-report baseline --close
+```
+
+Đã làm: nhãn + artifact `eval`, `workplan.ticket_refs` (nhánh `eval/<id>` từ commit gốc, MR vào
+`eval/base/<id>`), `TicketStore.claim(eval_only, eval_variant)`, `AICO_EVAL_INSTANCE`,
+`AICO_EVAL_VARIANT`, bỏ duyệt kế hoạch và chặn merge trong code (không theo luật YAML),
+mcp-gitlab/guard nhiều mẫu nhánh và ref SHA, `aico eval start|report`, service `aico-eval`
+(profile `eval`), chỉ số chung không tính ticket eval. Chưa làm: chấm acceptance (build/test trên
+máy build) tự động; dọn branch `eval/*` sau khi chấm; trần hạn mức riêng cho eval (hiện chỉ dựa
+vào việc owner bật/tắt `aico-eval`); `base_sha` nên là merge-base (compare API).
 
 ## 1. Mục tiêu
 
@@ -45,16 +68,23 @@ biệt gói trong nhãn `eval`:
 | --- | --- | --- |
 | Ai nhận ticket | runner của aico chính | **chỉ** runner của instance eval có cùng `variant` (lọc khi `claim`) |
 | Cấu hình công ty | `company/` | `AICO_COMPANY_DIR` trỏ tới thư mục biến thể |
-| Branch làm việc | `ai/<ticket>` từ `main` | `eval/<variant>/<ticket>` từ `base_sha` |
+| Branch làm việc | `ai/<ticket>` từ `main` | `eval/<ticket>` từ `base_sha` |
 | Đích của MR | `main` | `eval/base/<ticket>` (branch tạo ở `base_sha`) — diff đúng phần agent làm |
-| Duyệt kế hoạch | theo rủi ro | tự duyệt bởi "eval-bot" (ghi rõ trong event), vì đo hệ chứ không đo người |
+| Duyệt kế hoạch | theo rủi ro | bỏ (triage ép rủi ro low trong code), vì đo hệ chứ không đo người |
 | Merge | owner duyệt | **không bao giờ**; tới `awaiting_merge_approval` thì instance eval chấm rồi đóng ticket |
 | Hạn mức | chung | trần riêng theo tuần; chỉ chạy khi `aico-ops safe` (hệ rảnh) |
 
-Cách cô lập: instance eval là service `aico-eval` trong compose (cùng image, cùng DB, mạng như
-aico), `AICO_RUNNER_LABEL=eval`, `AICO_EVAL_VARIANT=<tên>`; aico chính bỏ qua ticket có nhãn
-`eval`. mcp-gitlab cho phép branch `eval/*` và đích `eval/base/*` (`GITLAB_BRANCH_PATTERN`,
-`GITLAB_ALLOWED_TARGETS`); merge vào `eval/*` vẫn bị chặn vì không có bản ghi duyệt.
+Cách cô lập (đã làm, sau review độc lập):
+- Ticket chạy lại = nhãn `eval` **và** artifact `eval` (một vị từ dùng chung cho claim, triage,
+  builder, chỉ số). Nhãn một mình là ticket thường; API, intake GitHub và Jira bỏ nhãn `eval`.
+- Instance `aico-eval` (`AICO_EVAL_INSTANCE=1`, `AICO_EVAL_VARIANT`, 1 ticket một lúc, không bản
+  xem trước) chỉ nhận ticket eval của đúng biến thể; aico chính bỏ qua mọi ticket eval.
+- Không merge, bốn lớp: graph luôn escalate ở bước duyệt merge; API từ chối `approved`;
+  `verify_merge_approval` trả sai; mcp-gitlab chỉ merge vào `GITLAB_MERGE_TARGETS` (main).
+- mcp-gitlab ép cặp: nguồn `eval/*` chỉ mở MR vào `eval/base/*`, nguồn khác không vào `eval/*`;
+  không push vào `eval/base/*`; `publish` từ chối MR có sẵn trỏ sai đích.
+- Planner/BA đọc code ở commit gốc (`read_file` kèm `ref`), không đọc `main` (có thể đã chứa đáp án).
+- Jira, retro, chỉ số, bộ chuẩn bỏ qua ticket eval.
 
 Việc phải sửa (ước lượng L):
 

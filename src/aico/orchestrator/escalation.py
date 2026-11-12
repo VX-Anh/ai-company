@@ -12,6 +12,7 @@ from typing import Any
 
 from aico.core import ApprovalKind, Artifact, Decision, Ticket, TicketStatus
 from aico.governance import ApprovalStore
+from aico.orchestrator.workplan import eval_spec, ticket_refs
 from aico.tickets import TicketStore
 from aico.tools import ApprovalRequired, ToolDenied, ToolError, ToolGateway
 
@@ -37,6 +38,8 @@ async def merge_escalated(
     ticket = await tickets.get(ticket_id)
     if ticket.status is not S.ESCALATED:
         raise EscalationError(f"ticket đang '{ticket.status}', không ở trạng thái escalated")
+    if eval_spec(ticket) is not None:
+        raise EscalationError("ticket chạy lại (eval) không bao giờ merge")
     mrs = [a for a in ticket.artifacts if a.kind == "merge_request"]
     if not mrs:
         raise EscalationError("ticket chưa có merge request")
@@ -107,6 +110,8 @@ async def retry_push(
     ticket = await tickets.get(ticket_id)
     if ticket.status is not S.ESCALATED:
         raise EscalationError(f"ticket đang '{ticket.status}', không ở trạng thái escalated")
+    if eval_spec(ticket) is not None:
+        raise EscalationError("ticket chạy lại (eval) không đẩy lại code")
     escalated = [e for e in await tickets.events(ticket_id) if e.to_status is S.ESCALATED]
     last = escalated[-1] if escalated else None
     changes: list[dict[str, Any]] = (last.data.get("unpushed_changes") or []) if last else []
@@ -115,7 +120,7 @@ async def retry_push(
     project = ticket.project or default_project
     if not project:
         raise EscalationError("ticket không có repo")
-    branch = f"ai/{ticket_id}"
+    branch = ticket_refs(ticket, target_branch).work
     # Cùng một lần escalate thì cùng khoá: bấm lại không tạo commit trùng.
     key = f"{ticket_id}:retry:{last.at.isoformat()}"
     note = f" ({comment})" if comment else ""

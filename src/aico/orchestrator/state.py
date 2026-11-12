@@ -34,4 +34,5 @@ class TicketState(TypedDict):
     merge_error: str
     merged: bool
     escalation_reason: str
+    eval: bool  # ticket chạy lại của R&D (nhãn + artifact eval): bỏ duyệt kế hoạch, không merge
     unpushed_changes: list[dict[str, Any]]  # code chưa đẩy được lên Git (giữ lại khi escalate)

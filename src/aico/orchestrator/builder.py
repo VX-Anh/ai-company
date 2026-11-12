@@ -16,7 +16,7 @@ from typing import Any, cast
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import interrupt
 
-from aico.core import ApprovalKind, Artifact, Decision, SopSpec, Ticket, TicketStatus
+from aico.core import ApprovalKind, Artifact, Decision, SopSpec, Ticket, TicketRisk, TicketStatus
 from aico.governance import ApprovalStore
 from aico.orchestrator.ports import (
     AgentUnavailable,
@@ -29,6 +29,7 @@ from aico.orchestrator.ports import (
     Previewer,
     Reviewer,
     Triage,
+    TriageResult,
 )
 from aico.orchestrator.state import TicketState
 from aico.orchestrator.workplan import (
@@ -36,11 +37,13 @@ from aico.orchestrator.workplan import (
     ARCHITECTURE_LABEL,
     WorkItem,
     clamp_owns,
+    eval_spec,
     fix_item,
     parse_work_plan,
     plan_doc_path,
     render_architecture_doc,
     render_plan_doc,
+    ticket_refs,
 )
 from aico.tickets import TicketStore
 from aico.tools import ToolError, ToolGateway
@@ -137,6 +140,11 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         role = deps.role("triage")
         ticket = await deps.tickets.get(tid)
         result = await deps.triage.triage(ticket)
+        is_eval = eval_spec(ticket) is not None
+        if is_eval:
+            # Ticket chạy lại đo hệ chứ không đo người duyệt kế hoạch, và không bao giờ merge.
+            # Quyết định ở code (nhãn + artifact), không ở luật YAML theo nhãn mà ai cũng gắn được.
+            result = TriageResult(result.department, TicketRisk.LOW, "chạy lại (eval)")
         await deps.tickets.update(
             tid,
             actor=role,
@@ -156,6 +164,7 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             "merge_approval_rounds": 0,
             "merge_attempts": 0,
             "merged": False,
+            "eval": is_eval,
         }
 
     async def analyze(s: TicketState) -> dict[str, Any]:
@@ -247,7 +256,8 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         """Ghi sơ đồ khi ticket có nhãn architecture hoặc nhánh đích chưa có file kiến trúc."""
         if ARCHITECTURE_LABEL in ticket.labels:
             return True
-        return await file_action(tid, project, deps.target_branch, ARCHITECTURE_DOC) == "create"
+        base = ticket_refs(ticket, deps.target_branch).base
+        return await file_action(tid, project, base, ARCHITECTURE_DOC) == "create"
 
     async def git(tid: str, tool: str, args: dict[str, Any]) -> Any:
         """Gọi tool Git của bước code, thử lại khi lỗi (GitHub trễ ref, mạng chập chờn).
@@ -280,11 +290,19 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         người xem, lấy lại hoặc đẩy tay.
         """
         role = deps.role("code")
+        refs = ticket_refs(ticket, deps.target_branch)
         try:
+            if refs.eval_variant is not None:
+                # Chạy lại: nhánh đích của MR dựng ở commit gốc để diff chỉ gồm phần agent làm.
+                await git(
+                    tid,
+                    "create_branch",
+                    {"project": project, "branch": refs.target, "ref": refs.base},
+                )
             await git(
                 tid,
                 "create_branch",
-                {"project": project, "branch": branch, "ref": deps.target_branch},
+                {"project": project, "branch": branch, "ref": refs.base},
             )
             for message, files, key in commits:
                 await git(
@@ -322,7 +340,7 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
                 {
                     "project": project,
                     "source_branch": branch,
-                    "target_branch": deps.target_branch,
+                    "target_branch": refs.target,
                     "title": f"{tid}: {ticket.title}",
                     "description": description,
                 },
@@ -334,6 +352,15 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
                 "code_attempts": attempt,
                 "escalation_reason": f"đẩy code lên Git lỗi (lần code {attempt}): {exc}",
                 "unpushed_changes": unpushed,
+            }
+        if mr.get("target_branch") not in (None, refs.target):
+            # MR có sẵn (agent tự mở) vào đích khác: không nhận, nhất là eval/* vào main.
+            return {
+                "code_attempts": attempt,
+                "escalation_reason": (
+                    f"MR !{mr.get('iid')} của {branch} trỏ vào '{mr.get('target_branch')}', "
+                    f"phải là '{refs.target}'"
+                ),
             }
         await deps.tickets.add_artifact(tid, Artifact(kind="branch", ref=branch), actor=role)
         await deps.tickets.add_artifact(
@@ -409,8 +436,8 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             data["feedback"] = feedback
         await deps.tickets.transition(tid, S.IN_PROGRESS, actor=role, data=data)
         project = await project_of(tid)
-        branch = f"ai/{tid}"
         ticket = await deps.tickets.get(tid)
+        branch = ticket_refs(ticket, deps.target_branch).work
         if isinstance(deps.coder, ItemCoder):
             return await code_items(s, ticket, project, branch, attempt, feedback)
         try:
@@ -609,6 +636,8 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         return "code" if s["test_rounds"] < limits.max_test_rounds else "escalate"
 
     def route_merge_approval(s: TicketState) -> str:
+        if s.get("eval"):
+            return "escalate"  # ticket chạy lại dừng ở đây dù quyết định là gì: không bao giờ merge
         if s["merge_decision"] == Decision.APPROVED:
             return "merge"
         if s["merge_decision"] == Decision.CHANGES_REQUESTED and s[
@@ -653,6 +682,8 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
 
 
 def _escalation_reason(s: TicketState, sop: SopSpec) -> str:
+    if s.get("eval") and s.get("merge_decision"):
+        return f"eval: kết thúc ở bước duyệt merge ({s['merge_decision']}), không merge"
     if s.get("plan_decision") in (Decision.REJECTED, Decision.TIMEOUT):
         return f"kế hoạch: {s['plan_decision']}"
     if s.get("plan_decision") == Decision.REVISE:

@@ -25,6 +25,10 @@ async def verify_merge_approval(
         ticket = await tickets.get(approval.ticket_id)
     except TicketNotFound:
         return False, "ticket không tồn tại"
+    if "eval" in {x.lower() for x in ticket.labels} and any(
+        a.kind == "eval" for a in ticket.artifacts
+    ):
+        return False, "ticket chạy lại (eval) không bao giờ merge"
     ref = f"{project}!{mr_iid}"
     if not any(a.kind == "merge_request" and a.ref == ref for a in ticket.artifacts):
         return False, f"MR {ref} không thuộc ticket {ticket.id}"

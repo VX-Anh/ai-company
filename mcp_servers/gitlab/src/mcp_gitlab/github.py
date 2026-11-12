@@ -89,6 +89,8 @@ class HttpGitHubBackend:
         return resp.json() if resp.content else {}
 
     async def _head_sha(self, project: str, branch: str) -> str:
+        if SHA_RE.fullmatch(branch):
+            return branch  # đã là commit (ticket chạy lại dựng nhánh ở commit gốc)
         ref = await self._request(
             "GET", f"{_repo(project)}/git/ref/heads/{quote(branch, safe='/')}"
         )

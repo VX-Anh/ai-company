@@ -60,7 +60,18 @@ class TicketStore(Protocol):
 
     async def take_pending_resume(self, ticket_id: str, *, owner: str) -> dict[str, Any] | None: ...
 
-    async def claim(self, *, owner: str, lease_seconds: float) -> Ticket | None: ...
+    async def claim(
+        self,
+        *,
+        owner: str,
+        lease_seconds: float,
+        eval_only: bool = False,
+        eval_variant: str | None = None,
+    ) -> Ticket | None:
+        """Nhận một ticket cần chạy. eval_only=False (aico chính) bỏ qua ticket chạy lại (nhãn +
+        artifact eval); True (instance chạy lại) chỉ nhận chúng, và chỉ của `eval_variant` nếu có
+        (instance đang mount cấu hình của biến thể nào thì chỉ chạy biến thể đó)."""
+        ...
 
     async def renew(self, ticket_id: str, *, owner: str, lease_seconds: float) -> bool: ...
 
@@ -73,6 +84,20 @@ class TicketStore(Protocol):
         ...
 
     async def overdue_approvals(self, now: datetime) -> list[Ticket]: ...
+
+
+def eval_variant_of(ticket: Ticket) -> str | None:
+    """Biến thể nếu là ticket chạy lại (nhãn eval VÀ artifact eval), không thì None.
+
+    Cùng điều kiện với orchestrator.workplan.eval_spec (không import để tránh vòng import).
+    Nhãn một mình (người hay issue gắn được) không đủ.
+    """
+    if "eval" not in {label.lower() for label in ticket.labels}:
+        return None
+    for artifact in ticket.artifacts:
+        if artifact.kind == "eval" and "@" in artifact.ref:
+            return artifact.ref.partition("@")[0]
+    return None
 
 
 def is_claimable(ticket: Ticket, now: datetime) -> bool:
@@ -199,10 +224,22 @@ class InMemoryTicketStore:
             self._put(ticket.model_copy(update={"pending_resume": None}))
             return payload
 
-    async def claim(self, *, owner: str, lease_seconds: float) -> Ticket | None:
+    async def claim(
+        self,
+        *,
+        owner: str,
+        lease_seconds: float,
+        eval_only: bool = False,
+        eval_variant: str | None = None,
+    ) -> Ticket | None:
         async with self._lock:
             now = utcnow()
             for ticket in sorted(self._tickets.values(), key=lambda t: t.updated_at):
+                variant = eval_variant_of(ticket)
+                if (variant is not None) != eval_only:
+                    continue
+                if eval_only and eval_variant is not None and variant != eval_variant:
+                    continue
                 if is_claimable(ticket, now):
                     claimed = ticket.model_copy(
                         update={
