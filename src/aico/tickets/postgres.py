@@ -218,6 +218,11 @@ class PostgresTicketStore:
             )
             return _row_to_ticket(row)
 
+    async def record(self, ticket_id: str, kind: str, *, actor: str, data: dict[str, Any]) -> None:
+        async with self._pool.connection() as conn, conn.transaction():
+            await self._fetch(conn, ticket_id, lock=False)  # ticket không có thì TicketNotFound
+            await self._event(conn, Event(ticket_id=ticket_id, kind=kind, actor=actor, data=data))
+
     async def set_pending_resume(
         self, ticket_id: str, payload: dict[str, Any], *, actor: str
     ) -> Ticket:

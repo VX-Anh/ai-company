@@ -93,6 +93,14 @@ async def _serve(settings: Settings) -> None:
                     c.site_watcher.run_forever(settings.site_watch_seconds), name="site-watch"
                 )
             )
+        if c.librarian is not None:
+            tasks.append(
+                asyncio.create_task(
+                    c.librarian.run_forever(settings.knowledge_watch_seconds), name="librarian"
+                )
+            )
+        if c.scan_scheduler is not None:
+            tasks.append(asyncio.create_task(c.scan_scheduler.run_forever(), name="rnd-scan"))
         if c.jira_sync is not None:
             tasks.append(
                 asyncio.create_task(c.jira_sync.run_forever(settings.poll_seconds), name="jira")
@@ -128,6 +136,11 @@ def main(argv: list[str] | None = None) -> int:
     check = sub.add_parser("check-config", help="kiểm tra thư mục company/")
     check.add_argument("path", nargs="?", default="company")
     sub.add_parser("serve", help="chạy API, model relay, runner, intake, đồng bộ Jira")
+    guard = sub.add_parser(
+        "check-selfimprove", help="kiểm PR tự cải tiến (nhánh rnd/*) chỉ sửa prompt/workers/limits"
+    )
+    guard.add_argument("--base", default="origin/main", help="ref đích của PR")
+    guard.add_argument("--head", default="HEAD", help="ref của PR (chỉ đọc object Git)")
     args = parser.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):
         if isinstance(stream, io.TextIOWrapper):
@@ -142,6 +155,14 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         print(f"OK: {len(company.roles)} vai trò, {len(company.sops)} SOP")
         return 0
+    if args.cmd == "check-selfimprove":
+        from aico.rnd.guardrails import check as check_selfimprove
+
+        problems = check_selfimprove(Path.cwd(), args.base, args.head)
+        for line in problems:
+            print(line, file=sys.stderr)
+        print("OK" if not problems else f"LỖI: {len(problems)} thay đổi ngoài phạm vi")
+        return 1 if problems else 0
     settings = Settings.from_env()
     if args.cmd == "migrate":
         _run(_migrate(settings))

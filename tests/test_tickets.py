@@ -130,3 +130,17 @@ async def test_overdue_approvals(store: Any) -> None:
     await store.create(_ticket("T-2", status=S.AWAITING_MERGE_APPROVAL), actor="api")
     overdue = await store.overdue_approvals(utcnow())
     assert [t.id for t in overdue] == ["T-1"]
+
+
+async def test_record_appends_event_without_touching_ticket(store: Any) -> None:
+    await store.create(_ticket(), actor="api")
+    before = await store.get("T-1")
+    data = {"role": "coder", "room": "claude", "ok": True, "tokens_in": 10, "tokens_out": None}
+    await store.record("T-1", "job", actor="coder", data=data)
+    after = await store.get("T-1")
+    assert after.status is before.status and after.updated_at == before.updated_at
+    events = await store.events("T-1")
+    assert [e.kind for e in events] == ["created", "job"]
+    assert events[-1].data == data and events[-1].actor == "coder"
+    with pytest.raises(TicketNotFound):
+        await store.record("nope", "job", actor="coder", data={})

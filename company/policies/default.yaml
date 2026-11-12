@@ -9,6 +9,14 @@ tool_levels:
   gitlab.push: L2
   gitlab.open_merge_request: L2
   gitlab.merge_mr: L3
+  # Kho tri thức Phòng R&D (chạy trong tiến trình aico): chỉ đọc tri thức đã duyệt.
+  knowledge.search_knowledge: L0
+  knowledge.get_knowledge: L0
+  # Nghiên cứu (Phòng R&D): đọc web/GitHub công khai, chặn địa chỉ nội bộ, không ghi gì.
+  research.fetch_url: L0
+  research.verify_quote: L0
+  research.github_releases: L0
+  research.github_search_repos: L0
   # Pixelbolt: vẽ pixel art từ công thức JSON, chỉ ghi file trong thư mục output của container
   pixel.pixel_help: L0
   pixel.pixel_inspect: L0
@@ -43,9 +51,14 @@ model_prices:
 # Phân loại rủi ro ticket bằng luật (GĐ0–GĐ1). Luật đầu tiên khớp được dùng.
 default_risk: medium
 risk_rules:
+  # Nhãn rủi ro cao đứng đầu: không nhãn nào khác (kể cả research) hạ được nó.
+  - risk: high
+    labels: [security, data, infra]
   # Nghiên cứu (Phòng R&D): chỉ ghi thẻ tri thức; lần duyệt duy nhất là duyệt merge (nạp tri thức).
+  # Chỉ ở kho tri thức: nhãn research trên repo khác vẫn phải duyệt kế hoạch.
   - risk: low
     labels: [research]
+    projects: [VX-Anh/aico-knowledge]
   # Hồi cứu sửa quy tắc của agent: luôn cần người duyệt kế hoạch.
   - risk: medium
     labels: [retro]
@@ -53,7 +66,6 @@ risk_rules:
   - risk: medium
     labels: [docs]
   - risk: high
-    labels: [security, data, infra]
     keywords: [auth, permission, migration, phân quyền, xác thực]
   - risk: low
     labels: [low-risk, small-fix]

@@ -270,3 +270,27 @@ def test_project_must_be_owner_repo() -> None:
 
     with pytest.raises(GitLabError):
         _repo("group/sub/repo")
+
+
+def test_pr_view_exposes_commit_marks_for_replay() -> None:
+    """R&D chạy lại ticket cũ từ base_sha; merge_commit_sha chỉ có khi đã merge."""
+    from mcp_gitlab.github import _pr_view  # noqa: PLC2701 - hàm thuần, test trực tiếp
+    from mcp_gitlab.tools import _mr_view  # noqa: PLC2701
+
+    pr = {
+        "number": 3,
+        "state": "closed",
+        "merged_at": "2026-11-11T00:00:00Z",
+        "head": {"ref": "ai/T-1", "sha": "h" * 40},
+        "base": {"ref": "main", "sha": "b" * 40},
+        "merge_commit_sha": "m" * 40,
+    }
+    view = _mr_view(_pr_view(pr))
+    assert view["merged"] is True
+    assert (view["base_sha"], view["head_sha"], view["merge_commit_sha"]) == (
+        "b" * 40,
+        "h" * 40,
+        "m" * 40,
+    )
+    open_pr = {**pr, "state": "open", "merged_at": None}
+    assert _mr_view(_pr_view(open_pr))["merge_commit_sha"] is None

@@ -72,6 +72,7 @@ def make_harness(
     label_item_roles: dict[str, tuple[str, ...]] | None = None,
     test_skip_labels: tuple[str, ...] = (),
     label_review_rounds: dict[str, int] | None = None,
+    label_scopes: dict[str, tuple[str, ...]] | None = None,
 ) -> Harness:
     tickets = tickets or InMemoryTicketStore()
     approvals = approvals or InMemoryApprovalStore()
@@ -108,6 +109,7 @@ def make_harness(
         label_item_roles=label_item_roles or {},
         test_skip_labels=test_skip_labels,
         label_review_rounds=label_review_rounds or {},
+        label_scopes=label_scopes or {},
     )
     graph = build_fix_ticket(deps).compile(checkpointer=checkpointer or InMemorySaver())
     runner = Runner(graph, tickets, owner=owner, lease_seconds=lease_seconds)

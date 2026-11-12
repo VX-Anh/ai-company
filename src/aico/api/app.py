@@ -8,7 +8,7 @@ from __future__ import annotations
 import secrets
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
-from typing import Annotated, Any
+from typing import TYPE_CHECKING, Annotated, Any
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -16,11 +16,14 @@ from pydantic import BaseModel, Field
 from starlette.responses import PlainTextResponse
 from starlette.types import ASGIApp, Receive, Scope, Send
 
-from aico.core import Decision, Event, Ticket, TicketStatus
+from aico.core import Decision, Event, Ticket, TicketStatus, utcnow
 from aico.governance import ApprovalStore
 from aico.governance.verify import verify_merge_approval
 from aico.intake import new_ticket_id
 from aico.tickets import TicketExists, TicketNotFound, TicketStore, TransitionError
+
+if TYPE_CHECKING:
+    from aico.rnd import KnowledgeStore
 
 S = TicketStatus
 ALLOWED_DECISIONS = {
@@ -51,6 +54,12 @@ class ApiDeps:
     # Dựng lại bản xem trước trên máy build từ xa: (ticket_id, site) -> kết quả (có url).
     # site=True dựng bản chính của repo (branch đích) thay cho branch của ticket.
     preview: Callable[[str, bool], Awaitable[dict[str, Any]]] | None = None
+    # Chỉ mục kho tri thức (Phòng R&D); None khi tắt.
+    knowledge: KnowledgeStore | None = None
+    # Ứng viên bộ ticket chuẩn của R&D: (số ngày) -> danh sách; None khi không có gateway Git.
+    bench: Callable[[int], Awaitable[list[dict[str, Any]]]] | None = None
+    # Ticket dò công nghệ dựng từ company/rnd/watchlist.yaml: (số ngày) -> dữ liệu POST /tickets.
+    scan_ticket: Callable[[int], dict[str, Any]] | None = None
 
 
 class CreateTicket(BaseModel):
@@ -189,6 +198,51 @@ def create_api_app(deps: ApiDeps) -> FastAPI:
             raise HTTPException(409, str(exc)) from None
         except RuntimeError as exc:  # PreviewError: build lỗi, máy build không phản hồi
             raise HTTPException(502, str(exc)) from None
+
+    @app.get("/knowledge/nodes", dependencies=user)
+    async def knowledge_nodes(
+        q: str | None = None, k: Annotated[int, Query(ge=1, le=8)] = 8
+    ) -> list[dict[str, Any]]:
+        """Thẻ tri thức đã duyệt: có q thì tìm (tối đa k thẻ), không có thì liệt kê tất cả."""
+        if deps.knowledge is None:
+            raise HTTPException(501, "chưa bật kho tri thức (AICO_KNOWLEDGE_PROJECT)")
+        if q:
+            return await deps.knowledge.search(q, k=k)
+        return await deps.knowledge.list_nodes()
+
+    @app.get("/knowledge/nodes/{node_id:path}", dependencies=user)
+    async def knowledge_node(node_id: str) -> dict[str, Any]:
+        if deps.knowledge is None:
+            raise HTTPException(501, "chưa bật kho tri thức (AICO_KNOWLEDGE_PROJECT)")
+        card = await deps.knowledge.get(node_id)
+        if card is None:
+            raise HTTPException(404, f"không có thẻ '{node_id}'")
+        return card
+
+    @app.get("/rnd/metrics", dependencies=user)
+    async def rnd_metrics(days: Annotated[int, Query(ge=1, le=365)] = 30) -> dict[str, Any]:
+        """Chỉ số hiệu năng hệ agent (Phòng R&D): tỷ lệ đạt ngay, vòng review, người trả lại,
+        lớp lý do escalate, job theo vai trò/phòng/prompt. Chỉ đọc."""
+        from aico.rnd.metrics import report
+
+        return await report(deps.tickets, now=utcnow(), days=days)
+
+    @app.get("/rnd/bench", dependencies=user)
+    async def rnd_bench(days: Annotated[int, Query(ge=1, le=365)] = 90) -> list[dict[str, Any]]:
+        """Ticket code đã merge, đủ mốc commit để chạy lại (ứng viên bộ ticket chuẩn). Chỉ đọc."""
+        if deps.bench is None:
+            raise HTTPException(501, "chưa cấu hình đọc MR (gateway Git)")
+        return await deps.bench(days)
+
+    @app.get("/rnd/scan-ticket", dependencies=user)
+    async def rnd_scan_ticket(days: Annotated[int, Query(ge=1, le=90)] = 7) -> dict[str, Any]:
+        """Ticket research dò các nguồn trong watchlist (chưa tạo; gửi lại vào POST /tickets)."""
+        if deps.scan_ticket is None:
+            raise HTTPException(501, "chưa bật kho tri thức (AICO_KNOWLEDGE_PROJECT)")
+        try:
+            return deps.scan_ticket(days)
+        except ValueError as exc:
+            raise HTTPException(422, str(exc)) from None
 
     @app.get("/internal/approvals/{approval_id}", dependencies=[Depends(require_internal)])
     async def verify_approval(

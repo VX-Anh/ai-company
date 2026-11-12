@@ -1,0 +1,30 @@
+# Rào chắn PR tự cải tiến của Phòng R&D: chỉ được sửa company/prompts/*.md và workers/limits
+# của vai trò đã có (aico check-selfimprove).
+#
+# pull_request_target: chạy code của nhánh ĐÍCH (main), không chạy code của PR, nên PR không tự
+# sửa được bộ kiểm để qua. Bước kiểm chỉ đọc object Git của PR (git show), không cài hay chạy gì
+# từ PR. Không dùng secret. Đặt làm required check cho main.
+name: selfimprove-scope
+on:
+  pull_request_target:
+    types: [opened, synchronize, reopened, labeled]
+permissions:
+  contents: read
+jobs:
+  scope:
+    # Nhánh rnd/* hoặc nhãn selfimprove (PR do agent tạo có thể đổi tên nhánh, nên có cả nhãn).
+    if: startsWith(github.event.pull_request.head.ref, 'rnd/') || contains(github.event.pull_request.labels.*.name, 'selfimprove')
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.base.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Lấy object Git của PR (không checkout)
+        run: git fetch --no-tags origin "pull/${{ github.event.pull_request.number }}/head:refs/remotes/pr/head"
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.12"
+      - run: uv sync --frozen --all-packages
+      - run: uv run aico check-selfimprove --base "${{ github.event.pull_request.base.sha }}" --head refs/remotes/pr/head

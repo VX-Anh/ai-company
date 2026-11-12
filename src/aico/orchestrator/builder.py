@@ -35,6 +35,7 @@ from aico.orchestrator.workplan import (
     ARCHITECTURE_DOC,
     ARCHITECTURE_LABEL,
     WorkItem,
+    clamp_owns,
     fix_item,
     parse_work_plan,
     plan_doc_path,
@@ -81,6 +82,9 @@ class Deps:
     # Số vòng review tối đa riêng theo nhãn (vd `research`: Fact Checker kỹ, cần nhiều vòng hơn);
     # không khớp nhãn nào thì dùng max_review_rounds của SOP.
     label_review_rounds: dict[str, int] = field(default_factory=dict)
+    # Ticket mang nhãn này chỉ được sửa file trong các thư mục này, ở mọi vòng (vd `research`:
+    # chỉ `cards/`). Vòng sửa mặc định cho sửa mọi file nên phải chặn ở đây.
+    label_scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
 
     def role(self, step: str) -> str:
         return self.sop.steps[step]
@@ -98,6 +102,13 @@ class Deps:
             if (rounds := by_label.get(label.lower())) is not None:
                 return rounds
         return self.sop.limits.max_review_rounds
+
+    def scope_for(self, ticket: Ticket) -> tuple[str, ...] | None:
+        by_label = {k.lower(): v for k, v in self.label_scopes.items()}
+        for label in ticket.labels:
+            if (scope := by_label.get(label.lower())) is not None:
+                return scope
+        return None
 
     def skips_test(self, ticket: Ticket) -> bool:
         skip = {label.lower() for label in self.test_skip_labels}
@@ -350,6 +361,8 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         if not items:
             items = [WorkItem("W1", "Thực hiện kế hoạch", default_role)]
         work = [fix_item(feedback, default_role)] if feedback else items
+        if (scope := deps.scope_for(ticket)) is not None:
+            work = [clamp_owns(item, scope) for item in work]
         try:
             results = await coder.run_items(ticket, s.get("plan", ""), work, feedback)
         except BudgetExhausted as exc:

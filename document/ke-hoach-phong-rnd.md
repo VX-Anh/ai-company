@@ -1,6 +1,42 @@
 # Kế hoạch xây dựng Phòng R&D cho AI Company OS (`aico`)
 
-Ngày lập: 2026-11-10 (soạn bằng model Fable, Claude Code kiểm lại một số trích dẫn code). Căn cứ: code tại `ai-company` (commit `dec363d`), GUI `aico-office` (commit `4b714b2`), tài liệu tầm nhìn `Tai_Lieu_Kien_Truc_AI_Company.pdf` Phần 2–3. Trạng thái: **bản nháp, chờ owner chốt mục 10**. Chưa chạy thử gì. Đã rà lại ngày 2026-11-10: đối chiếu các trích dẫn code, bổ sung chỗ thiếu, bỏ chỗ lặp.
+Ngày lập: 2026-11-10 (soạn bằng model Fable, Claude Code kiểm lại một số trích dẫn code). Căn cứ: code tại `ai-company` (commit `dec363d`), GUI `aico-office` (commit `4b714b2`), tài liệu tầm nhìn `Tai_Lieu_Kien_Truc_AI_Company.pdf` Phần 2–3.
+
+**Trạng thái (2026-11-12):** GĐ1 đã chạy thật (2 ticket research, PR aico-knowledge#1, #2). Owner đã chốt lại **mục đích** và duyệt **lộ trình mới R0–R4** ở mục "Định hướng 2026-11-12" ngay dưới đây; lộ trình GĐ2–GĐ5 cũ ở mục 7 chỉ còn giá trị tham khảo, phần nào giữ, thu nhỏ hay cắt ghi trong bảng "Xử lý kế hoạch cũ".
+
+## Định hướng 2026-11-12: mục đích và lộ trình R0–R4
+
+**Mục đích của Phòng R&D** (owner chốt):
+1. **Tự cải tiến chính hệ agent aico**: prompt, vai trò, SOP, cách xếp việc giữa phòng Claude/Codex/Cursor, chất lượng review/test, các lỗi lặp (escalate, review lặp, agent treo, hạn mức). Đầu vào gồm cả **dò công nghệ mới, repo GitHub mới, xu hướng** (bản phát hành Claude Code/Codex/Cursor, MCP server, LangGraph, coding agent, kỹ thuật prompt và eval).
+2. **Phát triển dự án code mới**: ý tưởng → spike → đánh giá → bản ghi quyết định → ticket sản phẩm cho luồng coder.
+
+Thẻ tri thức chỉ là phương tiện. Mỗi đầu ra R&D phải dẫn tới một quyết định có số đo.
+
+**Nguyên tắc an toàn (không đổi):** agent không tự áp prompt, quyền hay deploy, kể cả khi A/B thắng; thay đổi `company/` chỉ qua PR + owner duyệt + deploy tay; R&D không đụng `company/policies/`, `tool_levels`, `max_risk`, `constraints`, `guard.py`; không chạy code repo lạ tự động; không proxy token subscription.
+
+| Giai đoạn | Nội dung | Trạng thái |
+| --- | --- | --- |
+| **R0 · Nền đo** | Event `job` cho mỗi lần giao việc (vai trò, phòng, `prompt_sha`, token, thời gian, kết quả, có chèn `<knowledge>`); `aico.rnd.metrics` + `GET /rnd/metrics` + `aico-ops metrics`; bịt lỗ quyền (phạm vi `cards/` ở mọi vòng, `research = low` chỉ ở kho tri thức, `security` đứng đầu, bỏ `PLAN_RULE` cho Fact Checker); gộp lõi GĐ2 (chỉ mục, tool knowledge) và sửa lỗi chèn nhầm | Code xong trên nhánh `rnd-r0` (chờ owner merge + deploy) |
+| **R0b · Dò công nghệ thủ công** | Ticket `research` theo yêu cầu: "Claude Code, Codex, Cursor, MCP có gì mới đáng áp cho aico"; kết quả thành giả thuyết | Làm được ngay bằng luồng GĐ1 |
+| **R1 · Bộ chuẩn + chạy lại** (thiết kế: [rnd/thiet-ke-chay-lai.md](rnd/thiet-ke-chay-lai.md)) | 10–15 ticket đã xong + 5 ticket tổng hợp làm bộ chuẩn (`eval/tickets/` trong ai-company); phân loại lỗi; `aico eval run --company <biến thể>` chạy trên nhánh `eval/*`, không mở PR, không merge; tập kiểm giữ riêng; trần hạn mức theo tuần | Nền xong trên `rnd-r0` (`/rnd/bench`, mốc commit của MR); cơ chế chạy lại chờ owner duyệt thiết kế |
+| **R2 · Tự cải tiến có cổng + dò định kỳ** (thiết kế: [rnd/thiet-ke-tu-cai-tien-va-uom-du-an.md](rnd/thiet-ke-tu-cai-tien-va-uom-du-an.md)) | Nhãn `selfimprove`, vai trò `experimenter` + `evaluator` (khác provider); chỉ sửa `company/prompts`, `company/roles` qua PR (CI chặn đường dẫn khác); canary sau deploy, xấu thì báo kèm lệnh revert. `company/rnd/watchlist.yaml` (owner duyệt), scout dò khi rảnh qua `fetch_url` có audit, chấm điểm (liên quan / có số đo / chi phí thử), báo cáo xu hướng hằng tuần; mục điểm cao thành giả thuyết thí nghiệm | Đã có trên `rnd-r0`: `aico check-selfimprove` + job CI cho nhánh `rnd/*`; `mcp-research` (`fetch_url`, `verify_quote`, `github_releases`, `github_search_repos`); `watchlist.yaml` + `aico-ops scan` (dò tay). bộ lập lịch dò (`AICO_RND_SCAN_INTERVAL_DAYS`, mặc định tắt). Còn: nhãn `selfimprove`, `experimenter`/`evaluator`, canary |
+| **R3 · Ươm dự án** (thiết kế cùng file R2) | Nhãn `spike`, repo chung `VX-Anh/aico-lab` (mỗi spike một thư mục); kế hoạch có tiêu chí đo được và trần thời gian; chạy và chụp trên máy build; bản ghi quyết định (ADR); owner duyệt mới tạo ticket sản phẩm mang `origin_spike` | Chưa |
+| **R4 · Theo số liệu** | Model cục bộ trên 4090 (kiểm GPU với Docker rootless), chạy eval ban đêm | Chưa |
+
+**Xử lý kế hoạch cũ:**
+
+| Phần | Quyết định |
+| --- | --- |
+| GĐ2 2.1–2.5, 2.8 (chỉ mục, `search_knowledge`/`get_knowledge`, chèn `<knowledge>`) | Giữ, đã gộp vào `rnd-r0`; đóng băng. Thí nghiệm đầu tiên: chèn tri thức có giảm vòng review không (event `job` có cờ `knowledge`) |
+| GĐ2 2.6 `mcp-research` | Thu nhỏ: `fetch_url` + `verify_quote`, thêm đọc GitHub release/changelog/trending (chỉ đọc, qua audit). Là nền của scout ở R2 |
+| GĐ2 2.7 đồ thị dự kiến theo ticket | Cắt; giữ `verify_quote` |
+| GĐ3 bộ lập lịch, sổ `rnd_runs`, điều kiện rảnh | Giữ logic, đổi nội dung: chạy scout + eval khi rảnh (R2/R4) |
+| GĐ3 scout + watchlist | Giữ nhưng gắn mục tiêu cải tiến aico và dự án mới (R2), không thu thập chung chung |
+| GĐ3 tab "Tri thức", `/knowledge/queue`, `/knowledge/report` | Cắt; thay bằng `/rnd/metrics` + báo cáo xu hướng tuần |
+| GĐ4 knowledge_architect, kn_overrides, bảo trì tuần | Cắt cho tới khi có vài trăm thẻ |
+| GĐ5 embedding, DB đồ thị | Cắt; SOP riêng cho `spike`/`selfimprove` có thể cần sớm ở R3 |
+
+**Chỉ số của phòng:** tỷ lệ đạt ngay vòng đầu, vòng review trung bình, tỷ lệ owner trả lại, token mỗi ticket (theo tháng); số thí nghiệm và tỷ lệ `confirmed`/`refuted` (tỷ lệ âm bằng 0 là đáng ngờ); số thay đổi giữ được sau canary; số spike có quyết định trong trần thời gian; hạn mức R&D tiêu mỗi tuần.
 
 ## 0. Tóm tắt quyết định
 
@@ -522,3 +558,23 @@ Chỉ gồm những câu kế hoạch chưa tự quyết được; các quyết 
 - 1.1 dựng sẵn tại `D:\TVPL\Marshy\aico-knowledge` (chưa có trên GitHub): README, AGENTS (chuẩn thẻ + mẫu), 15 thẻ gốc (`role/*` slug nối `-`, ví dụ `role/tech-lead`; `metric/*`), `scripts/check_cards.py`, workflow `cards.yml`, `INDEX.md`. Không có thẻ mẫu thật: thẻ có nguồn phải do luồng nghiên cứu tạo, không bịa nguồn.
 - Còn: tạo repo GitHub và push (1.1), cấp quyền token và `GITLAB_PROJECTS` (1.2), deploy và chạy ticket thật (1.10). 1.9 (màu áo) cần thêm công thức phụ kiện pixel `art/characters/acc/<role>.pixel.json` nên chuyển thành ticket aico cho aico-office. Sơ đồ tổ chức `document/so-do/so-do-to-chuc.html` vẫn là sơ đồ thiết kế cũ (dựng bằng archify từ `nguon/`), chưa cập nhật.
 - 2026-11-10: ticket nghiên cứu thật đầu tiên T-2320e505 (prompt caching) tạo 2 thẻ, escalated sau 3 vòng Fact Checker vì một câu khái quát sai; sửa tay rồi merge qua escalation (PR aico-knowledge#1). Sau đó: lệnh kiểm thẻ đổi sang `python3`; ticket `research` được tối đa 5 vòng review (`Deps.label_review_rounds`, `RESEARCH_REVIEW_ROUNDS`), ticket khác giữ 3.
+
+**2026-11-12, GĐ2 đợt 1 (nhánh `rnd-gd2`):** xong 2.1–2.5 và 2.8; còn 2.6–2.7 (`mcp-research`) và bộ câu hỏi chuẩn recall@5.
+- 2.1 `0002_knowledge.sql`: `kn_nodes`, `kn_edges`, `kn_sources`, `kn_usage`, thêm `kn_builds` (commit đã dựng). Lệch kế hoạch: không dùng `pg_trgm` (pgserver không có), không có khoá ngoại `ticket_id`/`approval_id` (chỉ mục dựng từ `main` không biết ticket nào tạo thẻ).
+- 2.2 `src/aico/rnd/cards.py`: đọc thẻ từ archive, thẻ lỗi bỏ qua kèm lý do.
+- 2.3 `store.py` + `librarian.py`: vai trò hệ thống `librarian` (chỉ `branch_head`, `download_archive` trên kho tri thức) kiểm `main` mỗi `AICO_KNOWLEDGE_WATCH_SECONDS` (60 giây) và dựng lại trong một transaction khi commit đổi, nên bắt cả merge tay. Tắt bằng `AICO_KNOWLEDGE_PROJECT=` rỗng.
+- 2.4 MCP `knowledge` trong tiến trình: `search_knowledge`, `get_knowledge` (L0), cấp cho tech_lead, ba, coder, reviewer, tester, research_lead, researcher, fact_checker. Đổi tên từ `search`/`get` vì bridge gộp tool mọi server vào một danh sách phẳng. Gọi qua guard và audit_log; `kn_usage` hiện chỉ ghi lần chèn (`inject`), lần gọi tool xem trong audit_log.
+- 2.5 Khối `<knowledge>` nối cuối lời giao việc trong `CliAgentRunner.run_job` cho tech_lead, ba, coder, reviewer, tester: tối đa 5 thẻ, 6.000 ký tự, bỏ thẻ gốc `role/*`, `metric/*`. Chỉ chèn khi ít nhất 2 từ khoá của tiêu đề, nhãn, repo khớp id/tiêu đề/tag/tóm tắt thẻ. Từ khoá có dấu phải khớp đúng dấu ('nổi' không khớp 'nối'), từ dưới 5 ký tự phải khớp nguyên từ. Thử với 18 thẻ thật: ticket về cache, MCP nhận đúng thẻ; ticket UI S23, BOARD_JUNK không bị chèn.
+- 2.8 `GET /knowledge/nodes[?q=]`, `GET /knowledge/nodes/{id}`.
+- `ToolGateway.tools_for` bỏ qua server chưa cấu hình hoặc lỗi (ghi log) thay vì làm hỏng toàn bộ danh sách tool của vai trò.
+- Kiểm: pytest 203 pass (13 test mới trong `tests/test_knowledge.py`), ruff, pyright, `aico check-config` sạch.
+
+**2026-11-12, R0 (nhánh `rnd-r0`, worktree `D:\TVPL\Marshy\aico-r0`, chưa merge `main`, chưa deploy):**
+- Gộp `rnd-gd2` (GĐ2 đợt 1: migration `0002_knowledge.sql`, `aico.rnd` cards/store/librarian/mcp, tool `search_knowledge`/`get_knowledge`, khối `<knowledge>`). Librarian dùng chung tool `gitlab.branch_head` với SiteWatcher.
+- Sửa: khối `<knowledge>` bỏ từ "aico" khỏi truy vấn (khớp gần như mọi thẻ); `gateway.tools_for` chỉ bỏ qua server chưa cấu hình.
+- Event `job` (`CliAgentRunner(on_job=...)`, `TicketStore.record`), worker trả kèm `tokens`; `aico.rnd.metrics`, `GET /rnd/metrics?days=`, `aico-ops metrics [ngày]`.
+- Rào chắn: `Deps.label_scopes` + `clamp_owns` (ticket research chỉ sửa `cards/` ở mọi vòng); `RiskRule.projects` (`research = low` chỉ ở `VX-Anh/aico-knowledge`), luật nhãn `security/data/infra` đứng đầu; `CliReviewer(plan_rule=None)` cho Fact Checker.
+- Còn cho owner: merge `rnd-r0` vào `main` và deploy (cần migration 0002, rebuild worker để có `tokens`); bật branch protection "required check `cards`" cho `VX-Anh/aico-knowledge` (cài đặt GitHub, agent không tự đổi).
+- Thêm cùng đêm (cùng nhánh): `aico.rnd.bench` + `/rnd/bench` (MR trả `base_sha`/`head_sha`/`merge_commit_sha`); `mcp_servers/research` (`fetch_url` ghim IP đã kiểm, chặn địa chỉ nội bộ kể cả qua chuyển hướng/NAT64; `verify_quote` đọc toàn văn; `github_releases`, `github_search_repos`), mạng Docker `research`; `company/rnd/watchlist.yaml` + `/rnd/scan-ticket` + `aico-ops scan`; `aico.rnd.scheduler` (`AICO_RND_SCAN_INTERVAL_DAYS`, mặc định 0); `aico check-selfimprove` + workflow `selfimprove.yml` (`pull_request_target`, chạy code của nhánh đích); retro nhận `<metrics>`; `/rnd/metrics` có lớp lỗi job và so sánh có/không chèn tri thức. Một vòng review độc lập (Fable) đã chạy; các lỗi cao/vừa đã sửa. 250 test, ruff, pyright sạch.
+- Ticket thật: T-ca63c2d6 (dò Claude Code/Codex/Cursor, eval, review tự động) → PR aico-knowledge#4, 5 thẻ, chờ owner duyệt merge; T-8391da15 (LangGraph + điều phối nhiều agent) tạo sau. PR aico-knowledge#3 (cổng kiểm thẻ chặt hơn) chờ merge.
+- Đã biết, chưa sửa: `base_sha` của PR GitHub là đầu nhánh đích lúc mở PR, chưa chắc là merge-base (R1 nên lấy merge-base qua compare API); DNS rebinding đã chặn bằng ghim IP đã kiểm; mạng `research` không `internal` (cần ra Internet), muốn thêm một lớp nữa thì cho ra ngoài qua egress proxy chặn dải IP riêng.

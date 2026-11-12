@@ -6,6 +6,7 @@ import contextlib
 import logging
 from collections.abc import AsyncIterator
 from dataclasses import dataclass
+from datetime import timedelta
 from typing import Any
 
 import httpx
@@ -16,6 +17,7 @@ from psycopg_pool import AsyncConnectionPool
 from starlette.applications import Starlette
 
 from aico.agents import (
+    CARDS_DIR,
     DOCS_LABEL,
     DOCS_REVIEW_BRIEF,
     DOCS_ROLES,
@@ -44,7 +46,7 @@ from aico.agents import (
     SiteWatcher,
 )
 from aico.api import ApiDeps
-from aico.core import Ticket
+from aico.core import Ticket, utcnow
 from aico.db import create_pool
 from aico.governance import PostgresApprovalStore, PostgresAuditLog
 from aico.intake import GitLabIssuePoller
@@ -65,6 +67,10 @@ from aico.orchestrator import (
 from aico.orchestrator.escalation import merge_escalated, retry_push
 from aico.orchestrator.ports import Analyst, Coder, Planner, Reviewer
 from aico.registry import Company, load_company
+from aico.rnd import KNOWLEDGE_ROLES, KnowledgeStore, Librarian, build_knowledge_server
+from aico.rnd.bench import candidates as bench_candidates
+from aico.rnd.scheduler import ScanPolicy, ScanScheduler
+from aico.rnd.scout import load_watchlist, scan_ticket
 from aico.settings import Settings
 from aico.tickets.postgres import PostgresTicketStore
 from aico.tools import Guard, McpToolClient, ToolGateway, read_whole_file
@@ -84,6 +90,10 @@ class Container:
     jira_sync: JiraSync | None
     # Dựng lại bản chính khi main của repo xem trước đổi (cả merge ngoài aico); None khi tắt.
     site_watcher: SiteWatcher | None
+    # Tạo ticket dò công nghệ định kỳ khi rảnh (Phòng R&D); None khi tắt (mặc định).
+    scan_scheduler: ScanScheduler | None
+    # Dựng lại chỉ mục tri thức khi main của kho tri thức đổi; None khi tắt.
+    librarian: Librarian | None
     api: ApiDeps
     relay_app: FastAPI
     bridge_app: Starlette
@@ -115,6 +125,9 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
     try:
         tickets = PostgresTicketStore(pool)
         approvals = PostgresApprovalStore(pool)
+        # Kho tri thức (Phòng R&D GĐ2): tool knowledge chạy trong tiến trình, vẫn qua guard/audit.
+        knowledge_on = bool(settings.knowledge_project) and "librarian" in company.roles
+        knowledge = KnowledgeStore(pool) if knowledge_on else None
         gateway = ToolGateway(
             company,
             Guard(company.policy, approvals),
@@ -122,8 +135,15 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 {"gitlab": settings.mcp_gitlab_url}
                 | ({"pixel": settings.mcp_pixel_url} if settings.mcp_pixel_url else {})
                 | ({"rea": settings.mcp_rea_url} if settings.mcp_rea_url else {})
+                | ({"research": settings.mcp_research_url} if settings.mcp_research_url else {})
+                | ({"knowledge": build_knowledge_server(knowledge)} if knowledge else {})
             ),
             PostgresAuditLog(pool),
+        )
+        librarian = (
+            Librarian(knowledge, gateway, settings.knowledge_project)
+            if knowledge is not None and settings.knowledge_project
+            else None
         )
         tokens = TaskTokens()
         relay_app = create_relay_app(
@@ -162,6 +182,11 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                     usage_tight_percent=settings.usage_tight_percent,
                     slow_workers=settings.slow_workers,
                     http_client=worker_client,
+                    knowledge=knowledge.prompt_block if knowledge is not None else None,
+                    knowledge_roles=KNOWLEDGE_ROLES,
+                ),
+                on_job=lambda ticket_id, data: tickets.record(
+                    ticket_id, "job", actor=str(data.get("role") or "aico"), data=data
                 ),
             )
         if settings.planner == "cli" and cli_agents is not None:
@@ -243,6 +268,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                     role_id="fact_checker",
                     brief=RESEARCH_REVIEW_BRIEF,
                     label="kiểm chứng",
+                    plan_rule=None,
                 )
                 reviewer = LabelReviewer(reviewer, {RESEARCH_LABEL: fact_checker})
         # Tester đi cùng Reviewer thật: không có Reviewer CLI thì không có gì để kiểm thử.
@@ -282,6 +308,7 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             label_item_roles=label_item_roles,
             test_skip_labels=(DOCS_LABEL, RESEARCH_LABEL),
             label_review_rounds={RESEARCH_LABEL: RESEARCH_REVIEW_ROUNDS} if research_on else {},
+            label_scopes={RESEARCH_LABEL: (CARDS_DIR,)} if research_on else {},
         )
 
         async def preview_ticket(ticket_id: str, site: bool) -> dict[str, Any]:
@@ -364,6 +391,39 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 read_file=read_repo_file,
                 intake_label=settings.intake_label,
             )
+
+        async def read_mr(project: str, iid: int) -> dict[str, Any]:
+            return await gateway.call(
+                sop.steps["review"],
+                "gitlab",
+                "get_merge_request",
+                {"project": project, "mr_iid": iid},
+                ticket_id=None,
+            )
+
+        def scan(days: int) -> dict[str, Any]:
+            assert settings.knowledge_project
+            watchlist = load_watchlist(settings.company_dir / "rnd" / "watchlist.yaml")
+            return scan_ticket(
+                watchlist, today=utcnow().date(), days=days, project=settings.knowledge_project
+            )
+
+        scan_scheduler: ScanScheduler | None = None
+        if settings.rnd_scan_interval_days > 0 and settings.knowledge_project:
+            if cli_agents is None:
+                log.warning("bỏ dò công nghệ tự động: cần worker CLI để đọc hạn mức các phòng")
+            else:
+                scan_scheduler = ScanScheduler(
+                    tickets,
+                    scan,
+                    cli_agents.statuses,
+                    ScanPolicy(interval_days=settings.rnd_scan_interval_days),
+                    utcnow,
+                )
+
+        async def bench(days: int) -> list[dict[str, Any]]:
+            return await bench_candidates(tickets, read_mr, since=utcnow() - timedelta(days=days))
+
         yield Container(
             settings=settings,
             company=company,
@@ -372,6 +432,8 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
             poller=poller,
             jira_sync=jira_sync,
             site_watcher=site_watcher,
+            scan_scheduler=scan_scheduler,
+            librarian=librarian,
             api=ApiDeps(
                 tickets=tickets,
                 approvals=approvals,
@@ -384,6 +446,9 @@ async def build_container(settings: Settings) -> AsyncIterator[Container]:
                 merge_escalated=merge_escalated_ticket,
                 retry_push=retry_push_ticket,
                 preview=preview_ticket if previewer is not None else None,
+                bench=bench,
+                scan_ticket=scan if settings.knowledge_project else None,
+                knowledge=knowledge,
             ),
             relay_app=relay_app,
             bridge_app=bridge_app,

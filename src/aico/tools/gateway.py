@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Any, Protocol
@@ -16,6 +17,11 @@ from aico.core import ActionLevel
 from aico.governance import AuditEntry, AuditLog, mask_secrets
 from aico.registry import Company
 from aico.tools.guard import Guard, Verdict
+
+log = logging.getLogger(__name__)
+
+# Server mà lỗi khi liệt kê tool thì dừng việc thay vì bỏ qua (xem ToolGateway.tools_for).
+ESSENTIAL_SERVERS = frozenset({"gitlab"})
 
 IMAGES_KEY = "_images"  # [{mime_type, data(base64)}] trong kết quả tool
 
@@ -139,7 +145,17 @@ class ToolGateway:
         specs: list[ToolSpec] = []
         for grant in role.tools:
             allowed = set(grant.allow)
-            for spec in await self._client.list_tools(grant.server):
+            try:
+                listed = await self._client.list_tools(grant.server)
+            except Exception as exc:
+                # Server Git là thiết yếu: lỗi thì báo lên, không để agent lặng lẽ mất tool Git mà
+                # vẫn chạy tiếp. Server phụ (knowledge, research, pixel, rea) chưa cấu hình hoặc
+                # đang lỗi thì vai trò chạy tiếp với các tool còn lại.
+                if grant.server in ESSENTIAL_SERVERS:
+                    raise
+                log.warning("bỏ qua tool của server '%s': %s", grant.server, exc)
+                continue
+            for spec in listed:
                 level = self._company.policy.level_of(grant.server, spec.name)
                 if spec.name in allowed and level is not None and level.rank < ActionLevel.L3.rank:
                     specs.append(spec)

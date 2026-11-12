@@ -63,6 +63,8 @@ RESEARCH_REVIEW_BRIEF = (
     "xác nhận trích dẫn có thật trên trang, đúng ngữ cảnh; mỗi ý ở mục Cách làm tốt nhất được "
     "nguồn đã dẫn hỗ trợ, không suy diễn quá nguồn; phần suy luận ghi rõ là suy luận; không trùng "
     f"thẻ đã có trong {INDEX_FILE}; quan hệ hợp lý.",
+    "Nếu có tool verify_quote(url, quote) thì gọi cho từng nguồn và ghi kết quả found vào nhận "
+    "xét (máy kiểm, không phụ thuộc trí nhớ); found=false thì mở trang đọc lại trước khi kết luận.",
     "Chỉ kết luận CẦN SỬA khi: kiểm thẻ không OK, trích dẫn không tìm thấy hoặc sai ngữ cảnh, ý "
     "không có nguồn mà không ghi suy luận, thẻ trùng, hoặc nguồn chỉ là bài tổng hợp lại khi có "
     "nguồn gốc. Nêu rõ thẻ, nguồn (Sx) và chỗ sai. Góp ý văn phong không phải lý do CẦN SỬA.",

@@ -111,6 +111,9 @@ class RiskRule(_Spec):
     risk: Literal["low", "medium", "high"]
     labels: tuple[str, ...] = ()
     keywords: tuple[str, ...] = ()
+    # Chỉ áp cho ticket của các repo này (rỗng: mọi repo). Vd `research = low` chỉ đúng ở kho tri
+    # thức: ở repo khác nhãn đó không được dùng để bỏ bước duyệt kế hoạch.
+    projects: tuple[str, ...] = ()
 
 
 class PolicySpec(_Spec):

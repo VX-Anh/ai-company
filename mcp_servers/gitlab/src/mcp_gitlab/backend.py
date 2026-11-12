@@ -194,7 +194,13 @@ class FakeGitLabBackend:
 
     async def archive(self, project: str, ref: str) -> bytes:
         self.calls.append("archive")
-        files = self.project(project).files.get(ref)
+        p = self.project(project)
+        files = p.files.get(ref)
+        if files is None:  # ref là sha: lấy branch có commit đó (bản giả không giữ lịch sử file)
+            branch = next(
+                (b for b, cs in p.commits.items() if any(c["id"] == ref for c in cs)), None
+            )
+            files = p.files.get(branch) if branch is not None else None
         if files is None:
             raise GitLabError(f"không có ref {ref}", 404)
         buf = io.BytesIO()

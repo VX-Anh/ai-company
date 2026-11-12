@@ -32,6 +32,8 @@ class Settings:
     mcp_gitlab_url: str = "http://127.0.0.1:8101/mcp"
     mcp_pixel_url: str | None = None  # Pixelbolt (pixel art); không đặt thì không có tool pixel
     mcp_rea_url: str | None = None  # REA (phân tích ngược); không đặt thì không có tool rea
+    # Nghiên cứu (fetch_url, verify_quote, GitHub): không đặt thì không có tool research
+    mcp_research_url: str | None = None
     upstream_llm_url: str = "http://127.0.0.1:20128/v1"
     upstream_llm_key: str | None = None
     api_host: str = "127.0.0.1"
@@ -65,6 +67,12 @@ class Settings:
     preview_projects: tuple[str, ...] = ()
     # Chu kỳ (giây) kiểm tra branch đích của preview_projects để dựng lại bản chính; 0 là tắt.
     site_watch_seconds: float = 60
+    # Dò công nghệ tự động (Phòng R&D): mỗi N ngày, khi hệ rảnh và hạn mức còn thấp; 0 là tắt.
+    rnd_scan_interval_days: int = 0
+    # Kho tri thức Phòng R&D: librarian dựng chỉ mục từ main mỗi knowledge_watch_seconds; agent
+    # có tool knowledge.search/get và khối <knowledge> trong prompt. Rỗng là tắt.
+    knowledge_project: str | None = "VX-Anh/aico-knowledge"
+    knowledge_watch_seconds: float = 60
     # Đồng bộ ticket sang Jira (một chiều). Bật khi đủ URL, email, token và ánh xạ
     # repo -> project Jira (`VX-Anh/linh-hoa-vien=LHV`). Ticket cập nhật trước jira_since bỏ qua.
     jira_url: str | None = None
@@ -89,6 +97,7 @@ class Settings:
             mcp_gitlab_url=env.get("AICO_MCP_GITLAB_URL", cls.mcp_gitlab_url),
             mcp_pixel_url=env.get("AICO_MCP_PIXEL_URL") or None,
             mcp_rea_url=env.get("AICO_MCP_REA_URL") or None,
+            mcp_research_url=env.get("AICO_MCP_RESEARCH_URL") or None,
             upstream_llm_url=env.get("AICO_UPSTREAM_LLM_URL", cls.upstream_llm_url),
             upstream_llm_key=_secret("AICO_UPSTREAM_LLM_KEY_FILE"),
             api_host=env.get("AICO_API_HOST", cls.api_host),
@@ -120,6 +129,12 @@ class Settings:
             remote_url=env.get("AICO_REMOTE_URL") or None,
             preview_projects=_list("AICO_PREVIEW_PROJECTS"),
             site_watch_seconds=float(env.get("AICO_SITE_WATCH_SECONDS", cls.site_watch_seconds)),
+            rnd_scan_interval_days=int(env.get("AICO_RND_SCAN_INTERVAL_DAYS", "0") or 0),
+            knowledge_project=env.get("AICO_KNOWLEDGE_PROJECT", cls.knowledge_project or "")
+            or None,
+            knowledge_watch_seconds=float(
+                env.get("AICO_KNOWLEDGE_WATCH_SECONDS", cls.knowledge_watch_seconds)
+            ),
             jira_url=env.get("AICO_JIRA_URL") or None,
             jira_email=env.get("AICO_JIRA_EMAIL") or None,
             jira_token=_secret("AICO_JIRA_TOKEN_FILE"),

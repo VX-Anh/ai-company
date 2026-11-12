@@ -11,6 +11,7 @@ import httpx
 import yaml
 
 from aico.agents import (
+    CARDS_DIR,
     RESEARCH_LABEL,
     RESEARCH_REVIEW_BRIEF,
     RESEARCH_REVIEW_ROUNDS,
@@ -32,6 +33,7 @@ from aico.orchestrator import (
     RuleTriage,
     ScriptedReviewer,
 )
+from aico.orchestrator.workplan import ALL_FILES, WorkItem, clamp_owns
 from aico.registry import Company, load_company
 from harness import PROJECT, make_harness
 from test_ba_tester_flow import FakeAnalyst
@@ -63,8 +65,16 @@ def _company(company_copy: Path) -> Company:
     for role in ("research_lead", "fact_checker"):
         path = company_copy / "roles" / f"{role}.yaml"
         data = yaml.safe_load(path.read_text(encoding="utf-8"))
-        data["tools"][0]["constraints"]["repos"].append(PROJECT)
+        grant = next(t for t in data["tools"] if t["server"] == "gitlab")
+        grant["constraints"]["repos"].append(PROJECT)
         path.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
+    # Luật research = low chỉ áp cho kho tri thức: thêm repo giả vào luật đó.
+    policy = company_copy / "policies" / "default.yaml"
+    data = yaml.safe_load(policy.read_text(encoding="utf-8"))
+    for rule in data["risk_rules"]:
+        if "research" in rule.get("labels", []):
+            rule["projects"].append(PROJECT)
+    policy.write_text(yaml.safe_dump(data, allow_unicode=True), encoding="utf-8")
     return load_company(company_copy)
 
 
@@ -115,7 +125,7 @@ async def test_research_ticket_skips_plan_approval_ba_tester_and_uses_fact_check
             CliReviewer(runner, gw),
             {
                 RESEARCH_LABEL: CliReviewer(
-                    runner, gw, role_id="fact_checker", brief=RESEARCH_REVIEW_BRIEF
+                    runner, gw, role_id="fact_checker", brief=RESEARCH_REVIEW_BRIEF, plan_rule=None
                 )
             },
         ),
@@ -123,6 +133,7 @@ async def test_research_ticket_skips_plan_approval_ba_tester_and_uses_fact_check
         tester=tester,
         label_item_roles={RESEARCH_LABEL: RESEARCH_ROLES},
         test_skip_labels=(RESEARCH_LABEL,),
+        label_scopes={RESEARCH_LABEL: (CARDS_DIR,)},
     )
     h.gitlab.project(PROJECT).files["main"]["INDEX.md"] = "# Mục lục\n"
     await h.new_ticket(labels=[RESEARCH_LABEL], body="Prompt caching dùng thế nào cho agent?")
@@ -144,8 +155,12 @@ async def test_research_ticket_skips_plan_approval_ba_tester_and_uses_fact_check
     assert [j["role"] for j in reviews] == ["fact_checker", "fact_checker"]
     assert reviews[0]["worker"] == "codex"  # ngược thứ tự với researcher (claude trước)
     assert "kiểm chứng nội dung, không chấm code" in reviews[0]["prompt"]
-    # Vòng sửa sau Fact Checker do researcher làm, kèm góp ý.
+    # Ticket research không có bước người duyệt kế hoạch: không nói "kế hoạch đã được người duyệt".
+    assert "kế hoạch đã được người duyệt" not in reviews[0]["prompt"]
+    # Vòng sửa sau Fact Checker do researcher làm, kèm góp ý, và vẫn chỉ được sửa trong cards/
+    # (vòng sửa mặc định cho sửa mọi file).
     assert "S1 không có trích dẫn" in items[-1]["prompt"]
+    assert f"CHỈ được sửa/tạo các file khớp: {CARDS_DIR}." in items[-1]["prompt"]
     files = h.gitlab.project(PROJECT).files["ai/T-1"]
     assert FILES["W1"] in files and FILES["W2"] in files
     # Kế hoạch có khối mermaid nhưng không được ghi thành docs/architecture.md của kho.
@@ -179,8 +194,17 @@ def test_strip_mermaid_removes_only_mermaid_blocks() -> None:
 
 async def test_research_label_is_low_risk_even_with_other_labels(company: Company) -> None:
     triage = RuleTriage(company.policy, "rnd")
-    result = await triage.triage(Ticket(id="T-1", title="Tìm hiểu migration", labels=["research"]))
-    assert result.risk is TicketRisk.LOW
+    kb = "VX-Anh/aico-knowledge"
+    t = Ticket(id="T-1", title="Tìm hiểu migration", labels=["research"], project=kb)
+    assert (await triage.triage(t)).risk is TicketRisk.LOW
+    # Ở repo khác, research không bỏ được bước duyệt kế hoạch.
+    other = t.model_copy(update={"project": PROJECT})
+    assert (await triage.triage(other)).risk is TicketRisk.HIGH  # rơi xuống luật từ khoá migration
+    plain = Ticket(id="T-2", title="Tìm hiểu prompt", labels=["research"], project=PROJECT)
+    assert (await triage.triage(plain)).risk is TicketRisk.MEDIUM
+    # Nhãn security thắng research.
+    sec = t.model_copy(update={"labels": ["research", "security"]})
+    assert (await triage.triage(sec)).risk is TicketRisk.HIGH
 
 
 def test_rnd_department_config(company: Company) -> None:
@@ -202,7 +226,8 @@ async def test_research_gets_more_review_rounds_than_code_tickets(company: Compa
     rounds = {RESEARCH_LABEL: RESEARCH_REVIEW_ROUNDS}
     # Ticket research: 4 lần CẦN SỬA vẫn còn lượt, lần 5 đạt thì tới chờ duyệt merge.
     h = make_harness(company, reviewer=ScriptedReviewer(list(fails)), label_review_rounds=rounds)
-    await h.new_ticket(labels=[RESEARCH_LABEL])
+    # Repo giả của harness không phải kho tri thức: low-risk để bỏ duyệt kế hoạch như ở kho.
+    await h.new_ticket(labels=[RESEARCH_LABEL, "low-risk"])
     await h.runner.run_until_idle()
     assert (await h.tickets.get("T-1")).status is S.AWAITING_MERGE_APPROVAL
     # Ticket không có nhãn: vẫn theo giới hạn chung 3 vòng của SOP.
@@ -212,3 +237,13 @@ async def test_research_gets_more_review_rounds_than_code_tickets(company: Compa
     t = await h.tickets.get("T-1")
     assert t.status is S.ESCALATED
     assert company.sop("fix_ticket").limits.max_review_rounds == 3
+
+
+def test_clamp_owns_keeps_items_inside_scope() -> None:
+    scope = (CARDS_DIR,)
+    fix = WorkItem("FIX", "Sửa theo góp ý", "researcher", (ALL_FILES,))
+    assert clamp_owns(fix, scope).owns == scope
+    mixed = WorkItem("W1", "t", "researcher", ("cards/tool/x.md", "INDEX.md", ".github/a.yml"))
+    assert clamp_owns(mixed, scope).owns == ("cards/tool/x.md",)
+    outside = WorkItem("W2", "t", "researcher", ("scripts/check_cards.py",))
+    assert clamp_owns(outside, scope).owns == scope

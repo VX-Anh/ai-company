@@ -16,7 +16,8 @@ Cả ba phải sạch trước khi báo xong. Sửa hành vi thì thêm hoặc s
 ## Bản đồ
 
 ```text
-company/                cấu hình công ty: org, roles/*.yaml, prompts/*.md, sops/, policies/
+company/                cấu hình công ty: org, roles/*.yaml, prompts/*.md, sops/, policies/,
+                        rnd/watchlist.yaml (nguồn dò công nghệ của Phòng R&D)
 src/aico/core           model dữ liệu chung (Ticket, Event, spec của role/SOP)
 src/aico/registry       nạp + kiểm tra company/
 src/aico/tickets        ticket store Postgres, bảng chuyển trạng thái
@@ -31,10 +32,19 @@ src/aico/agents         cli_agent: giao việc cho worker (CliAgentRunner, CliCo
                         remote (bản xem trước MR trên máy build từ xa)
 src/aico/tools          guard, gateway (audit), bridge (MCP cho worker, token theo task)
 src/aico/governance     bản ghi duyệt, audit, kiểm tra duyệt merge
-src/aico/api            REST API cho người và GUI (/tickets, /workers)
+src/aico/api            REST API cho người và GUI (/tickets, /workers, /knowledge, /rnd)
+src/aico/rnd            Phòng R&D GĐ2: đọc thẻ tri thức (cards), chỉ mục Postgres kn_* (store),
+                        librarian dựng lại khi main của kho tri thức đổi, MCP knowledge trong tiến
+                        trình (search_knowledge, get_knowledge), khối <knowledge> cho prompt;
+                        metrics (chỉ số hiệu năng agent từ event, /rnd/metrics), bench (ứng viên
+                        bộ ticket chuẩn, /rnd/bench), scout + scheduler (ticket dò công nghệ từ
+                        watchlist, tự động mặc định tắt), guardrails (aico check-selfimprove: PR
+                        nhánh rnd/* chỉ sửa prompt và workers/limits)
 src/aico/jira           đồng bộ một chiều ticket -> Jira (issue, trạng thái, nhãn chờ người, link PR)
 src/aico/llm_relay      model relay (token theo task, ngân sách)
 mcp_servers/gitlab      MCP server Git (GitHub backend mặc định, MR = PR)
+mcp_servers/research    MCP nghiên cứu chỉ đọc: fetch_url (chặn địa chỉ nội bộ), verify_quote,
+                        github_releases, github_search_repos; mạng Docker riêng `research`
 deploy/                 compose.yaml, Dockerfile, worker/worker_server.py (phòng provider),
                         worker/activity.py (hoạt động agent đọc từ transcript CLI), mcp-pixel/,
                         docker/mcp-rea.Dockerfile (REA phân tích ngược tĩnh, file ở rea-targets/),
