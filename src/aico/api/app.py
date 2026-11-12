@@ -242,10 +242,12 @@ def create_api_app(deps: ApiDeps) -> FastAPI:
         days: Annotated[int, Query(ge=1, le=365)] = 90,
         first_pass_drop: Annotated[float, Query(gt=0, le=100)] = 15.0,
         review_increase: Annotated[float, Query(gt=0, le=10)] = 0.5,
+        non_done_increase: Annotated[float, Query(gt=0, le=100)] = 15.0,
         code_only: bool = True,
     ) -> dict[str, Any]:
-        """Canary (Phòng R&D): n ticket đầu chạy cấu hình `sha` (company_sha của job đầu tiên; bỏ
-        trống = cấu hình mới nhất) so với n ticket ngay trước. Chỉ đọc, không revert."""
+        """Canary (Phòng R&D): n ticket đầu (theo lúc bắt đầu) chạy trọn bằng cấu hình `sha` (bỏ
+        trống = cấu hình của job mới nhất) so với n ticket bắt đầu ngay trước; ticket vắt qua
+        lần deploy bị loại. Chỉ đọc, không revert."""
         from aico.rnd.canary import canary_report
 
         return await canary_report(
@@ -256,6 +258,7 @@ def create_api_app(deps: ApiDeps) -> FastAPI:
             days=days,
             first_pass_drop=first_pass_drop,
             review_increase=review_increase,
+            non_done_increase=non_done_increase,
             code_only=code_only,
         )
 
