@@ -580,3 +580,28 @@ Chỉ gồm những câu kế hoạch chưa tự quyết được; các quyết 
 - Đã biết, chưa sửa: `base_sha` của PR GitHub là đầu nhánh đích lúc mở PR, chưa chắc là merge-base (R1 nên lấy merge-base qua compare API); DNS rebinding đã chặn bằng ghim IP đã kiểm; mạng `research` không `internal` (cần ra Internet), muốn thêm một lớp nữa thì cho ra ngoài qua egress proxy chặn dải IP riêng.
 
 **2026-11-12, R1 (nhánh `rnd-r1`, tách từ `rnd-r0`, chưa merge):** ticket chạy lại = nhãn + artifact `eval`; nhánh `eval/<id>` từ commit gốc, MR vào `eval/base/<id>`, không bao giờ merge (4 lớp chặn); instance `aico-eval` (profile `eval`, `AICO_EVAL_VARIANT`, 1 ticket một lúc); `aico eval start|report`, `aico-ops eval-start|eval-report`. Review độc lập tìm 2 lỗ ranh giới (nhãn một mình thành ticket lai; approve vẫn merge được vào eval/base) và lỗi số đo (planner đọc main, đạt theo câu lý do); đã sửa, 261 test. aico-knowledge PR #6: mẫu `templates/experiment.md`, `templates/decision.md`.
+
+**2026-11-12, R1b (nhánh `rnd-r1b`, tách từ `main` e255dff, làm trên máy nhà, chưa merge, chưa deploy):**
+- **Bộ câu hỏi chuẩn recall@5 (việc còn lại của GĐ2):** `company/rnd/recall-questions.yaml`, 30 câu viết từ 11 thẻ nội dung thật của aico-knowledge (10 câu trên 3 thẻ đã ở `main` 024f578; 20 câu trên 8 thẻ còn ở nhánh `ai/T-ca63c2d6`, `ai/T-8391da15` chưa merge). `aico.rnd.recall` đo bằng đúng `KnowledgeStore.search` (lượt của tool `search_knowledge`) và `block_search` (lượt của khối `<knowledge>`, tách ra từ `prompt_block`). Câu mà thẻ mong đợi chưa có trong chỉ mục bị loại khỏi mẫu số và liệt kê riêng. Lệnh: `aico recall` (chỉ mục đang chạy), `aico recall --cards <checkout aico-knowledge>` (Postgres tạm bằng pgserver, không đụng chỉ mục thật), `aico-ops recall`; mã thoát 1 khi dưới 0,8. Lệch kế hoạch mục 8: bộ câu hỏi nằm trong ai-company (cạnh code được đo), không nằm ở `eval/questions.yaml` của kho tri thức.
+- **Số đo (máy nhà, pgserver, 2026-11-12):**
+
+  | Chỉ mục | Lượt | recall@5 | recall@3 | recall@1 |
+  | --- | --- | --- | --- | --- |
+  | `main` hiện tại (18 thẻ, đo 10/30 câu) | tool `search_knowledge` | 1,000 | 1,000 | 0,950 |
+  | `main` hiện tại | khối `<knowledge>` | 0,850 | 0,850 | 0,850 |
+  | `main` + 2 nhánh thẻ chưa merge (26 thẻ, 30/30 câu) | tool `search_knowledge` | 1,000 | 1,000 | 0,950 |
+  | `main` + 2 nhánh thẻ chưa merge | khối `<knowledge>` | 0,917 | 0,883 | 0,850 |
+
+  Đạt ngưỡng nghiệm thu GĐ2 (≥ 0,8). Cách đọc: kho mới có 11 thẻ nội dung nên recall@5 gần như chắc đạt, chưa nói được gì về lúc kho lớn; recall@1 và lượt `<knowledge>` phân biệt tốt hơn, nên đo lại mỗi khi kho thêm thẻ. Câu trượt ở lượt `<knowledge>`: `cache-gia` (không thẻ nào đủ 2 từ khoá ở phần đầu thẻ), `cache-breakpoint` (chỉ ra 1 trong 2 thẻ), `eval-pass-k`, và ở k=1 thêm `cursor-print`, `cache-miss`. Câu hỏi không phải tiêu đề ticket nên số của lượt `<knowledge>` chỉ để tham khảo. Chưa chỉnh tìm kiếm theo các câu trượt này.
+- **Sửa `base_sha` của PR GitHub:** `HttpGitHubBackend.get_mr` gọi compare `base...head` theo SHA và trả `merge_base_commit` (đúng cả sau merge và xoá nhánh nguồn). Compare lỗi thì `base_sha = None` (bench bỏ ứng viên) thay vì trả đầu nhánh đích. `find_open_mr`/`create_mr` không gọi compare nên không trả `base_sha`. `FakeGitLabBackend` trả `diff_refs.base_sha` là commit chung cuối của hai nhánh. Mỗi `get_merge_request` trên GitHub tốn thêm 1 lời gọi API.
+- Kiểm: pytest 273 pass (263 trên `main` + 10 test mới: 3 ở mcp-gitlab, 7 ở `tests/test_rnd_recall.py`), ruff, ruff format, pyright, `aico check-config` sạch. Chưa kiểm được trên máy nhà: `aico recall` và `aico-ops recall` trên chỉ mục thật của stack, compare API thật của GitHub (chỉ chạy với GitHub giả), `deploy/aico-ops.sh` (không có WSL stack).
+- Còn cho owner: merge `rnd-r1b` vào `main`, deploy (rebuild image `aico` và `mcp-gitlab`), rồi chạy `aico-ops recall` trên chỉ mục thật; bộ ứng viên `/rnd/bench` lấy trước bản sửa này nên lấy lại để có `base_sha` đúng.
+- **Đối chiếu thiết kế R2 với code (chưa implement, thiết kế chờ duyệt):**
+  - Đã có: `aico check-selfimprove` + workflow `selfimprove.yml`; cơ chế `label_scopes`/`clamp_owns`, `RiskRule.projects`, `test_skip_labels`, `label_briefs`; event `job` có `prompt_sha`; `/rnd/metrics`; `aico eval start|report` + instance `aico-eval` nhận `company/` biến thể qua `AICO_EVAL_COMPANY_DIR`; retro và scout đã viết đề xuất dạng giả thuyết; mẫu `templates/experiment.md` (aico-knowledge PR #6).
+  - Thiếu cho 2.0: required check `selfimprove-scope` trên `main` (cài đặt GitHub của owner).
+  - Thiếu cho 2.1: vai trò `experimenter`, `evaluator` (yaml + prompt); mcp-gitlab chỉ có một `GITLAB_BRANCH_PATTERN` chung (`ai/*,eval/*`) nên chưa cho `rnd/*` riêng repo ai-company; `VX-Anh/ai-company` chưa nằm trong `GITLAB_ALLOWED_PROJECTS`/token.
+  - Thiếu cho 2.2: `SelfImprovePlanner`, nhãn `selfimprove`, luật rủi ro `selfimprove = high` giới hạn `projects`.
+  - Lệch cần chốt ở 2.3: thiết kế ghi phạm vi `company/prompts/`, `company/roles/` nhưng `label_scopes` chỉ chặn theo thư mục, còn CI chặn tới từng khoá (`workers`, `limits`); lớp thứ hai vì thế lỏng hơn lớp CI.
+  - Thiếu cho bước đánh giá: thiết kế gọi `aico eval run`, code chỉ có `start`/`report`; chưa có bước tự dựng thư mục `company/` biến thể từ nhánh `rnd/<ticket>` và khởi động `aico-eval` với nó (hiện owner đặt `.env` tay); `report` chưa so baseline với biến thể thành một bảng, chưa ghi `document/rnd/experiments/NNNN-*.md`; chưa có bộ chuẩn đã chốt ở `eval/tickets/`.
+  - Thiếu cho 2.4: `company_sha` trong event `job`, `/rnd/metrics?since_company=`, ticket "đề xuất revert".
+  - Thiếu cho 2.5: migration `rnd_topics` (hiện chỉ có `0001`, `0002`) và đường đẩy giả thuyết từ retro/scout vào hàng đợi.
