@@ -42,6 +42,13 @@ deploy() {
         --exclude=./.ruff_cache --exclude=./.ssh --exclude=./.claude --exclude=./deploy/secrets \
         --exclude=./deploy/.env --exclude='__pycache__' -cf - .) | tar -xf - -C ~/ai-company
     cd "$STACK" || return 1
+    # Mốc deploy cho canary (event job ghi company_sha): sha commit của bản nguồn, thêm "d" khi có
+    # sửa chưa commit. Prompt nằm cả trong code, nên đổi code cũng mở đợt canary mới.
+    AICO_COMPANY_SHA="$(git -c safe.directory='*' -C "$SRC" rev-parse --short=11 HEAD 2>/dev/null)"
+    if [ -n "$AICO_COMPANY_SHA" ] && ! git -c safe.directory='*' -C "$SRC" diff --quiet HEAD 2>/dev/null; then
+        AICO_COMPANY_SHA="${AICO_COMPANY_SHA}d"
+    fi
+    export AICO_COMPANY_SHA
     docker compose up -d --build 2>&1 | grep -E 'Started|rror'
     # Cache build cũ làm ổ ảo WSL phình (từng lên 23 GB): chỉ giữ 3 ngày gần nhất.
     docker builder prune -f --filter until=72h >/dev/null
