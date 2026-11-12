@@ -22,6 +22,8 @@ aico-ops eval-start baseline 2 < suite.json
 # 4. Xem, rồi đóng các ticket đã chấm
 aico-ops eval-report baseline < suite.json
 aico-ops eval-report baseline --close
+# 5. Dọn nhánh ai/<id>, base/<id> của ticket đã đóng (xem trước bằng --dry-run)
+aico-ops eval-cleanup baseline
 ```
 
 Đã làm: nhãn + artifact `eval`, `workplan.ticket_refs` (nhánh `ai/<id>` từ commit gốc, MR vào
@@ -29,8 +31,8 @@ aico-ops eval-report baseline --close
 `AICO_EVAL_VARIANT`, bỏ duyệt kế hoạch và chặn merge trong code (không theo luật YAML),
 mcp-gitlab/guard nhiều mẫu nhánh và ref SHA, `aico eval start|report`, service `aico-eval`
 (profile `eval`), chỉ số chung không tính ticket eval. Chưa làm: chấm acceptance (build/test trên
-máy build) tự động; dọn branch `ai/<id>` và `base/<id>` sau khi chấm; trần hạn mức riêng cho eval (hiện chỉ dựa
-vào việc owner bật/tắt `aico-eval`).
+máy build) tự động; trần hạn mức riêng cho eval (hiện chỉ dựa vào việc owner bật/tắt
+`aico-eval`).
 
 Bổ sung trên nhánh `rnd-r1-gaps` (2026-11-12, chờ review + merge):
 - `base_sha` của bộ chuẩn là merge-base: tool L0 `gitlab.merge_base` (GitHub compare API,
@@ -39,6 +41,16 @@ Bổ sung trên nhánh `rnd-r1-gaps` (2026-11-12, chờ review + merge):
   nhánh). Khác nhau thì giữ giá trị cũ ở `pr_base_sha`; `base_sha_source` = `merge_base` | `pr`
   (`pr`: không đọc được merge-base, lý do ở `base_sha_note`). Thư mục biến thể chép từ
   `company/` cũ không cần quyền này (bench chạy ở aico chính).
+- Dọn nhánh: `aico eval cleanup --variant <biến thể> [--dry-run]` (`aico-ops eval-cleanup`). Với
+  ticket chạy lại đã đóng hẳn (escalated/failed/done, không còn quyết định chờ xử lý) gọi tool
+  L2 `gitlab.delete_branch_pair` bằng vai trò hệ thống `housekeeper` (vai trò duy nhất được cấp;
+  guard ép `ai/*` + repo, có audit kèm SHA trước khi xoá). Server chỉ nhận tên `ai/<id>`, suy ra
+  `base/<id>`, và chỉ xoá khi `base/<id>` tồn tại: nhánh `ai/*` của ticket thường, `main`, đích
+  merge không bao giờ bị xoá; từ chối khi `ai/<id>` có MR mở vào đích khác. Xoá `ai/<id>` trước
+  (không có lúc nào nhánh làm việc tồn tại mà thiếu nhánh gốc); lỗi giữa chừng thì chạy lại xoá
+  nốt. Dọn xong ghi event `eval_cleanup`. Diff vẫn xem được ở PR đã đóng trên GitHub (GitHub tự
+  đóng PR khi nhánh nguồn bị xoá); chưa chép diff vào bản ghi thí nghiệm. Dọn **sau** khi chấm
+  acceptance (chấm cần nhánh `ai/<id>`).
 
 ## 1. Mục tiêu
 

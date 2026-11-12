@@ -7,25 +7,36 @@ MR vào base/<id>, không merge. Tiêu đề, tên nhánh và prompt không lộ
 
 `aico eval report`: gộp kết quả theo biến thể, so với số liệu lúc chạy thật (`observed`) nếu có;
 `--close` từ chối ticket đang chờ duyệt merge để đóng lượt chạy (ticket thành escalated).
+
+`aico eval cleanup`: xoá cặp nhánh ai/<id> + base/<id> của ticket chạy lại đã đóng (tool
+gitlab.delete_branch_pair qua guard + audit, vai trò hệ thống `housekeeper`).
 """
 
 from __future__ import annotations
 
 import re
 from collections import defaultdict
+from collections.abc import Awaitable, Callable
 from statistics import mean
 from typing import Any
 
 from aico.core import Artifact, Ticket, TicketStatus
 from aico.intake import new_ticket_id
-from aico.orchestrator.workplan import EVAL_LABEL, eval_spec
+from aico.orchestrator.workplan import EVAL_LABEL, eval_spec, ticket_refs
 from aico.rnd.metrics import ticket_metrics
 from aico.tickets import TicketStore
+from aico.tools import ToolGateway
 
 S = TicketStatus
 _VARIANT = re.compile(r"[a-z0-9][a-z0-9-]{0,40}")
 # Ticket xong lượt chạy lại: tới chờ duyệt merge (review + test đạt) hoặc dừng.
 FINISHED = frozenset({S.AWAITING_MERGE_APPROVAL, S.ESCALATED, S.FAILED, S.DONE})
+# Ticket đã đóng hẳn (không còn bước nào dùng nhánh): mới được dọn nhánh.
+CLOSED = frozenset({S.ESCALATED, S.FAILED, S.DONE})
+CLEANUP_EVENT = "eval_cleanup"
+CLEANUP_ROLE = "housekeeper"
+# (ticket_id, project, nhánh ai/<id>) -> kết quả tool delete_branch_pair.
+BranchDeleter = Callable[[str, str, str], Awaitable[dict[str, Any]]]
 
 
 class EvalError(ValueError):
@@ -155,3 +166,65 @@ async def report(
         else {"runs": 0}
     )
     return {"variant": variant, "running": running, "total": total, "tickets": per_origin}
+
+
+def gateway_deleter(gateway: ToolGateway) -> BranchDeleter:
+    """Xoá cặp nhánh qua gateway (guard + audit) bằng vai trò hệ thống `housekeeper`."""
+
+    async def delete(ticket_id: str, project: str, branch: str) -> dict[str, Any]:
+        return await gateway.call(
+            CLEANUP_ROLE,
+            "gitlab",
+            "delete_branch_pair",
+            {"project": project, "branch": branch},
+            ticket_id=ticket_id,
+        )
+
+    return delete
+
+
+async def cleanup(
+    store: TicketStore,
+    variant: str,
+    delete: BranchDeleter,
+    *,
+    default_project: str | None = None,
+    dry_run: bool = False,
+) -> list[dict[str, Any]]:
+    """Dọn nhánh của các ticket chạy lại đã đóng của biến thể; mỗi ticket một dòng kết quả.
+
+    Chỉ ticket có nhãn + artifact eval (cùng vị từ với claim) và đã đóng hẳn: ticket đang chạy
+    hay còn chờ chấm vẫn cần nhánh. Tên nhánh lấy từ `ticket_refs`, không nhận từ người gọi.
+    Dọn xong ghi event `eval_cleanup` để lần sau bỏ qua; lỗi thì không ghi, chạy lại sẽ thử tiếp.
+    """
+    out: list[dict[str, Any]] = []
+    for ticket in await store.list():
+        spec = eval_spec(ticket)
+        if spec is None or spec[0] != variant:
+            continue
+        row: dict[str, Any] = {"ticket": ticket.id}
+        out.append(row)
+        refs = ticket_refs(ticket)
+        project = ticket.project or default_project
+        if ticket.status not in CLOSED or ticket.pending_resume:
+            row["skipped"] = f"chưa đóng ({ticket.status.value})"
+        elif any(e.kind == CLEANUP_EVENT for e in await store.events(ticket.id)):
+            row["skipped"] = "đã dọn"
+        elif not project:
+            row["skipped"] = "ticket không có repo"
+        elif dry_run:
+            row["would_delete"] = [refs.work, refs.target]
+        else:
+            try:
+                result = await delete(ticket.id, project, refs.work)
+            except Exception as exc:  # một ticket lỗi không chặn các ticket còn lại
+                row["error"] = str(exc)
+                continue
+            row["deleted"] = list(result.get("deleted") or [])
+            await store.record(
+                ticket.id,
+                CLEANUP_EVENT,
+                actor="eval",
+                data={"deleted": row["deleted"], "heads": dict(result.get("heads") or {})},
+            )
+    return out

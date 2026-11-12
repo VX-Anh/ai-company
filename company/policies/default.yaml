@@ -9,6 +9,8 @@ tool_levels:
   gitlab.create_branch: L2
   gitlab.push: L2
   gitlab.open_merge_request: L2
+  # Dọn cặp nhánh của ticket chạy lại (R&D); chỉ vai trò hệ thống housekeeper được cấp.
+  gitlab.delete_branch_pair: L2
   gitlab.merge_mr: L3
   # Kho tri thức Phòng R&D (chạy trong tiến trình aico): chỉ đọc tri thức đã duyệt.
   knowledge.search_knowledge: L0

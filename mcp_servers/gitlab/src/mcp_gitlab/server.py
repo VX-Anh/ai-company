@@ -78,6 +78,15 @@ def build_server(tools: GitLabTools) -> MCPServer:
 
     @server.tool(
         description=(
+            "Xoá cặp nhánh ai/<id> và base/<id> (chỉ khi base/<id> tồn tại). Tham số branch là"
+            " ai/<id>. Không xoá được nhánh nào khác."
+        )
+    )
+    async def delete_branch_pair(project: str, branch: str) -> dict[str, Any]:
+        return await _anticipated(tools.delete_branch_pair(project, branch))
+
+    @server.tool(
+        description=(
             "Commit các file lên branch. Idempotent theo idempotency_key. "
             'Mỗi file: {path, action, content}; file nhị phân thêm encoding="base64".'
         )

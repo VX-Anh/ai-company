@@ -204,3 +204,84 @@ def test_eval_suite_rejects_short_sha() -> None:
 
     with pytest.raises(evalrun.EvalError, match="40 ký tự"):
         evalrun.eval_tickets([{**SUITE[0], "base_sha": "abc1234"}], "v")
+
+
+async def test_cleanup_deletes_branch_pair_of_closed_eval_tickets_only(company: Company) -> None:
+    from aico.rnd import evalrun
+
+    h = make_harness(company, eval_only=True)
+    h.gitlab.project(PROJECT).files["main"]["app.py"] = "x\n"
+    await h.tickets.create(eval_ticket("T-1"), actor="eval")
+    await h.runner.run_until_idle()
+    # Ticket thường có nhánh ai/T-9: không bao giờ bị dọn.
+    await h.tickets.create(Ticket(id="T-9", title="thường", project=PROJECT), actor="t")
+    await h.gitlab.create_branch(PROJECT, "ai/T-9", "main")
+    delete = evalrun.gateway_deleter(h.gateway)
+    files = h.gitlab.project(PROJECT).files
+
+    # Còn chờ chấm: chưa dọn.
+    rows = await evalrun.cleanup(h.tickets, "thu-prompt", delete)
+    assert rows == [{"ticket": "T-1", "skipped": "chưa đóng (awaiting_merge_approval)"}]
+    await evalrun.report(h.tickets, "thu-prompt", close=True)
+    # Đã ghi quyết định đóng nhưng runner chưa xử lý: vẫn chưa dọn.
+    assert "skipped" in (await evalrun.cleanup(h.tickets, "thu-prompt", delete))[0]
+    await h.runner.run_until_idle()
+    assert (await h.tickets.get("T-1")).status is S.ESCALATED
+
+    dry = await evalrun.cleanup(h.tickets, "thu-prompt", delete, dry_run=True)
+    assert dry == [{"ticket": "T-1", "would_delete": ["ai/T-1", "base/T-1"]}]
+    assert {"ai/T-1", "base/T-1"} <= set(files)
+    assert await evalrun.cleanup(h.tickets, "khac", delete) == []  # biến thể khác
+
+    rows = await evalrun.cleanup(h.tickets, "thu-prompt", delete)
+    assert rows == [{"ticket": "T-1", "deleted": ["ai/T-1", "base/T-1"]}]
+    assert set(files) == {"main", "ai/T-9"}
+    event = [e for e in await h.tickets.events("T-1") if e.kind == "eval_cleanup"][-1]
+    assert "ai/T-1" in event.data["heads"]  # SHA trước khi xoá, để dựng lại khi cần
+    entry = h.audit.entries[-1]
+    assert (entry.role, entry.tool, entry.decision) == (
+        "housekeeper",
+        "delete_branch_pair",
+        "allow",
+    )
+    assert entry.ticket_id == "T-1"
+    again = await evalrun.cleanup(h.tickets, "thu-prompt", delete)
+    assert again == [{"ticket": "T-1", "skipped": "đã dọn"}]
+
+
+async def test_cleanup_tool_is_guarded_and_hidden_from_agents(company: Company) -> None:
+    import pytest
+
+    from aico.rnd import evalrun
+    from aico.tools import ToolDenied, ToolError
+
+    h = make_harness(company)
+    await h.gitlab.create_branch(PROJECT, "ai/T-9", "main")
+    args = {"project": PROJECT, "branch": "ai/T-9"}
+    # Chỉ vai trò hệ thống housekeeper được cấp; agent không thấy tool này.
+    for role_id in company.roles:
+        if role_id == evalrun.CLEANUP_ROLE:
+            continue
+        with pytest.raises(ToolDenied):
+            await h.gateway.call(role_id, "gitlab", "delete_branch_pair", args, ticket_id=None)
+        if company.role(role_id).grant_for("gitlab") is not None:
+            assert "delete_branch_pair" not in {t.name for t in await h.gateway.tools_for(role_id)}
+    assert company.role(evalrun.CLEANUP_ROLE).worker == "system"
+    # Guard chặn tên nhánh ngoài ai/* và repo ngoài danh sách trước khi tới server.
+    for bad in (
+        {**args, "branch": "main"},
+        {**args, "branch": "base/T-9"},
+        {**args, "project": "x/y"},
+    ):
+        with pytest.raises(ToolDenied):
+            await h.gateway.call("housekeeper", "gitlab", "delete_branch_pair", bad, ticket_id=None)
+    # Qua guard nhưng server từ chối: ai/T-9 là nhánh của ticket thường (không có base/T-9).
+    with pytest.raises(ToolError, match="ticket thường"):
+        await h.gateway.call("housekeeper", "gitlab", "delete_branch_pair", args, ticket_id=None)
+    assert "ai/T-9" in h.gitlab.project(PROJECT).files
+    # Lỗi của một ticket được báo trong dòng kết quả, không ghi event đã dọn.
+    await h.tickets.create(eval_ticket("T-9"), actor="eval")
+    await h.tickets.transition("T-9", S.FAILED, actor="t")
+    rows = await evalrun.cleanup(h.tickets, "thu-prompt", evalrun.gateway_deleter(h.gateway))
+    assert "ticket thường" in rows[0]["error"]
+    assert not [e for e in await h.tickets.events("T-9") if e.kind == "eval_cleanup"]

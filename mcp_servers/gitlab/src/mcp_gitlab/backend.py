@@ -29,6 +29,8 @@ class GitLabBackend(Protocol):
 
     async def create_branch(self, project: str, branch: str, ref: str) -> dict[str, Any]: ...
 
+    async def delete_branch(self, project: str, branch: str) -> None: ...
+
     async def recent_commits(self, project: str, branch: str) -> list[dict[str, Any]]: ...
 
     async def merge_base(self, project: str, base: str, head: str) -> str:
@@ -108,6 +110,11 @@ class HttpGitLabBackend:
             "POST",
             f"/projects/{_pid(project)}/repository/branches",
             params={"branch": branch, "ref": ref},
+        )
+
+    async def delete_branch(self, project: str, branch: str) -> None:
+        await self._request(
+            "DELETE", f"/projects/{_pid(project)}/repository/branches/{quote(branch, safe='')}"
         )
 
     async def recent_commits(self, project: str, branch: str) -> list[dict[str, Any]]:
@@ -191,6 +198,7 @@ class FakeGitLabBackend:
     def __init__(self) -> None:
         self.projects: dict[str, _FakeProject] = {}
         self.merge_fails = 0
+        self.delete_fails: set[str] = set()  # tên branch mà delete_branch báo lỗi
         self.calls: list[str] = []
 
     def project(self, name: str) -> _FakeProject:
@@ -235,6 +243,19 @@ class FakeGitLabBackend:
         p.files[branch] = dict(p.files[ref])
         p.commits[branch] = list(p.commits[ref])
         return {"name": branch}
+
+    async def delete_branch(self, project: str, branch: str) -> None:
+        self.calls.append(f"delete_branch:{branch}")
+        if self.delete_fails and branch in self.delete_fails:
+            raise GitLabError(f"không xoá được branch '{branch}'", 500)
+        p = self.project(project)
+        if branch not in p.files:
+            raise GitLabError(f"không có branch '{branch}'", 404)
+        del p.files[branch]
+        p.commits.pop(branch, None)
+        for mr in p.mrs:  # như GitHub: xoá nhánh nguồn thì PR đang mở tự đóng
+            if mr["source_branch"] == branch and mr["state"] == "opened":
+                mr["state"] = "closed"
 
     async def recent_commits(self, project: str, branch: str) -> list[dict[str, Any]]:
         return list(reversed(self.project(project).commits.get(branch, [])))[:20]

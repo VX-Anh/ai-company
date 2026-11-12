@@ -334,3 +334,23 @@ async def test_merge_base_is_fork_point_not_pr_base_sha() -> None:
         await tools.merge_base(REPO, "main", "f" * 40)  # commit không có trong repo
     with pytest.raises(ValueError, match="không hợp lệ"):
         await tools.merge_base(REPO, "main...x", "ai/T-1")
+
+
+async def test_delete_branch_pair_on_github() -> None:
+    gh = FakeGitHub()
+    backend = HttpGitHubBackend("dev-token", transport=httpx.MockTransport(gh.handler))
+    tools = GitLabTools(
+        backend,
+        Constraints(
+            allowed_projects=(REPO,),
+            branch_pattern="ai/*,base/*",
+            allowed_targets=("main", "base/*"),
+        ),
+    )
+    await tools.create_branch(REPO, "ai/T-1")
+    await tools.create_branch(REPO, "base/T-2")
+    await tools.create_branch(REPO, "ai/T-2")
+    main = gh.refs["main"]
+    got = await tools.delete_branch_pair(REPO, "ai/T-2")
+    assert got["deleted"] == ["ai/T-2", "base/T-2"]
+    assert gh.refs == {"main": main, "ai/T-1": main}

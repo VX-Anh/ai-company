@@ -146,6 +146,10 @@ class HttpGitHubBackend:
             delay = min(delay * 2, 2)
         return {"name": branch}
 
+    async def delete_branch(self, project: str, branch: str) -> None:
+        # Chỉ refs/heads/<branch>: không bao giờ đụng tag hay ref khác.
+        await self._request("DELETE", f"{_repo(project)}/git/refs/heads/{quote(branch, safe='/')}")
+
     async def recent_commits(self, project: str, branch: str) -> list[dict[str, Any]]:
         items = await self._request(
             "GET", f"{_repo(project)}/commits", params={"sha": branch, "per_page": 20}

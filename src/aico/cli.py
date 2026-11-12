@@ -38,12 +38,14 @@ async def _migrate(settings: Settings) -> None:
 
 
 async def _eval(settings: Settings, args: argparse.Namespace, suite: list[dict[str, Any]]) -> int:
-    """aico eval start|report: chạy lại bộ ticket chuẩn với một biến thể (Phòng R&D, R1)."""
+    """aico eval start|report|cleanup: chạy lại bộ ticket chuẩn với một biến thể (Phòng R&D, R1)."""
     import json
 
     from aico.db import create_pool
+    from aico.governance import PostgresApprovalStore, PostgresAuditLog
     from aico.rnd import evalrun
     from aico.tickets.postgres import PostgresTicketStore
+    from aico.tools import Guard, McpToolClient, ToolGateway
 
     pool = create_pool(settings.database_url)
     await pool.open()
@@ -54,6 +56,24 @@ async def _eval(settings: Settings, args: argparse.Namespace, suite: list[dict[s
             for tid, new in created:
                 print(tid, "mới" if new else "đã có")
             return 0
+        if args.eval_cmd == "cleanup":
+            # Gateway rút gọn: chỉ server Git, vẫn đủ guard + audit như aico serve.
+            company = load_company(settings.company_dir)
+            gateway = ToolGateway(
+                company,
+                Guard(company.policy, PostgresApprovalStore(pool)),
+                McpToolClient({"gitlab": settings.mcp_gitlab_url}),
+                PostgresAuditLog(pool),
+            )
+            rows = await evalrun.cleanup(
+                store,
+                args.variant,
+                evalrun.gateway_deleter(gateway),
+                default_project=settings.default_project,
+                dry_run=args.dry_run,
+            )
+            print(json.dumps(rows, ensure_ascii=False, indent=1))
+            return 1 if any("error" in r for r in rows) else 0
         observed = {str(i["id"]): i.get("observed") or {} for i in suite if "id" in i}
         result = await evalrun.report(store, args.variant, observed=observed, close=args.close)
         print(json.dumps(result, ensure_ascii=False, indent=1))
@@ -176,6 +196,11 @@ def main(argv: list[str] | None = None) -> int:
     ev_report.add_argument("--variant", required=True)
     ev_report.add_argument("--suite", help="bộ chuẩn để so với số liệu chạy thật")
     ev_report.add_argument("--close", action="store_true", help="đóng ticket đã chấm")
+    ev_clean = ev_sub.add_parser(
+        "cleanup", help="xoá nhánh ai/<id>, base/<id> của ticket chạy lại đã đóng"
+    )
+    ev_clean.add_argument("--variant", required=True)
+    ev_clean.add_argument("--dry-run", action="store_true", help="chỉ liệt kê, không xoá")
     args = parser.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):
         if isinstance(stream, io.TextIOWrapper):
@@ -204,7 +229,7 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             suite: list[dict[str, Any]] = []
-            if args.suite:
+            if getattr(args, "suite", None):
                 text = (
                     sys.stdin.read() if args.suite == "-" else Path(args.suite).read_text("utf-8")
                 )
