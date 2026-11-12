@@ -325,12 +325,22 @@ def eval_spec(ticket: Any) -> tuple[str, str] | None:
     return None
 
 
+# Nhánh gốc của ticket chạy lại: tên trung tính để agent không biết mình đang bị chấm (agent có
+# thể đổi hành vi khi biết bị đánh giá). mcp-gitlab nhận ra cặp ai/<id> -> base/<id>, chặn vào main.
+EVAL_BASE_PREFIX = "base/"
+
+
 def ticket_refs(ticket: Any, target_branch: str = "main") -> TicketRefs:
-    """Ticket thường: ai/<id> từ main, MR vào main. Ticket chạy lại: eval/<id> từ commit gốc, MR
-    vào eval/base/<id> (cũng tạo ở commit gốc) để diff đúng phần agent làm; không bao giờ vào main.
+    """Ticket thường: ai/<id> từ main, MR vào main. Ticket chạy lại: cũng ai/<id> nhưng tạo từ
+    commit gốc, MR vào base/<id> (tạo ở commit gốc) để diff đúng phần agent làm; không vào main.
     """
     spec = eval_spec(ticket)
     if spec is None:
         return TicketRefs(f"ai/{ticket.id}", target_branch, target_branch)
     variant, base = spec
-    return TicketRefs(f"eval/{ticket.id}", base, f"eval/base/{ticket.id}", variant)
+    return TicketRefs(f"ai/{ticket.id}", base, f"{EVAL_BASE_PREFIX}{ticket.id}", variant)
+
+
+def visible_labels(labels: Any) -> list[str]:
+    """Nhãn đưa vào prompt: bỏ nhãn eval (chỉ để runner lọc), agent không thấy mình bị chấm."""
+    return [str(x) for x in labels if str(x).lower() != EVAL_LABEL]

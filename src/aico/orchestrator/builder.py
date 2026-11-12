@@ -354,7 +354,7 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
                 "unpushed_changes": unpushed,
             }
         if mr.get("target_branch") not in (None, refs.target):
-            # MR có sẵn (agent tự mở) vào đích khác: không nhận, nhất là eval/* vào main.
+            # MR có sẵn (agent tự mở) vào đích khác: không nhận, nhất là ticket chạy lại vào main.
             return {
                 "code_attempts": attempt,
                 "escalation_reason": (

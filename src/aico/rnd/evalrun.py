@@ -2,7 +2,8 @@
 
 `aico eval start`: tạo ticket nhãn `eval` từ bộ chuẩn (JSON, định dạng của GET /rnd/bench), mỗi
 ticket gắn artifact `eval` = "<biến thể>@<commit gốc>". Instance `aico-eval` (AICO_EVAL_INSTANCE=1,
-AICO_COMPANY_DIR trỏ tới thư mục biến thể) chạy chúng trên graph thật, nhánh eval/*, không merge.
+AICO_COMPANY_DIR trỏ tới thư mục biến thể) chạy chúng trên graph thật: nhánh ai/<id> từ commit gốc,
+MR vào base/<id>, không merge. Tiêu đề, tên nhánh và prompt không lộ việc đang chạy lại.
 
 `aico eval report`: gộp kết quả theo biến thể, so với số liệu lúc chạy thật (`observed`) nếu có;
 `--close` từ chối ticket đang chờ duyệt merge để đóng lượt chạy (ticket thành escalated).
@@ -54,7 +55,9 @@ def eval_tickets(suite: list[dict[str, Any]], variant: str, repeat: int = 1) -> 
             out.append(
                 Ticket(
                     id=new_ticket_id(),
-                    title=f"[eval {variant}] {item['title']}",
+                    # Tiêu đề giữ nguyên: agent không biết đây là lượt chạy lại. Biến thể nằm ở
+                    # artifact eval và source_ref.
+                    title=str(item["title"]),
                     body=str(item.get("body") or ""),
                     project=str(item["project"]),
                     labels=[*labels, EVAL_LABEL],
