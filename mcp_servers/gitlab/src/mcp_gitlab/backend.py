@@ -190,6 +190,8 @@ class _FakeProject:
     commits: dict[str, list[dict[str, Any]]] = field(default_factory=lambda: {"main": []})
     issues: list[dict[str, Any]] = field(default_factory=list)
     mrs: list[dict[str, Any]] = field(default_factory=list)
+    # File tại từng commit tạo qua commit(): tải mã nguồn theo SHA trả đúng bản lúc đó.
+    snapshots: dict[str, dict[str, str | bytes]] = field(default_factory=dict)
 
 
 class FakeGitLabBackend:
@@ -209,6 +211,8 @@ class FakeGitLabBackend:
         p = self.project(project)
         if ref in p.files:
             return p.files[ref]
+        if ref in p.snapshots:
+            return p.snapshots[ref]
         branch = next((b for b, cs in p.commits.items() if any(c["id"] == ref for c in cs)), None)
         return p.files.get(branch) if branch is not None else None
 
@@ -225,11 +229,13 @@ class FakeGitLabBackend:
         files = self._files_at(project, ref)
         if files is None:
             raise GitLabError(f"không có ref {ref}", 404)
+        # Một thư mục gốc duy nhất như tarball thật: tên ref có dấu / (ai/T-1) không tách thêm cấp.
+        root = f"{project}-{ref}".replace("/", "-")
         buf = io.BytesIO()
         with tarfile.open(fileobj=buf, mode="w:gz") as tar:
             for path, content in files.items():
                 data = content if isinstance(content, bytes) else content.encode("utf-8")
-                info = tarfile.TarInfo(f"{project.replace('/', '-')}-{ref}/{path}")
+                info = tarfile.TarInfo(f"{root}/{path}")
                 info.size = len(data)
                 tar.addfile(info, io.BytesIO(data))
         return buf.getvalue()
@@ -307,6 +313,7 @@ class FakeGitLabBackend:
                 files[action["file_path"]] = action["content"]
         sha = f"{len(self.calls):040x}"
         p.commits[branch].append({"id": sha, "message": message})
+        p.snapshots[sha] = dict(files)
         return {"id": sha}
 
     async def list_issues(self, project: str, labels: list[str]) -> list[dict[str, Any]]:
