@@ -29,7 +29,9 @@ def _repo(project: str) -> str:
     return f"/repos/{quote(owner, safe='')}/{quote(name, safe='')}"
 
 
-def _pr_view(pr: dict[str, Any]) -> dict[str, Any]:
+def _pr_view(pr: dict[str, Any], base_sha: str | None = None) -> dict[str, Any]:
+    """base_sha: merge-base của PR (get_mr tính qua compare API). `base.sha` trong PR của GitHub
+    là đầu nhánh đích lúc mở/cập nhật PR, có thể đã đi quá điểm rẽ nhánh nên không dùng."""
     if pr.get("merged") or pr.get("merged_at"):
         state = "merged"
     elif pr.get("state") == "open":
@@ -45,7 +47,7 @@ def _pr_view(pr: dict[str, Any]) -> dict[str, Any]:
         "description": pr.get("body") or "",
         "web_url": pr.get("html_url"),
         # Mốc commit để R&D dựng lại trạng thái repo khi chạy lại ticket cũ (bộ ticket chuẩn).
-        "base_sha": (pr.get("base") or {}).get("sha"),
+        "base_sha": base_sha,
         "head_sha": (pr.get("head") or {}).get("sha"),
         "merge_commit_sha": pr.get("merge_commit_sha") if state == "merged" else None,
     }
@@ -232,7 +234,31 @@ class HttpGitHubBackend:
         return _pr_view(pr)
 
     async def get_mr(self, project: str, iid: int) -> dict[str, Any]:
-        return _pr_view(await self._request("GET", f"{_repo(project)}/pulls/{iid}"))
+        pr = await self._request("GET", f"{_repo(project)}/pulls/{iid}")
+        return _pr_view(pr, await self._merge_base(project, pr))
+
+    async def _merge_base(self, project: str, pr: dict[str, Any]) -> str | None:
+        """Commit nhánh nguồn rẽ ra từ nhánh đích: nơi R&D dựng lại repo khi chạy lại ticket.
+
+        So theo SHA (không theo tên nhánh) nên đúng cả sau khi merge và xoá nhánh nguồn. Không
+        tính được (thiếu SHA, compare lỗi) thì trả None: thà thiếu mốc còn hơn trả mốc sai, và
+        các luồng khác của get_mr (chờ merge, escalation) không vì thế mà hỏng.
+        """
+        base = (pr.get("base") or {}).get("sha")
+        head = (pr.get("head") or {}).get("sha")
+        if not (isinstance(base, str) and isinstance(head, str)):
+            return None
+        if not (SHA_RE.fullmatch(base) and SHA_RE.fullmatch(head)):
+            return None
+        try:
+            # per_page=1: chỉ cần merge_base_commit, không cần danh sách commit và file.
+            data = await self._request(
+                "GET", f"{_repo(project)}/compare/{base}...{head}", params={"per_page": 1}
+            )
+        except (GitLabError, httpx.HTTPError):
+            return None
+        sha = (data.get("merge_base_commit") or {}).get("sha") if isinstance(data, dict) else None
+        return sha if isinstance(sha, str) and SHA_RE.fullmatch(sha) else None
 
     async def merge_mr(self, project: str, iid: int) -> dict[str, Any]:
         if self._merge_headers is None:

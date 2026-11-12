@@ -50,9 +50,19 @@ class FakeGitHub:
         self.auth: list[str] = []
         self.ref_lag = 0  # số lần đọc ref mới tạo còn 404 (bản sao GitHub chưa đồng bộ)
         self._lagging: dict[str, int] = {}
+        self.compares = 0
+        self.compare_fails = False
 
     def _files(self, branch: str) -> dict[str, str]:
         return self.commits[self.refs[branch]]["files"]
+
+    def _history(self, sha: str | None) -> list[str]:
+        out: list[str] = []
+        while sha:
+            out.append(sha)
+            parents = self.commits[sha]["parents"]
+            sha = parents[0] if parents else None
+        return out
 
     def handler(self, request: httpx.Request) -> httpx.Response:  # noqa: C901
         self.auth.append(request.headers["authorization"])
@@ -150,14 +160,24 @@ class FakeGitHub:
                 "merged": False,
                 "title": body["title"],
                 "body": body["body"],
-                "head": {"ref": body["head"]},
-                "base": {"ref": body["base"]},
+                # Như GitHub: base.sha là đầu nhánh đích lúc mở PR, không phải merge-base.
+                "head": {"ref": body["head"], "sha": self.refs[body["head"]]},
+                "base": {"ref": body["base"], "sha": self.refs[body["base"]]},
                 "html_url": f"https://github.com/{REPO}/pull/{len(self.pulls) + 10}",
             }
             self.pulls.append(pr)
             return httpx.Response(201, json=pr)
+        if m == "GET" and (g := re.fullmatch(r"/compare/(\w+)\.\.\.(\w+)", p)):
+            self.compares += 1
+            if self.compare_fails or g[1] not in self.commits or g[2] not in self.commits:
+                return httpx.Response(404, json={"message": "Not Found"})
+            ancestors = set(self._history(g[1]))
+            base = next((c for c in self._history(g[2]) if c in ancestors), None)
+            return httpx.Response(200, json={"merge_base_commit": {"sha": base}})
         if (g := re.fullmatch(r"/pulls/(\d+)(/merge)?", p)) and m in ("GET", "PUT"):
             pr = next(pr for pr in self.pulls if pr["number"] == int(g[1]))
+            if m == "GET" and pr["state"] == "open":
+                pr["head"]["sha"] = self.refs[pr["head"]["ref"]]
             if m == "PUT":
                 pr.update(state="closed", merged=True)
                 self.refs[pr["base"]["ref"]] = self.refs[pr["head"]["ref"]]
@@ -285,12 +305,54 @@ def test_pr_view_exposes_commit_marks_for_replay() -> None:
         "base": {"ref": "main", "sha": "b" * 40},
         "merge_commit_sha": "m" * 40,
     }
-    view = _mr_view(_pr_view(pr))
+    view = _mr_view(_pr_view(pr, "f" * 40))
     assert view["merged"] is True
     assert (view["base_sha"], view["head_sha"], view["merge_commit_sha"]) == (
-        "b" * 40,
+        "f" * 40,
         "h" * 40,
         "m" * 40,
     )
+    # base.sha của PR là đầu nhánh đích, không phải merge-base: không bao giờ trả làm base_sha.
+    assert _mr_view(_pr_view(pr))["base_sha"] is None
     open_pr = {**pr, "state": "open", "merged_at": None}
     assert _mr_view(_pr_view(open_pr))["merge_commit_sha"] is None
+
+
+async def test_base_sha_is_merge_base_not_target_head() -> None:
+    """main đi tiếp trước khi mở PR: base_sha vẫn phải là commit nhánh ai/* rẽ ra."""
+    gh = FakeGitHub()
+    tools = _tools(gh)
+    fork_point = gh.refs["main"]
+    await tools.create_branch(REPO, "ai/T-5")
+    await tools.push(REPO, "ai/T-5", "Sửa", [{"path": "a.py", "content": "1"}], "T-5:code:1")
+    # Một PR khác merge vào main trong lúc ticket đang làm.
+    moved = gh.next_sha()
+    gh.commits[moved] = {"message": "việc khác", "files": {}, "parents": [fork_point]}
+    gh.refs["main"] = moved
+
+    opened = await tools.open_merge_request(REPO, "ai/T-5", "T-5")
+    assert gh.pulls[0]["base"]["sha"] == moved != fork_point
+    view = await tools.get_merge_request(REPO, opened["iid"])
+    assert view["base_sha"] == fork_point and view["head_sha"] == gh.refs["ai/T-5"]
+
+    # Push thêm một vòng sửa rồi merge: mốc gốc không đổi, kể cả khi nhánh nguồn đã bị xoá.
+    await tools.push(REPO, "ai/T-5", "Sửa 2", [{"path": "a.py", "content": "2"}], "T-5:fix:1")
+    head = gh.refs["ai/T-5"]
+    merged = await tools.merge_mr(REPO, opened["iid"], "A-1")
+    assert "ai/T-5" not in gh.refs
+    assert (merged["base_sha"], merged["head_sha"]) == (fork_point, head)
+    assert (await tools.get_merge_request(REPO, opened["iid"]))["base_sha"] == fork_point
+
+
+async def test_base_sha_missing_when_compare_fails() -> None:
+    """Compare lỗi thì không trả mốc (bench bỏ ứng viên), các trường khác của MR vẫn đủ."""
+    gh = FakeGitHub()
+    tools = _tools(gh)
+    await tools.create_branch(REPO, "ai/T-6")
+    await tools.push(REPO, "ai/T-6", "Sửa", [{"path": "a.py", "content": "1"}], "T-6:code:1")
+    opened = await tools.open_merge_request(REPO, "ai/T-6", "T-6")
+    assert gh.compares == 0  # mở/tìm PR không tốn thêm lời gọi compare
+    gh.compare_fails = True
+    view = await tools.get_merge_request(REPO, opened["iid"])
+    assert view["base_sha"] is None and view["state"] == "opened"
+    assert view["head_sha"] == gh.refs["ai/T-6"]

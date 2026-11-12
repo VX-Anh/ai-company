@@ -270,15 +270,31 @@ class FakeGitLabBackend:
             "description": description,
             "state": "opened",
             "web_url": f"https://gitlab.example/{project}/-/merge_requests/{len(p.mrs) + 1}",
+            # Ghi lúc mở MR: sau merge nhánh đích đi tiếp, mốc này phải đứng yên.
+            **self._refs(p, source_branch, target_branch),
         }
         p.mrs.append(mr)
         return dict(mr)
 
     async def get_mr(self, project: str, iid: int) -> dict[str, Any]:
-        for mr in self.project(project).mrs:
+        p = self.project(project)
+        for mr in p.mrs:
             if mr["iid"] == iid:
+                if mr["state"] == "opened":  # push thêm sau khi mở MR: đầu nhánh nguồn đổi
+                    mr["sha"] = self._refs(p, mr["source_branch"], mr["target_branch"])["sha"]
                 return dict(mr)
         raise GitLabError(f"không có MR !{iid}", 404)
+
+    def _refs(self, p: _FakeProject, source: str, target: str) -> dict[str, Any]:
+        """Mốc commit như GitLab trả: diff_refs.base_sha là merge-base (commit chung cuối của
+        hai nhánh), không phải đầu nhánh đích; sha là đầu nhánh nguồn."""
+        src, dst = p.commits.get(source, []), p.commits.get(target, [])
+        base: str | None = None
+        for a, b in zip(src, dst, strict=False):
+            if a["id"] != b["id"]:
+                break
+            base = a["id"]
+        return {"diff_refs": {"base_sha": base}, "sha": src[-1]["id"] if src else None}
 
     async def merge_mr(self, project: str, iid: int) -> dict[str, Any]:
         self.calls.append("merge_mr")

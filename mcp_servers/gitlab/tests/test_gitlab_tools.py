@@ -185,3 +185,22 @@ def test_eval_branch_constraints() -> None:
         c.check_merge_target("eval/base/T-1")
     with pytest.raises(ConstraintError):
         c.check_branch("feature/x")
+
+
+async def test_fake_mr_base_sha_is_merge_base() -> None:
+    """Bản giả theo GitLab: base_sha là commit chung cuối của hai nhánh, không phải đầu main."""
+    tools, backend = _tools()
+    p = backend.project(PROJECT)
+    p.commits["main"].append({"id": "a" * 40, "message": "gốc"})
+    await tools.create_branch(PROJECT, "ai/T-9")
+    files = [{"path": "app.py", "content": "print('fixed')\n"}]
+    pushed = await tools.push(PROJECT, "ai/T-9", "Sửa lỗi", files, "T-9:code:1")
+    p.commits["main"].append({"id": "c" * 40, "message": "việc khác merge trước"})
+
+    mr = await tools.open_merge_request(PROJECT, "ai/T-9", "T-9: Sửa lỗi")
+    assert (mr["base_sha"], mr["head_sha"]) == ("a" * 40, pushed["commit"])
+    again = await tools.push(PROJECT, "ai/T-9", "Sửa 2", files, "T-9:fix:1")
+    view = await tools.get_merge_request(PROJECT, mr["iid"])
+    assert (view["base_sha"], view["head_sha"]) == ("a" * 40, again["commit"])
+    merged = await tools.merge_mr(PROJECT, mr["iid"], "A-1")
+    assert (merged["base_sha"], merged["head_sha"]) == ("a" * 40, again["commit"])
