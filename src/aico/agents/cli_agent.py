@@ -47,13 +47,19 @@ def prompt_sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
 
+# Mốc deploy dài nhất: git sha 11 + "x" + băm phần chưa commit 8 = 20; chừa chỗ cho sha dài hơn.
+DEPLOY_MARK_CHARS = 24
+
+
 def company_sha(content_sha: str, deploy_sha: str | None = None) -> str | None:
     """Mốc cấu hình đang chạy ghi vào event `job`: "<mốc deploy>-<dấu vân tay company/>".
 
-    Mốc deploy (AICO_COMPANY_SHA, vd git sha) tách cả lần deploy chỉ đổi code; thiếu thì chỉ còn
-    dấu vân tay nội dung. Cả hai đều thiếu (Company dựng tay) thì None.
+    Mốc deploy (AICO_COMPANY_SHA) tách cả lần deploy chỉ đổi code; thiếu thì chỉ còn dấu vân tay
+    nội dung. Cả hai đều thiếu (Company dựng tay) thì None. `aico-ops deploy` đặt mốc là
+    "<git sha 11 ký tự>" khi bản nguồn sạch, "<git sha>x<băm 8 ký tự của phần chưa commit>" khi
+    bẩn ("x" không phải chữ số hex nên tách được hai phần; xem rnd.canary.sha_matches).
     """
-    deploy = "".join(ch for ch in (deploy_sha or "") if ch.isalnum())[:12]
+    deploy = "".join(ch for ch in (deploy_sha or "") if ch.isalnum())[:DEPLOY_MARK_CHARS].lower()
     parts = [p for p in (deploy, content_sha) if p]
     return "-".join(parts) or None
 
@@ -657,12 +663,9 @@ def diff_size(diffs: list[list[str]]) -> dict[str, int]:
     """Kích thước thay đổi của MR ghi vào event `job` của lần review: số file đổi và số dòng
     thêm + xoá (đếm trên diff đầy đủ, trước khi cắt). File nhị phân đổi nội dung không đếm được.
     """
-    lines = sum(
-        1
-        for chunk in diffs
-        for line in chunk
-        if line[:1] in "+-" and not line.startswith(("+++ ", "--- "))
-    )
+    # Hai dòng đầu mỗi file là header "--- a/..." và "+++ b/...": bỏ theo vị trí, không theo nội
+    # dung, vì dòng mã bị xoá/thêm cũng có thể bắt đầu bằng "-- " hay "++ " (chú thích SQL "-- x").
+    lines = sum(1 for chunk in diffs for line in chunk[2:] if line[:1] in "+-")
     return {"diff_files": len(diffs), "diff_lines": lines}
 
 

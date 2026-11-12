@@ -13,7 +13,8 @@ Các chỉ số chính và lý do:
   khi đổi prompt (prompt_sha đổi).
 - diff_lines / diff_files (job review ghi kích thước MR lúc chấm): tỷ lệ đạt vòng đầu theo cỡ
   thay đổi (giả thuyết P4: đầu việc diff nhỏ đạt vòng đầu nhiều hơn). Chỉ là tương quan.
-- company_sha của job đầu tiên: ticket chạy bằng cấu hình nào (canary, xem rnd/canary.py).
+- company_sha của job đầu tiên: ticket chạy bằng cấu hình nào; company_shas: mọi cấu hình ticket
+  đã chạy qua (nhiều hơn một = ticket vắt qua một lần deploy, canary loại ra; xem rnd/canary.py).
 """
 
 from __future__ import annotations
@@ -84,6 +85,7 @@ def ticket_metrics(ticket: Ticket, events: list[Event]) -> dict[str, Any]:
     waiting = None  # trạng thái chờ người gần nhất: biết quyết định thuộc bước nào
     reached_merge_at: datetime | None = None
     first_job_at: datetime | None = None
+    last_job_at: datetime | None = None
     jobs: list[dict[str, Any]] = []
     for e in events:
         data = e.data or {}
@@ -111,6 +113,7 @@ def ticket_metrics(ticket: Ticket, events: list[Event]) -> dict[str, Any]:
         elif e.kind == "job":
             if first_job_at is None:
                 first_job_at = e.at
+            last_job_at = e.at
             jobs.append(dict(data))
     minutes_to_merge = (
         round((reached_merge_at - ticket.created_at).total_seconds() / 60, 1)
@@ -134,7 +137,12 @@ def ticket_metrics(ticket: Ticket, events: list[Event]) -> dict[str, Any]:
         "minutes_to_merge_approval": minutes_to_merge,
         # Canary: ticket thuộc cấu hình nào tính theo job đầu tiên (event cũ thiếu trường = None).
         "company_sha": jobs[0].get("company_sha") if jobs else None,
+        # Mọi cấu hình ticket đã chạy qua, theo thứ tự gặp (None = job thiếu trường). Hơn một giá
+        # trị: ticket vắt qua một lần deploy, không thuộc trọn cấu hình nào.
+        "company_shas": list(dict.fromkeys(j.get("company_sha") for j in jobs)),
+        "last_company_sha": jobs[-1].get("company_sha") if jobs else None,
         "started_at": first_job_at.isoformat() if first_job_at is not None else None,
+        "last_job_at": last_job_at.isoformat() if last_job_at is not None else None,
         # Cỡ MR ở lần review ĐẦU (bài nộp vòng một): các vòng sau đã cộng cả phần sửa theo góp ý.
         "diff_lines": first_diff.get("diff_lines"),
         "diff_files": first_diff.get("diff_files"),

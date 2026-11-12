@@ -21,22 +21,28 @@ REQUIRED_STEPS = {"fix_ticket": ("triage", "plan", "code", "review", "merge")}
 # Phần của company/ quyết định hành vi agent; `rnd/watchlist.yaml` chỉ là nguồn dò công nghệ nên
 # không tính (đổi watchlist không được mở một đợt canary mới).
 FINGERPRINT_PARTS = ("org.yaml", "roles", "prompts", "sops", "policies")
+FINGERPRINT_SUFFIXES = frozenset({".yaml", ".yml", ".md"})
 
 
 def company_fingerprint(root: str | Path) -> str:
     """Dấu vân tay 12 ký tự của cấu hình công ty (canary: so ticket trước–sau một lần đổi).
 
     Băm đường dẫn + nội dung theo thứ tự tên; quy CRLF về LF để cùng nội dung trên Windows và
-    trong container cho cùng một giá trị.
+    trong container cho cùng một giá trị. Chỉ tính file cấu hình (*.yaml, *.yml, *.md), bỏ file và
+    thư mục ẩn: file tạm của trình soạn thảo (.swp, ~, .DS_Store) không được mở đợt canary mới.
     """
     root = Path(root)
     files: list[Path] = []
     for part in FINGERPRINT_PARTS:
         path = root / part
-        if path.is_file():
-            files.append(path)
-        elif path.is_dir():
-            files.extend(p for p in path.rglob("*") if p.is_file())
+        found = [path] if path.is_file() else path.rglob("*") if path.is_dir() else []
+        files.extend(
+            p
+            for p in found
+            if p.is_file()
+            and p.suffix.lower() in FINGERPRINT_SUFFIXES
+            and not any(name.startswith(".") for name in p.relative_to(root).parts)
+        )
     digest = hashlib.sha256()
     for path in sorted(files, key=lambda p: p.relative_to(root).as_posix()):
         digest.update(path.relative_to(root).as_posix().encode("utf-8") + b"\0")
