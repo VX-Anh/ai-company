@@ -7,7 +7,9 @@ import importlib.util
 import io
 import json
 import os
+import shlex
 import shutil
+import subprocess
 import sys
 import tarfile
 import threading
@@ -100,6 +102,51 @@ def test_remote_script_runs_command_without_network(tmp_path: Path) -> None:
     assert "--strip-components" not in preview
 
 
+def test_exec_marks_infra_failures_apart_from_command_exit_codes(tmp_path: Path) -> None:
+    cfg = _config(tmp_path)
+    script = rr.remote_script(cfg, "abc", "node:22", "npm test # ghi chú", 1, marker="m4rk")
+    # Hạ tầng hỏng (volume, network, container setup không khởi động) tự báo bằng dòng riêng.
+    assert (
+        "docker volume create $v >/dev/null || { echo '::aico-infra m4rk volume'; exit 125; }"
+        in (script)
+    )
+    assert "|| { echo '::aico-infra m4rk network'; exit 125; }" in script
+    assert "[ $c -ne 125 ] || echo '::aico-infra m4rk setup'" in script
+    # Không có marker (bản xem trước, người gọi cũ): script như trước.
+    assert "::aico" not in rr.remote_script(cfg, "abc", "node:22", "npm test", 1)
+    preview = rr.remote_script(cfg, "abc", "n", "b", 0, preview_output="dist", marker="m4rk")
+    assert "::aico" not in preview  # stdout của bản xem trước chỉ chứa tar
+
+    # Lệnh chạy xong (kể cả tự thoát 125/255): có dòng ::aico-exit -> không phải lỗi hạ tầng.
+    for code in (0, 3, 125, 255):
+        out = f"log\n\n::aico-exit m4rk {code}\n"
+        assert rr.classify_exec(out, "m4rk", code, ssh=True) == ("log\n\n", False)
+    # Bài làm in dòng giả với marker khác: không được tính, không bị bỏ khỏi log.
+    fake = "::aico-exit khac 0\n"
+    assert rr.classify_exec(fake, "m4rk", 125, ssh=True) == (fake, True)
+    assert rr.classify_exec("::aico-infra m4rk volume\n", "m4rk", 125, ssh=False) == ("", True)
+    # Không có dòng nào: 125 = docker không khởi động container, 255 qua SSH = mất kết nối;
+    # mã khác (cài dependency hỏng, bị dừng vì hết bộ nhớ) tính cho bài làm.
+    assert rr.classify_exec("docker: Error response", "m4rk", 125, ssh=False)[1] is True
+    assert rr.classify_exec("", "m4rk", 255, ssh=True)[1] is True
+    assert rr.classify_exec("", "m4rk", 255, ssh=False)[1] is False
+    assert rr.classify_exec("npm ci lỗi", "m4rk", 1, ssh=True)[1] is False
+    assert rr.classify_exec("Killed", "m4rk", 137, ssh=True)[1] is False
+
+
+@pytest.mark.skipif(shutil.which("sh") is None, reason="cần sh")
+def test_exec_wrapper_prints_exit_marker_for_any_command_exit(tmp_path: Path) -> None:
+    script = rr.remote_script(
+        _config(tmp_path), "abc", "node:22", "echo chay; exit 125 # tự thoát", 1, marker="m4rk"
+    )
+    wrapper = shlex.split(script)[-2]  # đối số của `sh -c` trong container chạy lệnh
+    done = subprocess.run(
+        ["sh", "-c", wrapper], cwd=tmp_path, capture_output=True, text=True, check=False
+    )
+    assert done.returncode == 125
+    assert rr.classify_exec(done.stdout, "m4rk", 125, ssh=True) == ("chay\n\n", False)
+
+
 def test_remote_script_attaches_shared_test_postgres(tmp_path: Path) -> None:
     # Mặc định tắt: không gắn container nào, không truyền biến.
     plain = rr.remote_script(_config(tmp_path), "abc", "node:22", "npm test", 1)
@@ -186,6 +233,8 @@ def server(
             return 0, dist, b"vite build ok\n"
         if "exit 7" in script:
             return 7, b"FAIL test\n", b""
+        if "docker-hong" in script:  # docker không khởi động được container chạy lệnh
+            return 125, b"docker: Error response from daemon\n", b""
         return 0, b"build ok\n", b""
 
     monkeypatch.setattr(rr, "run_remote", fake_run_remote)
@@ -316,6 +365,19 @@ def test_aico_shot_builds_preview_then_shoots_internal_url(
     assert shot.main([]) == ar.EXIT_UNAVAILABLE
     monkeypatch.delenv("AICO_REMOTE_URL")
     assert shot.main([]) == ar.EXIT_UNAVAILABLE
+
+
+def test_exec_reports_infra_error_as_its_own_field(
+    server: tuple[str, list[dict[str, Any]]],
+) -> None:
+    url, calls = server
+    archive = base64.b64encode(_tar_gz({"a": "1"})).decode()
+    status, failed = _post(f"{url}/exec", {"command": "exit 7", "archive": archive})
+    assert (status, failed["exit_code"], failed["infra_error"]) == (200, 7, False)
+    assert "::aico-exit" in calls[-1]["script"]  # lệnh được bọc để in mã thoát của chính nó
+    status, broken = _post(f"{url}/exec", {"command": "docker-hong", "archive": archive})
+    assert (status, broken["exit_code"], broken["infra_error"]) == (200, 125, True)
+    assert "máy build lỗi" in broken["output"]
 
 
 def test_runner_rejects_bad_requests(server: tuple[str, list[dict[str, Any]]]) -> None:

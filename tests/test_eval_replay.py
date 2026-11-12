@@ -8,12 +8,12 @@ from aico.orchestrator.escalation import EscalationError, merge_escalated, retry
 from aico.orchestrator.workplan import eval_spec, ticket_refs
 from aico.registry import Company
 from aico.rnd.metrics import collect
-from harness import PROJECT, make_harness
+from harness import BASE_SHA, PROJECT, make_harness
 
 S = TicketStatus
 
 
-def eval_ticket(tid: str = "T-1", base: str = "main") -> Ticket:
+def eval_ticket(tid: str = "T-1", base: str = BASE_SHA) -> Ticket:
     return Ticket(
         id=tid,
         title="Chạy lại: sửa nút",
@@ -30,7 +30,10 @@ def test_ticket_refs_for_normal_and_eval_tickets() -> None:
     refs = ticket_refs(eval_ticket(base="a" * 40))
     # Tên trung tính: agent thấy ai/<id> như ticket thường, đích base/<id>.
     assert (refs.work, refs.base, refs.target) == ("ai/T-1", "a" * 40, "base/T-1")
-    assert refs.eval_variant == "thu-prompt" and eval_spec(eval_ticket()) == ("thu-prompt", "main")
+    assert refs.eval_variant == "thu-prompt" and eval_spec(eval_ticket()) == (
+        "thu-prompt",
+        BASE_SHA,
+    )
 
 
 async def test_eval_ticket_runs_only_on_eval_instance_and_never_targets_main(
@@ -85,7 +88,7 @@ SUITE = [
         "title": "Sửa nút",
         "body": "đề bài cũ",
         "labels": ["ui"],
-        "base_sha": "main",
+        "base_sha": BASE_SHA,
         "observed": {"code_rounds": 2, "review_rounds": 2},
     },
     {"id": "T-skip", "skipped": "không đọc được MR"},
@@ -109,7 +112,7 @@ async def test_eval_start_is_idempotent_and_report_groups_runs(company: Company)
 
     block = ticket_block(t)
     assert "eval" not in block.lower() and "nhãn: ui" in block
-    assert eval_spec(t) == ("thu-prompt", "main")
+    assert eval_spec(t) == ("thu-prompt", BASE_SHA)
     with pytest.raises(evalrun.EvalError):
         evalrun.eval_tickets(SUITE, "Tên Sai")
 
@@ -228,12 +231,24 @@ async def test_cleanup_deletes_branch_pair_of_closed_eval_tickets_only(company: 
     await h.runner.run_until_idle()
     assert (await h.tickets.get("T-1")).status is S.ESCALATED
 
-    dry = await evalrun.cleanup(h.tickets, "thu-prompt", delete, dry_run=True)
+    # Đã tới chờ duyệt merge mà chưa chấm acceptance: giữ nhánh (xoá là mất thứ để chấm), trừ
+    # khi bộ chuẩn không có acceptance cho mục đó, hoặc --force.
+    ungraded = await evalrun.cleanup(h.tickets, "thu-prompt", delete)
+    assert "chưa chấm acceptance" in ungraded[0]["skipped"]
+    wanted = frozenset({"T-1"})  # ticket tạo tay: id gốc = id ticket
+    assert (
+        "skipped" in (await evalrun.cleanup(h.tickets, "thu-prompt", delete, need_grade=wanted))[0]
+    )
+    assert {"ai/T-1", "base/T-1"} <= set(files)
+    forced = await evalrun.cleanup(h.tickets, "thu-prompt", delete, dry_run=True, force=True)
+    assert forced == [{"ticket": "T-1", "would_delete": ["ai/T-1", "base/T-1"]}]
+    none = frozenset[str]()  # bộ chuẩn không mục nào có acceptance
+    dry = await evalrun.cleanup(h.tickets, "thu-prompt", delete, dry_run=True, need_grade=none)
     assert dry == [{"ticket": "T-1", "would_delete": ["ai/T-1", "base/T-1"]}]
     assert {"ai/T-1", "base/T-1"} <= set(files)
     assert await evalrun.cleanup(h.tickets, "khac", delete) == []  # biến thể khác
 
-    rows = await evalrun.cleanup(h.tickets, "thu-prompt", delete)
+    rows = await evalrun.cleanup(h.tickets, "thu-prompt", delete, need_grade=none)
     assert rows == [{"ticket": "T-1", "deleted": ["ai/T-1", "base/T-1"]}]
     assert set(files) == {"main", "ai/T-9"}
     event = [e for e in await h.tickets.events("T-1") if e.kind == "eval_cleanup"][-1]
@@ -247,6 +262,51 @@ async def test_cleanup_deletes_branch_pair_of_closed_eval_tickets_only(company: 
     assert entry.ticket_id == "T-1"
     again = await evalrun.cleanup(h.tickets, "thu-prompt", delete)
     assert again == [{"ticket": "T-1", "skipped": "đã dọn"}]
+
+
+async def test_cleanup_keeps_open_escalations_and_stale_cleanup_event_expires(
+    company: Company,
+) -> None:
+    from aico.rnd import evalrun
+
+    h = make_harness(company, eval_only=True)
+    h.gitlab.project(PROJECT).files["main"]["app.py"] = "x\n"
+    delete = evalrun.gateway_deleter(h.gateway)
+    files = h.gitlab.project(PROJECT).files
+    none = frozenset[str]()
+
+    async def clean(**kw: object) -> dict[str, object]:
+        rows = await evalrun.cleanup(h.tickets, "thu-prompt", delete, need_grade=none, **kw)  # type: ignore[arg-type]
+        return rows[0]
+
+    await h.tickets.create(eval_ticket("T-1"), actor="eval")
+    await h.runner.run_until_idle()
+    # Người (không phải `report --close`) từ chối: ticket escalated nhưng còn xử lý tiếp được
+    # (trả lại, chạy tiếp cần nhánh) -> không dọn, trừ khi owner xác nhận bỏ lượt (--escalated).
+    await h.decide("T-1", "rejected", "xem lại")
+    await h.runner.run_until_idle()
+    assert (await h.tickets.get("T-1")).status is S.ESCALATED
+    assert "escalated chưa đóng" in str((await clean())["skipped"])
+    assert {"ai/T-1", "base/T-1"} <= set(files)
+    assert (await clean(dry_run=True, include_escalated=True))["would_delete"]
+    assert (await clean(include_escalated=True))["deleted"] == ["ai/T-1", "base/T-1"]
+    assert (await clean(include_escalated=True))["skipped"] == "đã dọn"
+
+    # Ticket chạy tiếp sau khi dọn (nhánh được tạo lại): event eval_cleanup cũ hết hiệu lực,
+    # không khoá ticket ở "đã dọn" mãi.
+    await h.tickets.transition("T-1", S.IN_PROGRESS, actor="owner")
+    await h.gitlab.create_branch(PROJECT, "base/T-1", BASE_SHA)
+    await h.gitlab.create_branch(PROJECT, "ai/T-1", BASE_SHA)
+    assert (await clean())["skipped"] == "chưa đóng (in_progress)"
+    await h.tickets.transition("T-1", S.ESCALATED, actor="orchestrator")
+    # Quyết định đóng của eval ở vòng trước không còn tính cho lần escalated mới.
+    assert "escalated chưa đóng" in str((await clean())["skipped"])
+    assert (await clean(include_escalated=True))["deleted"] == ["ai/T-1", "base/T-1"]
+    # failed/done là kết thúc hẳn: dọn không cần cờ.
+    await h.tickets.create(eval_ticket("T-2"), actor="eval")
+    await h.tickets.transition("T-2", S.FAILED, actor="t")
+    rows = await evalrun.cleanup(h.tickets, "thu-prompt", delete, dry_run=True)
+    assert rows[1] == {"ticket": "T-2", "would_delete": ["ai/T-2", "base/T-2"]}
 
 
 async def test_cleanup_tool_is_guarded_and_hidden_from_agents(company: Company) -> None:
@@ -267,14 +327,19 @@ async def test_cleanup_tool_is_guarded_and_hidden_from_agents(company: Company) 
         if company.role(role_id).grant_for("gitlab") is not None:
             assert "delete_branch_pair" not in {t.name for t in await h.gateway.tools_for(role_id)}
     assert company.role(evalrun.CLEANUP_ROLE).worker == "system"
-    # Guard chặn tên nhánh ngoài ai/* và repo ngoài danh sách trước khi tới server.
-    for bad in (
-        {**args, "branch": "main"},
-        {**args, "branch": "base/T-9"},
-        {**args, "project": "x/y"},
-    ):
+    # Guard chặn tên nhánh ngoài ai/*, base/* và repo ngoài danh sách trước khi tới server.
+    for bad in ({**args, "branch": "main"}, {**args, "project": "x/y"}):
         with pytest.raises(ToolDenied):
             await h.gateway.call("housekeeper", "gitlab", "delete_branch_pair", bad, ticket_id=None)
+    # base/* qua guard (housekeeper tạo nhánh gốc) nhưng server chỉ nhận tên ai/<id>.
+    with pytest.raises(ToolError, match="chỉ xoá được cặp nhánh"):
+        await h.gateway.call(
+            "housekeeper",
+            "gitlab",
+            "delete_branch_pair",
+            {**args, "branch": "base/T-9"},
+            ticket_id=None,
+        )
     # Qua guard nhưng server từ chối: ai/T-9 là nhánh của ticket thường (không có base/T-9).
     with pytest.raises(ToolError, match="ticket thường"):
         await h.gateway.call("housekeeper", "gitlab", "delete_branch_pair", args, ticket_id=None)
@@ -285,3 +350,54 @@ async def test_cleanup_tool_is_guarded_and_hidden_from_agents(company: Company) 
     rows = await evalrun.cleanup(h.tickets, "thu-prompt", evalrun.gateway_deleter(h.gateway))
     assert "ticket thường" in rows[0]["error"]
     assert not [e for e in await h.tickets.events("T-9") if e.kind == "eval_cleanup"]
+
+
+async def test_only_system_role_creates_base_branch_from_full_sha(company: Company) -> None:
+    import pytest
+
+    from aico.tools import ToolDenied, ToolError
+
+    h = make_harness(company, eval_only=True)
+    files = h.gitlab.project(PROJECT).files
+
+    async def create(role: str, branch: str, ref: str) -> dict[str, object]:
+        args = {"project": PROJECT, "branch": branch, "ref": ref}
+        return await h.gateway.call(role, "gitlab", "create_branch", args, ticket_id=None)
+
+    # Agent (mọi vai trò trừ vai trò hệ thống) không tạo được base/*: không biến nhánh của ticket
+    # thường thành cặp chạy lại (bị chặn vào main, xoá được bằng delete_branch_pair).
+    for role_id in company.roles:
+        if role_id != evalrun_role():
+            with pytest.raises(ToolDenied):
+                await create(role_id, "base/T-7", BASE_SHA)
+    assert "base/T-7" not in files
+    # Vai trò hệ thống: chỉ từ SHA đủ 40 ký tự, chỉ khi ai/<id> chưa có, tên một cấp.
+    for ref in ("main", BASE_SHA[:12]):
+        with pytest.raises(ToolError, match="SHA đủ 40 ký tự"):
+            await create("housekeeper", "base/T-7", ref)
+    with pytest.raises(ToolError, match="không hợp lệ"):
+        await create("housekeeper", "base/a/b", BASE_SHA)
+    await h.gitlab.create_branch(PROJECT, "ai/T-8", "main")  # ticket thường đang làm
+    with pytest.raises(ToolError, match="đã tồn tại"):
+        await create("housekeeper", "base/T-8", BASE_SHA)
+    assert "base/T-8" not in files
+    assert (await create("housekeeper", "base/T-7", BASE_SHA))["created"] is True
+    # Gọi lại (publish vòng sau, khi ai/T-7 đã có): idempotent, không lỗi.
+    await create("coder", "ai/T-7", BASE_SHA)
+    assert (await create("housekeeper", "base/T-7", BASE_SHA))["created"] is False
+
+    # Luồng thật: base/<id> do housekeeper tạo, ai/<id> do coder tạo.
+    await h.tickets.create(eval_ticket("T-1"), actor="eval")
+    await h.runner.run_until_idle()
+    made = [
+        (e.role, e.args.get("branch"))
+        for e in h.audit.entries
+        if e.tool == "create_branch" and e.ticket_id == "T-1" and e.decision == "allow"
+    ]
+    assert made[:2] == [("housekeeper", "base/T-1"), ("coder", "ai/T-1")]
+
+
+def evalrun_role() -> str:
+    from aico.orchestrator.workplan import EVAL_SYSTEM_ROLE
+
+    return EVAL_SYSTEM_ROLE

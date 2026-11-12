@@ -204,23 +204,25 @@ class FakeGitLabBackend:
     def project(self, name: str) -> _FakeProject:
         return self.projects.setdefault(name, _FakeProject())
 
+    def _files_at(self, project: str, ref: str) -> dict[str, str | bytes] | None:
+        """File tại ref; ref là sha thì lấy của branch có commit đó (bản giả không giữ lịch sử)."""
+        p = self.project(project)
+        if ref in p.files:
+            return p.files[ref]
+        branch = next((b for b, cs in p.commits.items() if any(c["id"] == ref for c in cs)), None)
+        return p.files.get(branch) if branch is not None else None
+
     async def get_file(self, project: str, path: str, ref: str) -> str:
         self.calls.append("get_file")
         try:
-            content = self.project(project).files[ref][path]
+            content = (self._files_at(project, ref) or {})[path]
         except KeyError:
             raise GitLabError(f"không có file {path}@{ref}", 404) from None
         return content.decode("utf-8") if isinstance(content, bytes) else content
 
     async def archive(self, project: str, ref: str) -> bytes:
         self.calls.append("archive")
-        p = self.project(project)
-        files = p.files.get(ref)
-        if files is None:  # ref là sha: lấy branch có commit đó (bản giả không giữ lịch sử file)
-            branch = next(
-                (b for b, cs in p.commits.items() if any(c["id"] == ref for c in cs)), None
-            )
-            files = p.files.get(branch) if branch is not None else None
+        files = self._files_at(project, ref)
         if files is None:
             raise GitLabError(f"không có ref {ref}", 404)
         buf = io.BytesIO()
@@ -240,8 +242,16 @@ class FakeGitLabBackend:
         p = self.project(project)
         if branch in p.files:
             raise GitLabError("branch đã tồn tại", 400)
-        p.files[branch] = dict(p.files[ref])
-        p.commits[branch] = list(p.commits[ref])
+        if ref in p.files:
+            p.files[branch] = dict(p.files[ref])
+            p.commits[branch] = list(p.commits[ref])
+            return {"name": branch}
+        # ref là sha: lịch sử tới commit đó, file theo _files_at.
+        files = self._files_at(project, ref)
+        if files is None:
+            raise GitLabError(f"không có ref {ref}", 404)
+        p.files[branch] = dict(files)
+        p.commits[branch] = [{"id": sha} for sha in self._history(project, ref)]
         return {"name": branch}
 
     async def delete_branch(self, project: str, branch: str) -> None:

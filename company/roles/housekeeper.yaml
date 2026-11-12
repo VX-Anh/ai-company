@@ -1,13 +1,15 @@
-# Vai trò hệ thống: dọn cặp nhánh ai/<id> + base/<id> của ticket chạy lại đã chấm (Phòng R&D).
-# Chỉ lệnh `aico eval cleanup` gọi; không gọi model, không agent nào mang vai trò này.
+# Vai trò hệ thống của ticket chạy lại (Phòng R&D): tạo nhánh gốc base/<id> ở commit gốc (builder),
+# đọc SHA + tải mã nguồn nhánh ai/<id> để chấm acceptance (`aico eval grade`), dọn cặp nhánh
+# ai/<id> + base/<id> (`aico eval cleanup`). Không gọi model, không agent nào mang vai trò này:
+# agent không tạo được base/* (dấu hiệu "nhánh này không bao giờ vào main").
 id: housekeeper
 department: rnd
 reports_to: research_lead
 worker: system
 tools:
   - server: gitlab
-    allow: [delete_branch_pair]
-    constraints:                # MCP server kiểm tra lại: chỉ xoá khi base/<id> tồn tại
-      repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien, VX-Anh/ai-trace]
-      branch_pattern: "ai/*"
+    allow: [branch_head, download_archive, create_branch, delete_branch_pair]
+    constraints:                # MCP server kiểm tra lại: base/<id> chỉ tạo từ SHA khi chưa có
+      repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien, VX-Anh/ai-trace]   # ai/<id>; chỉ xoá cặp
+      branch_pattern: "ai/*,base/*"
 max_risk: L2

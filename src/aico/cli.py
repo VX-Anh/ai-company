@@ -74,6 +74,16 @@ async def _eval(settings: Settings, args: argparse.Namespace, suite: list[dict[s
                 evalrun.gateway_deleter(gateway),
                 default_project=settings.default_project,
                 dry_run=args.dry_run,
+                # Có bộ chuẩn: chỉ mục có acceptance mới phải chấm trước khi dọn.
+                need_grade=(
+                    frozenset(
+                        str(i["id"]) for i in suite if i.get("id") and evalrun.acceptance_of(i)
+                    )
+                    if suite
+                    else None
+                ),
+                force=args.force,
+                include_escalated=args.escalated,
             )
             print(json.dumps(rows, ensure_ascii=False, indent=1))
             return 1 if any("error" in r for r in rows) else 0
@@ -91,7 +101,7 @@ async def _eval(settings: Settings, args: argparse.Namespace, suite: list[dict[s
                 remote = RemoteExec(
                     ExecSettings(settings.remote_url, settings.worker_token, client),
                     gateway,
-                    role_id=company.sop("fix_ticket").steps["code"],
+                    role_id=evalrun.CLEANUP_ROLE,  # vai trò hệ thống, không mượn quyền của agent
                 )
 
                 async def run_acceptance(
@@ -100,8 +110,9 @@ async def _eval(settings: Settings, args: argparse.Namespace, suite: list[dict[s
                     ref: str,
                     commands: Mapping[str, str],
                     image: str | None,
-                ) -> dict[str, dict[str, Any]]:
-                    return await remote.run(ticket_id, project, ref, commands, image=image)
+                ) -> tuple[str | None, dict[str, dict[str, Any]]]:
+                    done = await remote.run(ticket_id, project, ref, commands, image=image)
+                    return done.sha, done.steps
 
                 rows = await evalrun.grade(
                     store,
@@ -251,6 +262,17 @@ def main(argv: list[str] | None = None) -> int:
     )
     ev_clean.add_argument("--variant", required=True)
     ev_clean.add_argument("--dry-run", action="store_true", help="chỉ liệt kê, không xoá")
+    ev_clean.add_argument(
+        "--suite", help="bộ chuẩn: chỉ lượt của mục có acceptance mới phải chấm trước khi dọn"
+    )
+    ev_clean.add_argument(
+        "--force", action="store_true", help="dọn cả lượt đã tới chờ merge mà chưa chấm acceptance"
+    )
+    ev_clean.add_argument(
+        "--escalated",
+        action="store_true",
+        help="dọn cả ticket escalated không do report --close đóng (bỏ lượt đó)",
+    )
     args = parser.parse_args(argv)
     for stream in (sys.stdout, sys.stderr):
         if isinstance(stream, io.TextIOWrapper):

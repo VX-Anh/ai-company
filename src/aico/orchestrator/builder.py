@@ -35,6 +35,7 @@ from aico.orchestrator.state import TicketState
 from aico.orchestrator.workplan import (
     ARCHITECTURE_DOC,
     ARCHITECTURE_LABEL,
+    EVAL_SYSTEM_ROLE,
     WorkItem,
     clamp_owns,
     eval_spec,
@@ -259,15 +260,18 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         base = ticket_refs(ticket, deps.target_branch).base
         return await file_action(tid, project, base, ARCHITECTURE_DOC) == "create"
 
-    async def git(tid: str, tool: str, args: dict[str, Any]) -> Any:
-        """Gọi tool Git của bước code, thử lại khi lỗi (GitHub trễ ref, mạng chập chờn).
+    async def git(tid: str, tool: str, args: dict[str, Any], *, role: str | None = None) -> Any:
+        """Gọi tool Git của bước code (hoặc của `role`), thử lại khi lỗi (GitHub trễ ref, mạng
+        chập chờn).
 
         create_branch, push (theo idempotency_key), open_merge_request đều idempotent nên thử
         lại không tạo bản trùng.
         """
         for delay in (*deps.git_retry_delays, None):
             try:
-                return await deps.gateway.call(deps.role("code"), GITLAB, tool, args, ticket_id=tid)
+                return await deps.gateway.call(
+                    role or deps.role("code"), GITLAB, tool, args, ticket_id=tid
+                )
             except ToolError:
                 if delay is None:
                     raise
@@ -294,10 +298,12 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
         try:
             if refs.eval_variant is not None:
                 # Chạy lại: nhánh đích của MR dựng ở commit gốc để diff chỉ gồm phần agent làm.
+                # Tạo bằng vai trò hệ thống, trước ai/<id>: vai trò của agent không có base/*.
                 await git(
                     tid,
                     "create_branch",
                     {"project": project, "branch": refs.target, "ref": refs.base},
+                    role=EVAL_SYSTEM_ROLE,
                 )
             await git(
                 tid,

@@ -9,6 +9,7 @@ from mcp_gitlab.backend import FakeGitLabBackend, GitLabError
 from mcp_gitlab.server import build_server
 from mcp_gitlab.tools import ConstraintError, Constraints, GitLabTools
 
+SHA = "c" * 40
 PROJECT = "group/pilot-repo"
 
 
@@ -190,6 +191,7 @@ def test_replay_base_branch_constraints() -> None:
 async def test_replay_branch_cannot_open_or_merge_into_main() -> None:
     backend = FakeGitLabBackend()
     backend.project(PROJECT).files["main"]["a.py"] = "x"
+    backend.project(PROJECT).commits["main"].append({"id": SHA, "message": "khởi tạo"})
 
     async def verify(approval_id: str, project: str, iid: int) -> tuple[bool, str]:
         return True, ""
@@ -208,7 +210,7 @@ async def test_replay_branch_cannot_open_or_merge_into_main() -> None:
     mr = await tools.open_merge_request(PROJECT, "ai/T-1", "x")
     assert mr["target_branch"] == "main"
     # Ticket chạy lại: có base/T-2 thì ai/T-2 không mở MR vào main, cũng không merge được.
-    await tools.create_branch(PROJECT, "base/T-2")
+    await tools.create_branch(PROJECT, "base/T-2", SHA)
     await tools.create_branch(PROJECT, "ai/T-2")
     with pytest.raises(ConstraintError, match="base/T-2"):
         await tools.open_merge_request(PROJECT, "ai/T-2", "x")
@@ -245,6 +247,7 @@ async def test_merge_base_on_fake_backend() -> None:
 def _replay_tools(**kw: object) -> tuple[GitLabTools, FakeGitLabBackend]:
     backend = FakeGitLabBackend()
     backend.project(PROJECT).files["main"]["a.py"] = "x"
+    backend.project(PROJECT).commits["main"].append({"id": SHA, "message": "khởi tạo"})
     constraints = Constraints(
         allowed_projects=(PROJECT,),
         branch_pattern="ai/*,base/*",
@@ -254,10 +257,31 @@ def _replay_tools(**kw: object) -> tuple[GitLabTools, FakeGitLabBackend]:
     return GitLabTools(backend, constraints), backend
 
 
+async def test_base_branch_needs_full_sha_and_no_existing_work_branch() -> None:
+    tools, backend = _replay_tools()
+    # base/<x> đánh dấu ai/<x> là nhánh không vào main và xoá được: chỉ tạo ở commit cố định,
+    # trước khi ai/<x> tồn tại (không biến nhánh của ticket đang làm thành cặp đó).
+    for ref in ("main", SHA[:10], "ai/T-1"):
+        with pytest.raises(ConstraintError, match="SHA đủ 40 ký tự"):
+            await tools.create_branch(PROJECT, "base/T-5", ref)
+    with pytest.raises(ConstraintError, match="không hợp lệ"):
+        await tools.create_branch(PROJECT, "base/T-5/x", SHA)
+    await tools.create_branch(PROJECT, "ai/T-1")
+    with pytest.raises(ConstraintError, match="đã tồn tại"):
+        await tools.create_branch(PROJECT, "base/T-1", SHA)
+    assert "base/T-1" not in backend.project(PROJECT).files
+    assert (await tools.create_branch(PROJECT, "base/T-5", SHA))["created"]
+    await tools.create_branch(PROJECT, "ai/T-5", SHA)
+    # Đã có thì trả created False (publish gọi lại mỗi vòng), kể cả khi ai/T-5 đã tồn tại.
+    assert not (await tools.create_branch(PROJECT, "base/T-5", SHA))["created"]
+    with pytest.raises(ConstraintError, match=r"^không push vào base/\*$"):
+        await tools.push(PROJECT, "base/T-5", "x", [{"path": "a", "content": "b"}], "k")
+
+
 async def test_delete_branch_pair_removes_only_replay_pair() -> None:
     tools, backend = _replay_tools()
     await tools.create_branch(PROJECT, "ai/T-1")  # ticket thường
-    await tools.create_branch(PROJECT, "base/T-2")
+    await tools.create_branch(PROJECT, "base/T-2", SHA)
     await tools.create_branch(PROJECT, "ai/T-2")
     await tools.push(PROJECT, "ai/T-2", "sửa", [{"path": "a.py", "content": "y"}], "k")
     head = (await tools.branch_head(PROJECT, "ai/T-2"))["sha"]
@@ -280,7 +304,7 @@ async def test_delete_branch_pair_removes_only_replay_pair() -> None:
 )
 async def test_delete_branch_pair_refuses_anything_but_ai_id(branch: str) -> None:
     tools, backend = _replay_tools()
-    await tools.create_branch(PROJECT, "base/T-2")
+    await tools.create_branch(PROJECT, "base/T-2", SHA)
     await tools.create_branch(PROJECT, "ai/T-2")
     with pytest.raises(ConstraintError):
         await tools.delete_branch_pair(PROJECT, branch)
@@ -296,7 +320,7 @@ async def test_delete_branch_pair_refuses_normal_ticket_branch_and_other_repo() 
     with pytest.raises(ConstraintError):
         await tools.delete_branch_pair("other/repo", "ai/T-1")
     # base/T-10 không phải nhánh gốc của ai/T-1 (so khớp cả tên, không theo tiền tố).
-    await tools.create_branch(PROJECT, "base/T-10")
+    await tools.create_branch(PROJECT, "base/T-10", SHA)
     with pytest.raises(ConstraintError, match="ticket thường"):
         await tools.delete_branch_pair(PROJECT, "ai/T-1")
     assert "ai/T-1" in backend.project(PROJECT).files
@@ -312,7 +336,7 @@ async def test_delete_branch_pair_needs_base_pattern_and_never_merge_target() ->
         await tools.delete_branch_pair(PROJECT, "ai/T-2")
     # Cấu hình sai (base/* là đích merge): vẫn không xoá nhánh là đích merge.
     odd, odd_backend = _replay_tools(merge_targets=("main", "base/*"))
-    await odd.create_branch(PROJECT, "base/T-2")
+    await odd.create_branch(PROJECT, "base/T-2", SHA)
     await odd.create_branch(PROJECT, "ai/T-2")
     with pytest.raises(ConstraintError, match="không bao giờ xoá"):
         await odd.delete_branch_pair(PROJECT, "ai/T-2")
@@ -321,7 +345,7 @@ async def test_delete_branch_pair_needs_base_pattern_and_never_merge_target() ->
 
 async def test_delete_branch_pair_refuses_open_mr_to_other_target() -> None:
     tools, backend = _replay_tools()
-    await tools.create_branch(PROJECT, "base/T-2")
+    await tools.create_branch(PROJECT, "base/T-2", SHA)
     await tools.create_branch(PROJECT, "ai/T-2")
     await backend.create_mr(PROJECT, "ai/T-2", "main", "x", "")  # MR lọt vào main từ ngoài aico
     with pytest.raises(ConstraintError, match="MR mở"):
@@ -331,7 +355,7 @@ async def test_delete_branch_pair_refuses_open_mr_to_other_target() -> None:
 
 async def test_delete_branch_pair_resumes_after_partial_failure() -> None:
     tools, backend = _replay_tools()
-    await tools.create_branch(PROJECT, "base/T-2")
+    await tools.create_branch(PROJECT, "base/T-2", SHA)
     await tools.create_branch(PROJECT, "ai/T-2")
     # Lỗi ở nhánh làm việc: nhánh gốc còn nguyên (ai/T-2 vẫn bị chặn vào main).
     backend.delete_fails = {"ai/T-2"}

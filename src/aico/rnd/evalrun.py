@@ -13,7 +13,8 @@ MR vào base/<id>, không merge. Tiêu đề, tên nhánh và prompt không lộ
 `eval_acceptance`. Chấm sau khi agent xong; agent không thấy lệnh hay kết quả.
 
 `aico eval cleanup`: xoá cặp nhánh ai/<id> + base/<id> của ticket chạy lại đã đóng (tool
-gitlab.delete_branch_pair qua guard + audit, vai trò hệ thống `housekeeper`).
+gitlab.delete_branch_pair qua guard + audit, vai trò hệ thống `housekeeper`). Đã đóng = done/failed,
+hoặc escalated do chính `report --close` đóng; lượt đã tới chờ duyệt merge mà chưa chấm thì giữ.
 """
 
 from __future__ import annotations
@@ -24,9 +25,9 @@ from collections.abc import Awaitable, Callable, Mapping
 from statistics import mean
 from typing import Any
 
-from aico.core import Artifact, Ticket, TicketStatus
+from aico.core import Artifact, Event, Ticket, TicketStatus
 from aico.intake import new_ticket_id
-from aico.orchestrator.workplan import EVAL_LABEL, eval_spec, ticket_refs
+from aico.orchestrator.workplan import EVAL_LABEL, EVAL_SYSTEM_ROLE, eval_spec, ticket_refs
 from aico.rnd.metrics import ticket_metrics
 from aico.tickets import TicketStore
 from aico.tools import ToolGateway
@@ -35,10 +36,13 @@ S = TicketStatus
 _VARIANT = re.compile(r"[a-z0-9][a-z0-9-]{0,40}")
 # Ticket xong lượt chạy lại: tới chờ duyệt merge (review + test đạt) hoặc dừng.
 FINISHED = frozenset({S.AWAITING_MERGE_APPROVAL, S.ESCALATED, S.FAILED, S.DONE})
-# Ticket đã đóng hẳn (không còn bước nào dùng nhánh): mới được dọn nhánh.
-CLOSED = frozenset({S.ESCALATED, S.FAILED, S.DONE})
+# Trạng thái dừng của một lượt (còn chấm được nếu đã tới chờ duyệt merge và chưa dọn nhánh).
+STOPPED = frozenset({S.ESCALATED, S.FAILED, S.DONE})
+# Trạng thái kết thúc hẳn. ESCALATED không nằm ở đây: người còn xử lý tiếp được (trả lại, chạy
+# tiếp) và khi đó cần nhánh; nó chỉ tính là đã đóng khi do chính `report --close` đóng.
+TERMINAL = frozenset({S.FAILED, S.DONE})
 CLEANUP_EVENT = "eval_cleanup"
-CLEANUP_ROLE = "housekeeper"
+CLEANUP_ROLE = EVAL_SYSTEM_ROLE
 # (ticket_id, project, nhánh ai/<id>) -> kết quả tool delete_branch_pair.
 BranchDeleter = Callable[[str, str, str], Awaitable[dict[str, Any]]]
 
@@ -46,10 +50,11 @@ BranchDeleter = Callable[[str, str, str], Awaitable[dict[str, Any]]]
 ACCEPTANCE_EVENT = "eval_acceptance"
 ACCEPTANCE_STEPS = ("build", "test")  # thứ tự chạy; build hỏng thì không chạy test
 OUTPUT_TAIL_CHARS = 2000
-# (ticket_id, project, ref, {bước: lệnh}, image) -> {bước: {exit_code, output, ...}}; lỗi hạ tầng
-# thì raise (không tính là hỏng acceptance).
+# (ticket_id, project, ref, {bước: lệnh}, image) -> (SHA đã chấm, {bước: {exit_code, output,
+# ...}}); lỗi hạ tầng thì raise (không tính là hỏng acceptance).
 AcceptanceRunner = Callable[
-    [str, str, str, Mapping[str, str], str | None], Awaitable[dict[str, dict[str, Any]]]
+    [str, str, str, Mapping[str, str], str | None],
+    Awaitable[tuple[str | None, dict[str, dict[str, Any]]]],
 ]
 
 
@@ -70,11 +75,10 @@ def eval_tickets(suite: list[dict[str, Any]], variant: str, repeat: int = 1) -> 
         missing = [k for k in ("id", "project", "title", "base_sha") if not item.get(k)]
         if missing:
             raise EvalError(f"mục {item.get('id', '?')} thiếu {', '.join(missing)}")
-        base = str(item["base_sha"])
-        if re.fullmatch(r"[0-9a-f]{7,39}", base):
-            raise EvalError(
-                f"mục {item['id']}: base_sha phải đủ 40 ký tự (SHA ngắn bị coi là tên nhánh)"
-            )
+        if not re.fullmatch(r"[0-9a-f]{40}", str(item["base_sha"])):
+            # Tên nhánh trôi theo thời gian, SHA ngắn bị coi là tên nhánh; mcp-gitlab cũng chỉ
+            # tạo nhánh gốc base/<id> từ SHA đủ.
+            raise EvalError(f"mục {item['id']}: base_sha phải là SHA đủ 40 ký tự")
         labels = [x for x in item.get("labels") or [] if str(x).lower() != EVAL_LABEL]
         for n in range(1, repeat + 1):
             out.append(
@@ -135,6 +139,35 @@ def _acceptance_stats(runs: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+def _last_status(events: list[Event]) -> int:
+    """Vị trí event đổi trạng thái gần nhất (-1 nếu chưa có)."""
+    return max((i for i, e in enumerate(events) if e.kind == "status"), default=-1)
+
+
+def branches_cleaned(events: list[Event]) -> bool:
+    """Nhánh đã dọn và ticket chưa đổi trạng thái từ đó. Event `eval_cleanup` cũ hơn lần đổi trạng
+    thái gần nhất hết hiệu lực: ticket chạy tiếp thì nhánh được tạo lại và phải dọn lại."""
+    last = _last_status(events)
+    return any(e.kind == CLEANUP_EVENT for e in events[last + 1 :])
+
+
+def closed_by_eval(events: list[Event]) -> bool:
+    """Lần đổi trạng thái gần nhất là chờ duyệt merge -> escalated, do quyết định `rejected` của
+    actor "eval" (`report --close`) ghi trong lúc chờ: lượt chạy được đóng có chủ ý. Ticket
+    escalated vì lý do khác, hoặc được người mở lại rồi escalated lần nữa, không tính."""
+    last = _last_status(events)
+    if last < 0:
+        return False
+    closing = events[last]
+    if closing.to_status is not S.ESCALATED or closing.from_status is not S.AWAITING_MERGE_APPROVAL:
+        return False
+    waiting = events[_last_status(events[:last]) + 1 : last]
+    asked = [e for e in waiting if e.kind == "resume_requested"]
+    return (
+        bool(asked) and asked[-1].actor == "eval" and asked[-1].data.get("decision") == "rejected"
+    )
+
+
 def acceptance_of(item: Mapping[str, Any]) -> dict[str, str]:
     """Lệnh chấm của một mục bộ chuẩn theo thứ tự chạy ({} nếu mục không khai báo)."""
     spec = item.get("acceptance")
@@ -161,8 +194,9 @@ async def grade(
 
     Chỉ chấm lượt Reviewer/Tester đã cho đạt (đang chờ duyệt merge, hoặc đã đóng mà chưa dọn
     nhánh): đó là nơi cần biết review có dễ dãi không. Lệnh lấy từ bộ chuẩn (owner soạn), chạy trong
-    container dùng một lần không mạng của máy build. Kết quả ghi event `eval_acceptance`; lỗi hạ
-    tầng không ghi (không tính là hỏng), chạy lại lệnh sẽ chấm tiếp.
+    container dùng một lần không mạng của máy build, trên đúng một commit (`sha` trong event).
+    Kết quả ghi event `eval_acceptance`; lỗi hạ tầng không ghi (không tính là hỏng), chạy lại lệnh
+    sẽ chấm tiếp.
     """
     specs = {str(i["id"]): i for i in suite if i.get("id") and "skipped" not in i}
     commands = {origin: acceptance_of(item) for origin, item in specs.items()}
@@ -176,12 +210,12 @@ async def grade(
             continue  # mục không khai báo acceptance (hoặc không còn trong bộ chuẩn)
         events = await store.events(ticket.id)
         reached = any(e.to_status is S.AWAITING_MERGE_APPROVAL for e in events)
-        if not reached or ticket.status not in (S.AWAITING_MERGE_APPROVAL, *CLOSED):
+        if not reached or ticket.status not in (S.AWAITING_MERGE_APPROVAL, *STOPPED):
             continue
         row: dict[str, Any] = {"ticket": ticket.id, "origin": origin}
         out.append(row)
         project = ticket.project or default_project
-        if any(e.kind == CLEANUP_EVENT for e in events):
+        if branches_cleaned(events):
             row["skipped"] = "đã dọn nhánh"
         elif not regrade and any(e.kind == ACCEPTANCE_EVENT for e in events):
             row["skipped"] = "đã chấm"
@@ -191,7 +225,7 @@ async def grade(
             image = (specs[origin].get("acceptance") or {}).get("image")
             ref = ticket_refs(ticket).work
             try:
-                steps = await run(
+                sha, steps = await run(
                     ticket.id, project, ref, commands[origin], str(image) if image else None
                 )
             except Exception as exc:  # máy build lỗi: không phải lỗi của bài làm
@@ -210,12 +244,13 @@ async def grade(
                 name in summary and summary[name]["exit_code"] == 0 for name in commands[origin]
             )
             row["passed"] = passed
+            row["sha"] = sha
             row["steps"] = {name: s["exit_code"] for name, s in summary.items()}
             await store.record(
                 ticket.id,
                 ACCEPTANCE_EVENT,
                 actor="eval",
-                data={"passed": passed, "ref": ref, "steps": summary},
+                data={"passed": passed, "ref": ref, "sha": sha, "steps": summary},
             )
     return out
 
@@ -332,12 +367,21 @@ async def cleanup(
     *,
     default_project: str | None = None,
     dry_run: bool = False,
+    need_grade: frozenset[str] | None = None,
+    force: bool = False,
+    include_escalated: bool = False,
 ) -> list[dict[str, Any]]:
     """Dọn nhánh của các ticket chạy lại đã đóng của biến thể; mỗi ticket một dòng kết quả.
 
-    Chỉ ticket có nhãn + artifact eval (cùng vị từ với claim) và đã đóng hẳn: ticket đang chạy
-    hay còn chờ chấm vẫn cần nhánh. Tên nhánh lấy từ `ticket_refs`, không nhận từ người gọi.
-    Dọn xong ghi event `eval_cleanup` để lần sau bỏ qua; lỗi thì không ghi, chạy lại sẽ thử tiếp.
+    Chỉ ticket có nhãn + artifact eval (cùng vị từ với claim) và đã đóng: done/failed, hoặc
+    escalated do `report --close` đóng (`closed_by_eval`). Ticket escalated vì lý do khác còn có
+    thể được người xử lý tiếp nên giữ nhánh, trừ khi `include_escalated` (owner xác nhận bỏ).
+    Lượt đã tới chờ duyệt merge mà chưa có `eval_acceptance` cũng giữ: xoá nhánh là mất thứ để
+    chấm. `need_grade` (id ticket gốc có acceptance trong bộ chuẩn) thu hẹp điều kiện này về các
+    mục thật sự cần chấm; không đưa bộ chuẩn thì coi mọi lượt đều cần. `force` bỏ qua điều kiện.
+    Tên nhánh lấy từ `ticket_refs`, không nhận từ người gọi. Dọn xong ghi event `eval_cleanup`;
+    event này hết hiệu lực khi ticket đổi trạng thái sau đó (`branches_cleaned`). Lỗi thì không
+    ghi, chạy lại sẽ thử tiếp.
     """
     out: list[dict[str, Any]] = []
     for ticket in await store.list():
@@ -348,10 +392,21 @@ async def cleanup(
         out.append(row)
         refs = ticket_refs(ticket)
         project = ticket.project or default_project
-        if ticket.status not in CLOSED or ticket.pending_resume:
+        if ticket.status not in STOPPED or ticket.pending_resume:
             row["skipped"] = f"chưa đóng ({ticket.status.value})"
-        elif any(e.kind == CLEANUP_EVENT for e in await store.events(ticket.id)):
+            continue
+        events = await store.events(ticket.id)
+        reached = any(e.to_status is S.AWAITING_MERGE_APPROVAL for e in events)
+        graded = any(e.kind == ACCEPTANCE_EVENT for e in events)
+        wants_grade = need_grade is None or _origin(ticket) in need_grade
+        if branches_cleaned(events):
             row["skipped"] = "đã dọn"
+        elif ticket.status is S.ESCALATED and not include_escalated and not closed_by_eval(events):
+            row["skipped"] = (
+                "escalated chưa đóng (report --close, hoặc --escalated nếu bỏ lượt này)"
+            )
+        elif reached and not graded and wants_grade and not force:
+            row["skipped"] = "chưa chấm acceptance (eval grade trước, hoặc --force)"
         elif not project:
             row["skipped"] = "ticket không có repo"
         elif dry_run:

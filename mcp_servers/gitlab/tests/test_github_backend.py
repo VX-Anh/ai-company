@@ -348,7 +348,7 @@ async def test_delete_branch_pair_on_github() -> None:
         ),
     )
     await tools.create_branch(REPO, "ai/T-1")
-    await tools.create_branch(REPO, "base/T-2")
+    await tools.create_branch(REPO, "base/T-2", gh.refs["main"])
     await tools.create_branch(REPO, "ai/T-2")
     main = gh.refs["main"]
     got = await tools.delete_branch_pair(REPO, "ai/T-2")
