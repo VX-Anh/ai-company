@@ -62,7 +62,7 @@ services:
       # GUI web (aico-office) gọi API từ trình duyệt
       AICO_CORS_ORIGINS: ${AICO_CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173}
       # Máy build từ xa (server): agent chạy build/test bằng aico-remote; MR của các repo trong
-      # AICO_PREVIEW_PROJECTS được dựng bản xem trước. Để trống REMOTE_SSH_TARGET thì tắt.
+      # AICO_PREVIEW_PROJECTS được dựng bản xem trước. Để trống REMOTE_SSH_TARGET (và REMOTE_BACKEND=ssh) thì tắt.
       AICO_REMOTE_URL: ${AICO_REMOTE_URL:-http://remote-runner:8500}
       AICO_PREVIEW_PROJECTS: ${AICO_PREVIEW_PROJECTS:-}
       # Phòng R&D: dò công nghệ tự động mỗi N ngày khi hệ rảnh và hạn mức thấp; 0 (mặc định) là tắt.
@@ -145,6 +145,9 @@ services:
       dockerfile: deploy/docker/remote.Dockerfile
     image: ai-company/remote-runner:dev
     environment:
+      # ssh: Docker trên server; local: Docker build-docker trên PC (bật profile localbuild).
+      REMOTE_BACKEND: ${REMOTE_BACKEND:-ssh}
+      DOCKER_HOST: tcp://build-docker:2375
       REMOTE_SSH_TARGET: ${REMOTE_SSH_TARGET:-}
       REMOTE_SSH_KEY_FILE: /run/secrets/remote_ssh_key
       REMOTE_KNOWN_HOSTS_FILE: /run/secrets/remote_known_hosts
@@ -164,7 +167,22 @@ services:
       - previews:/data/previews
     ports:
       - "127.0.0.1:8500:8500"   # bản xem trước chỉ mở cho máy này
-    networks: [workers]
+    networks: [workers, build]
+    restart: unless-stopped
+
+  # Docker riêng cho build/test của agent trên PC (REMOTE_BACKEND=local): code của repo pilot
+  # chạy trong container lồng trong đây, không thấy Docker đang chạy aico, Postgres hay secret.
+  # privileged là yêu cầu của dind. Cổng 2375 không TLS, chỉ trên mạng `build` (chỉ runner).
+  build-docker:
+    image: docker:29-dind
+    profiles: [localbuild]
+    privileged: true
+    environment:
+      DOCKER_TLS_CERTDIR: ""
+    command: ["--host=tcp://0.0.0.0:2375", "--tls=false"]
+    volumes:
+      - build-docker:/var/lib/docker   # image, cache npm/uv/Chromium giữ qua lần khởi động
+    networks: [build]
     restart: unless-stopped
 
   # Cloudflare Tunnel: đưa GUI, API (/api) và bản xem trước ra tên miền mà không mở cổng nào.
@@ -240,6 +258,8 @@ networks:
   # GĐ1: sandbox OpenHands và model relay; không có đường ra Internet.
   sandbox:
     internal: true
+  # Chỉ remote-runner và build-docker; container build lồng trong dind ra Internet qua NAT riêng.
+  build: {}
 
 volumes:
   pgdata: {}
@@ -249,6 +269,7 @@ volumes:
   pixel-data: {}
   rea-data: {}
   previews: {}
+  build-docker: {}
 
 secrets:
   gitlab_token: {file: ./secrets/gitlab_token}

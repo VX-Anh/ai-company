@@ -7,6 +7,7 @@ import importlib.util
 import io
 import json
 import os
+import shutil
 import sys
 import tarfile
 import threading
@@ -144,6 +145,27 @@ def test_ssh_command_pins_host_key(tmp_path: Path) -> None:
     assert cmd[:3] == ["ssh", "-i", "/k"]
     assert "StrictHostKeyChecking=yes" in cmd and "UserKnownHostsFile=/known" in cmd
     assert cmd[-2] == "aico@server" and cmd[-1] == "sh -c 'echo '\"'\"'a b'\"'\"''"
+
+
+def test_local_backend_runs_script_without_ssh(tmp_path: Path) -> None:
+    ssh = _config(tmp_path)
+    assert ssh.backend == "ssh" and ssh.enabled
+    assert rr.shell_command(ssh, "true")[0] == "ssh"
+    assert not rr.Config({}).enabled  # chưa đặt đích SSH: tắt như cũ
+
+    local = rr.Config({"REMOTE_BACKEND": "local"})
+    assert local.enabled
+    # Docker build qua DOCKER_HOST của tiến trình, không ssh, không cần khoá.
+    assert rr.shell_command(local, "echo 'a b'") == ["sh", "-c", "echo 'a b'"]
+    with pytest.raises(ValueError, match="REMOTE_BACKEND"):
+        rr.Config({"REMOTE_BACKEND": "docker"})
+
+
+@pytest.mark.skipif(shutil.which("sh") is None, reason="cần sh")
+def test_local_backend_feeds_archive_to_stdin() -> None:
+    local = rr.Config({"REMOTE_BACKEND": "local"})
+    code, out, _ = rr.run_remote(local, "wc -c", "x", b"12345", timeout=30)
+    assert code == 0 and out.strip() == b"5"
 
 
 @pytest.fixture
@@ -631,22 +653,62 @@ async def test_site_watcher_rebuilds_when_main_changes_outside_aico(company: Com
     assert len(jobs) == 2
 
 
-async def test_site_watcher_skips_failed_sha_and_survives_read_errors(company: Company) -> None:
+async def test_site_watcher_retries_failed_build_with_backoff(company: Company) -> None:
     calls: list[str] = []
+    ok = {"value": False}
+    now = {"t": 0.0}
 
     def runner(request: httpx.Request) -> httpx.Response:
         calls.append("build")
+        if ok["value"]:
+            return httpx.Response(200, json={"ok": True, "url": "http://x/aico-office/"})
         return httpx.Response(200, json={"ok": False, "error": "build lỗi"})
 
     gitlab = FakeGitLabBackend()
     h = make_harness(company, gitlab=gitlab)
-    watcher = SiteWatcher(_previewer(h, runner), h.gateway, (PROJECT,))
+    watcher = SiteWatcher(
+        _previewer(h, runner),
+        h.gateway,
+        (PROJECT,),
+        retry_seconds=300,
+        max_retry_seconds=600,
+        clock=lambda: now["t"],
+    )
     # main chưa có commit: tool báo lỗi, watcher bỏ qua lượt này.
     assert await watcher.check_once() == []
     assert calls == []
-    gitlab.project(PROJECT).commits["main"].append({"id": "c" * 40, "message": "x"})
+    main = gitlab.project(PROJECT).commits["main"]
+    main.append({"id": "c" * 40, "message": "x"})
     assert await watcher.check_once() == []
-    assert calls == ["build"]
-    # Build lỗi với sha này: chờ commit mới, không dựng lại mỗi chu kỳ.
+    assert len(calls) == 1
+    # Build lỗi: chưa tới hạn thì không gọi lại mỗi chu kỳ.
+    now["t"] = 299
     assert await watcher.check_once() == []
-    assert calls == ["build"]
+    assert len(calls) == 1
+    # Tới hạn 300 giây: thử lại cùng sha, lỗi tiếp thì chờ gấp đôi (600, cũng là trần).
+    now["t"] = 300
+    assert await watcher.check_once() == []
+    assert len(calls) == 2
+    now["t"] = 899
+    assert await watcher.check_once() == []
+    assert len(calls) == 2
+    now["t"] = 900
+    assert await watcher.check_once() == []
+    assert len(calls) == 3
+    # Trần 600 giây: lần lỗi thứ ba cũng chờ 600 chứ không 1200.
+    now["t"] = 1500
+    ok["value"] = True
+    assert await watcher.check_once() == [PROJECT]
+    assert len(calls) == 4
+    # Đã dựng xong: main không đổi thì không dựng lại.
+    now["t"] = 10_000
+    assert await watcher.check_once() == []
+    assert len(calls) == 4
+    # Commit mới khi đang chờ thử lại sha cũ: dựng ngay, không chờ hết hạn.
+    ok["value"] = False
+    main.append({"id": "d" * 40, "message": "y"})
+    assert await watcher.check_once() == []
+    assert len(calls) == 5
+    main.append({"id": "e" * 40, "message": "z"})
+    assert await watcher.check_once() == []
+    assert len(calls) == 6

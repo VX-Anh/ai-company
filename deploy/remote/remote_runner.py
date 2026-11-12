@@ -1,12 +1,17 @@
-"""Máy build từ xa: chạy build/test và dựng bản xem trước GUI trên server qua SSH + Docker.
+"""Máy build: chạy build/test và dựng bản xem trước GUI trong container Docker dùng một lần.
 
-Chạy trên PC (chỉ thư viện chuẩn + ssh). Server chỉ làm compute: nhận mã nguồn qua stdin của
-ssh, chạy trong container dùng một lần, không nhận secret nào. Mỗi lần chạy có hai pha trên
-cùng một volume tạm:
+Chạy trên PC (chỉ thư viện chuẩn + ssh/docker CLI). Hai chế độ (REMOTE_BACKEND):
+- ssh (mặc định): Docker trên server qua SSH; server chỉ làm compute, nhận mã nguồn qua stdin
+  của ssh, không nhận secret nào;
+- local: Docker riêng cho build ngay trên PC (service build-docker, docker:dind, chỉ nối với
+  runner qua DOCKER_HOST), không đụng Docker đang chạy aico, Postgres và secret.
+
+Mỗi lần chạy có hai pha trên cùng một volume tạm:
 - setup (có mạng): giải nén, cài dependency theo lockfile (npm ci, uv sync);
 - run (mạng --internal riêng, không ra Internet): lệnh build/test của agent hoặc bản xem trước.
 
 Biến môi trường:
+- REMOTE_BACKEND: ssh | local; local dùng DOCKER_HOST của tiến trình (vd tcp://build-docker:2375)
 - REMOTE_SSH_TARGET (vd aico@14.161.5.155), REMOTE_SSH_KEY_FILE, REMOTE_KNOWN_HOSTS_FILE
 - RUNNER_TOKEN_FILE: token chung với aico và worker (header Authorization: Bearer)
 - REMOTE_IMAGES: tên=image, cách nhau dấu phẩy; tên đầu tiên là mặc định
@@ -98,6 +103,9 @@ def parse_images(raw: str) -> dict[str, str]:
 class Config:
     def __init__(self, env: dict[str, str] | None = None) -> None:
         env = dict(os.environ if env is None else env)
+        self.backend = env.get("REMOTE_BACKEND", "ssh").strip().lower() or "ssh"
+        if self.backend not in ("ssh", "local"):
+            raise ValueError(f"REMOTE_BACKEND phải là ssh hoặc local, không phải {self.backend!r}")
         self.target = env.get("REMOTE_SSH_TARGET", "")
         self.key_file = env.get("REMOTE_SSH_KEY_FILE", "")
         self.known_hosts = env.get("REMOTE_KNOWN_HOSTS_FILE", "")
@@ -118,6 +126,11 @@ class Config:
         public = urlsplit(self.public_url).hostname or ""
         # Tên miền đi qua tunnel ra Internet: không nhận POST (chạy lệnh, dựng bản xem trước).
         self.public_hosts = set(self.hosts) | ({public} if public not in LOCAL_HOSTS else set())
+
+    @property
+    def enabled(self) -> bool:
+        """Có máy build để chạy: Docker tại chỗ, hoặc đã đặt đích SSH."""
+        return self.backend == "local" or bool(self.target)
 
 
 # Pha run được đổi sang user khác (vd. PostgreSQL thật cho test tích hợp không chạy bằng root,
@@ -269,6 +282,13 @@ def ssh_command(cfg: Config, script: str) -> list[str]:
     ]
 
 
+def shell_command(cfg: Config, script: str) -> list[str]:
+    """Lệnh chạy script trên máy build: sh tại chỗ (Docker build qua DOCKER_HOST) hoặc ssh."""
+    if cfg.backend == "local":
+        return ["sh", "-c", script]
+    return ssh_command(cfg, script)
+
+
 def _cleanup(cfg: Config, run_id: str) -> None:
     """Hết giờ: ssh bị giết nhưng container trên server vẫn chạy, phải dọn riêng."""
     names = [f"aico-setup-{run_id}", f"aico-run-{run_id}"]
@@ -278,14 +298,14 @@ def _cleanup(cfg: Config, run_id: str) -> None:
         f"docker network rm aico-net-{run_id} >/dev/null 2>&1; true"
     )
     with contextlib.suppress(subprocess.SubprocessError, OSError):
-        subprocess.run(ssh_command(cfg, script), capture_output=True, timeout=60, check=False)
+        subprocess.run(shell_command(cfg, script), capture_output=True, timeout=60, check=False)
 
 
 def run_remote(
     cfg: Config, script: str, run_id: str, archive: bytes, timeout: float
 ) -> tuple[int, bytes, bytes]:
     proc = subprocess.Popen(
-        ssh_command(cfg, script),
+        shell_command(cfg, script),
         stdin=subprocess.PIPE,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,
@@ -363,7 +383,7 @@ class Runner:
                 "truncated": False,
             }
         output = (stdout + stderr).decode("utf-8", "replace")
-        if code == 255:
+        if code == 255 and self.cfg.backend == "ssh":
             output += "\n[aico-remote] không kết nối được server qua SSH"
         text, truncated = tail(output)
         return {
@@ -561,7 +581,7 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/" and self._host() in self.runner.cfg.public_hosts:
             return self._redirect("/preview/")
         if path == "/health":
-            return self._json(200, {"ok": True, "target": bool(self.runner.cfg.target)})
+            return self._json(200, {"ok": True, "target": self.runner.cfg.enabled})
         if path in ("/preview", "/preview/"):
             items = self.runner.previews()
             if "application/json" in (self.headers.get("Accept") or ""):
@@ -628,13 +648,16 @@ def build_image_script(tag: str) -> str:
 
 
 def build_image(cfg: Config, tag: str, dockerfile: bytes) -> int:
-    proc = subprocess.run(ssh_command(cfg, build_image_script(tag)), input=dockerfile, check=False)
+    proc = subprocess.run(
+        shell_command(cfg, build_image_script(tag)), input=dockerfile, check=False
+    )
     return proc.returncode
 
 
 def main() -> None:
     cfg = Config()
-    cfg.key_file = prepare_key(cfg.key_file)
+    if cfg.backend == "ssh":
+        cfg.key_file = prepare_key(cfg.key_file)
     # build-image <tag>: Dockerfile từ stdin, dựng trên server (aico-ops.sh remote-image).
     if sys.argv[1:2] == ["build-image"] and len(sys.argv) == 3:
         raise SystemExit(build_image(cfg, sys.argv[2], sys.stdin.buffer.read()))
@@ -642,7 +665,12 @@ def main() -> None:
     Handler.token = _env_file("RUNNER_TOKEN_FILE")
     port = int(os.environ.get("RUNNER_PORT", "8500"))
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
-    print(f"remote runner: {cfg.target or '(chưa đặt REMOTE_SSH_TARGET)'}, cổng {port}", flush=True)
+    where = (
+        f"Docker tại chỗ ({os.environ.get('DOCKER_HOST', 'socket mặc định')})"
+        if cfg.backend == "local"
+        else cfg.target or "(chưa đặt REMOTE_SSH_TARGET)"
+    )
+    print(f"remote runner: {where}, cổng {port}", flush=True)
     server.serve_forever()
 
 

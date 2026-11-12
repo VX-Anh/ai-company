@@ -94,6 +94,12 @@ Cài đặt: `ssh-keygen -t ed25519 -N "" -f secrets/remote_ssh_key`, thêm kho�
 server từ `known_hosts` đã tin vào `secrets/remote_known_hosts`, đặt `REMOTE_SSH_TARGET` và
 `AICO_PREVIEW_PROJECTS` trong `.env`. Để trống `REMOTE_SSH_TARGET` thì agent build/test như cũ.
 
+Build ngay trên PC (không cần server): đặt `REMOTE_BACKEND=local`, thêm `localbuild` vào
+`COMPOSE_PROFILES` (bật service `build-docker`, Docker-in-Docker riêng cho build, tách khỏi Docker
+đang chạy aico), deploy rồi chạy `aico-ops.sh remote-image` một lần để dựng image Node + Chromium
+trong đó. Nên hạ `REMOTE_MEMORY`/`REMOTE_CONCURRENCY` theo RAM của WSL và để trống `REMOTE_TEST_PG`
+(không có PostgreSQL dùng chung trên PC; test tự dựng PostgreSQL riêng).
+
 Sau mỗi lần merge, bản chính của repo (branch đích) được dựng lại với tên theo repo, vd
 `aico-office`; dựng tay bằng `POST /tickets/{id}/preview?site=true`.
 

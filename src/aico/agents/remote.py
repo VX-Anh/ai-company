@@ -8,6 +8,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Any
@@ -201,14 +203,24 @@ class SiteWatcher:
         *,
         branch: str = "main",
         role_id: str = "coder",
+        retry_seconds: float = 300,
+        max_retry_seconds: float = 3600,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         self._previewer = previewer
         self._gateway = gateway
         self._projects = projects
         self._branch = branch
         self._role = role_id
-        # sha đã thử dựng (thành công hay lỗi): build lỗi chờ commit mới, không dựng lại mỗi phút.
+        self._retry = retry_seconds
+        self._max_retry = max_retry_seconds
+        self._clock = clock
+        # sha đã dựng thành công: không dựng lại tới khi branch có commit mới.
         self._seen: dict[str, str] = {}
+        # Build lỗi (máy build tắt, mất SSH): thử lại cùng sha sau retry_seconds, gấp đôi mỗi lần
+        # lỗi, tối đa max_retry_seconds, để không gọi SSH hỏng mỗi phút. project -> (sha, số lần
+        # lỗi, thời điểm được thử lại).
+        self._failed: dict[str, tuple[str, int, float]] = {}
 
     async def check_once(self) -> list[str]:
         """Một lượt kiểm tra; trả các repo đã dựng lại thành công."""
@@ -228,12 +240,29 @@ class SiteWatcher:
             sha = str(head.get("sha") or "")
             if not sha or self._seen.get(project) == sha:
                 continue
-            self._seen[project] = sha
+            failed = self._failed.get(project)
+            attempts = 0
+            if failed is not None and failed[0] == sha:
+                attempts = failed[1]
+                if self._clock() < failed[2]:
+                    continue  # chưa tới lúc thử lại
             try:
                 result = await self._previewer.build(None, project, self._branch, site=True)
             except PreviewError as exc:
-                log.warning("không dựng được bản chính %s@%s: %s", project, sha[:7], exc)
+                attempts += 1
+                wait = min(self._retry * 2 ** (attempts - 1), self._max_retry)
+                self._failed[project] = (sha, attempts, self._clock() + wait)
+                log.warning(
+                    "không dựng được bản chính %s@%s (lần %d, thử lại sau %d giây): %s",
+                    project,
+                    sha[:7],
+                    attempts,
+                    wait,
+                    exc,
+                )
                 continue
+            self._seen[project] = sha
+            self._failed.pop(project, None)
             log.info("dựng lại bản chính %s@%s: %s", project, sha[:7], result.get("url"))
             built.append(project)
         return built
