@@ -10,7 +10,7 @@ import asyncio
 import contextlib
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import Awaitable, Callable
 from datetime import timedelta
 from typing import Any
 
@@ -37,8 +37,11 @@ class Runner:
         callbacks: CallbacksFactory | None = None,
         eval_only: bool = False,
         eval_variant: str | None = None,
+        new_ticket_gate: Callable[[], Awaitable[bool]] | None = None,
     ) -> None:
         self._graph = graph
+        # Cổng hạn mức (instance chạy lại): trả False thì chỉ nhận ticket đã bắt đầu.
+        self._gate = new_ticket_gate
         # Instance chạy lại của R&D chỉ nhận ticket nhãn eval; aico chính bỏ qua chúng.
         self._eval_only = eval_only
         self._eval_variant = eval_variant
@@ -54,6 +57,7 @@ class Runner:
             lease_seconds=self._lease,
             eval_only=self._eval_only,
             eval_variant=self._eval_variant,
+            skip_new=self._gate is not None and not await self._gate(),
         )
         if ticket is None:
             return None

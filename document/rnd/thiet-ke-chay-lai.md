@@ -31,8 +31,7 @@ aico-ops eval-cleanup baseline
 `AICO_EVAL_VARIANT`, bỏ duyệt kế hoạch và chặn merge trong code (không theo luật YAML),
 mcp-gitlab/guard nhiều mẫu nhánh và ref SHA, `aico eval start|report`, service `aico-eval`
 (profile `eval`), chỉ số chung không tính ticket eval. Chưa làm: chấm acceptance (build/test trên
-máy build) tự động; trần hạn mức riêng cho eval (hiện chỉ dựa vào việc owner bật/tắt
-`aico-eval`).
+máy build) tự động.
 
 Bổ sung trên nhánh `rnd-r1-gaps` (2026-11-12, chờ review + merge):
 - `base_sha` của bộ chuẩn là merge-base: tool L0 `gitlab.merge_base` (GitHub compare API,
@@ -51,6 +50,15 @@ Bổ sung trên nhánh `rnd-r1-gaps` (2026-11-12, chờ review + merge):
   nốt. Dọn xong ghi event `eval_cleanup`. Diff vẫn xem được ở PR đã đóng trên GitHub (GitHub tự
   đóng PR khi nhánh nguồn bị xoá); chưa chép diff vào bản ghi thí nghiệm. Dọn **sau** khi chấm
   acceptance (chấm cần nhánh `ai/<id>`).
+- Trần hạn mức (`aico.rnd.evalgate`): runner của instance eval chỉ nhận ticket **mới** (trạng thái
+  new) khi (1) số ticket chạy lại đã bắt đầu trong 7 ngày, mọi biến thể, còn dưới
+  `AICO_EVAL_WEEKLY_CAP` (mặc định 40; 0 = không chạy ticket mới), (2) không ticket thường nào
+  đang chạy hay chờ runner xử lý quyết định, (3) không phòng nào có agent và mọi cửa sổ hạn mức
+  dưới `AICO_EVAL_MAX_SESSION_PERCENT` (70) / `AICO_EVAL_MAX_WEEK_PERCENT` (60) — hàm
+  `rooms_free` dùng chung với bộ lập lịch dò công nghệ. Ticket đã bắt đầu vẫn chạy tiếp
+  (`claim(skip_new=True)`), kể cả quyết định `--close`. Lý do chưa chạy ghi log của `aico-eval`
+  (`chạy lại: chưa nhận ticket mới (...)`, chỉ khi lý do đổi); kết quả "chưa" giữ 60 giây. Cổng
+  không dừng ticket đang chạy dở khi hạn mức vượt ngưỡng giữa chừng.
 
 ## 1. Mục tiêu
 

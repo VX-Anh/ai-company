@@ -43,11 +43,30 @@ class ScanPolicy:
     max_week_percent: float = 60
 
 
-def _window_ok(window: Mapping[str, Any], policy: ScanPolicy) -> bool:
+def _window_ok(window: Mapping[str, Any], max_session: float, max_week: float) -> bool:
     minutes = float(window.get("window_minutes") or 0)
     used = float(window.get("used_percent") or 0)
-    limit = policy.max_week_percent if minutes >= 24 * 60 else policy.max_session_percent
-    return used < limit
+    return used < (max_week if minutes >= 24 * 60 else max_session)
+
+
+def rooms_free(
+    rooms: Iterable[Mapping[str, Any]], *, max_session_percent: float, max_week_percent: float
+) -> tuple[bool, str]:
+    """Các phòng provider có rảnh và còn dư hạn mức không (dùng chung cho dò công nghệ và
+    ticket chạy lại): không agent nào đang chạy, mọi cửa sổ hạn mức công bố đều dưới ngưỡng."""
+    usable = 0
+    for room in rooms:
+        if room.get("agents"):
+            return False, f"phòng {room.get('name')} đang có agent"
+        if room.get("state") in ("limited", "offline"):
+            continue  # phòng hết hạn mức hoặc tắt không nhận việc, không chặn phòng khác
+        windows = (room.get("usage") or {}).get("windows") or []
+        if not all(_window_ok(w, max_session_percent, max_week_percent) for w in windows):
+            return False, f"phòng {room.get('name')} đã dùng nhiều hạn mức"
+        usable += 1
+    if not usable:
+        return False, "không phòng nào dùng được"
+    return True, "hệ rảnh"
 
 
 def should_scan(
@@ -65,18 +84,13 @@ def should_scan(
         return False, "chưa tới kỳ"
     if active_tickets:
         return False, f"đang có {active_tickets} ticket chạy"
-    usable = 0
-    for room in rooms:
-        if room.get("agents"):
-            return False, f"phòng {room.get('name')} đang có agent"
-        if room.get("state") in ("limited", "offline"):
-            continue  # phòng hết hạn mức hoặc tắt không nhận việc dò, không chặn phòng khác
-        windows = (room.get("usage") or {}).get("windows") or []
-        if not all(_window_ok(w, policy) for w in windows):
-            return False, f"phòng {room.get('name')} đã dùng nhiều hạn mức"
-        usable += 1
-    if not usable:
-        return False, "không phòng nào dùng được"
+    free, reason = rooms_free(
+        rooms,
+        max_session_percent=policy.max_session_percent,
+        max_week_percent=policy.max_week_percent,
+    )
+    if not free:
+        return False, reason
     return True, "tới kỳ, hệ rảnh"
 
 

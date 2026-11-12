@@ -74,6 +74,11 @@ class Settings:
     eval_instance: bool = False
     # Biến thể mà instance eval đang mount (AICO_COMPANY_DIR): chỉ nhận ticket của biến thể đó.
     eval_variant: str | None = None
+    # Cổng hạn mức của instance eval: trần số ticket chạy lại bắt đầu mỗi 7 ngày (0: không chạy
+    # ticket mới) và ngưỡng % hạn mức các phòng (cửa sổ 5 giờ / tuần); vượt thì chờ.
+    eval_weekly_cap: int = 40
+    eval_max_session_percent: float = 70
+    eval_max_week_percent: float = 60
     # Kho tri thức Phòng R&D: librarian dựng chỉ mục từ main mỗi knowledge_watch_seconds; agent
     # có tool knowledge.search/get và khối <knowledge> trong prompt. Rỗng là tắt.
     knowledge_project: str | None = "VX-Anh/aico-knowledge"
@@ -137,6 +142,13 @@ class Settings:
             rnd_scan_interval_days=int(env.get("AICO_RND_SCAN_INTERVAL_DAYS", "0") or 0),
             eval_instance=env.get("AICO_EVAL_INSTANCE", "") == "1",
             eval_variant=env.get("AICO_EVAL_VARIANT") or None,
+            eval_weekly_cap=int(env.get("AICO_EVAL_WEEKLY_CAP") or cls.eval_weekly_cap),
+            eval_max_session_percent=float(
+                env.get("AICO_EVAL_MAX_SESSION_PERCENT") or cls.eval_max_session_percent
+            ),
+            eval_max_week_percent=float(
+                env.get("AICO_EVAL_MAX_WEEK_PERCENT") or cls.eval_max_week_percent
+            ),
             knowledge_project=env.get("AICO_KNOWLEDGE_PROJECT", cls.knowledge_project or "")
             or None,
             knowledge_watch_seconds=float(
