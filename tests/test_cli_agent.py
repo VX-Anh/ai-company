@@ -847,6 +847,8 @@ async def test_each_worker_attempt_is_recorded_as_job_event(company: Company) ->
     assert (ok["tokens_in"], ok["tokens_out"], ok["duration_seconds"]) == (1200, 300, 42.5)
     assert ok["prompt_sha"] == prompt_sha(company.prompt_text("tech_lead"))
     assert len(ok["prompt_sha"]) == 12 and ok["knowledge"] is False
+    # Canary: mỗi job mang dấu vân tay cấu hình công ty đang chạy.
+    assert ok["company_sha"] == failed["company_sha"] == company.sha and len(company.sha) == 12
 
     async def broken(ticket_id: str, data: dict[str, Any]) -> None:
         raise RuntimeError("db lỗi")

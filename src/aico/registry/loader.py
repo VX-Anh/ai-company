@@ -5,6 +5,7 @@ Cấu hình sai thì từ chối khởi động: mọi lỗi được gom lại 
 
 from __future__ import annotations
 
+import hashlib
 from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,31 @@ from pydantic import BaseModel, ValidationError
 from aico.core import OrgSpec, PolicySpec, RoleSpec, SopSpec
 
 REQUIRED_STEPS = {"fix_ticket": ("triage", "plan", "code", "review", "merge")}
+
+# Phần của company/ quyết định hành vi agent; `rnd/watchlist.yaml` chỉ là nguồn dò công nghệ nên
+# không tính (đổi watchlist không được mở một đợt canary mới).
+FINGERPRINT_PARTS = ("org.yaml", "roles", "prompts", "sops", "policies")
+
+
+def company_fingerprint(root: str | Path) -> str:
+    """Dấu vân tay 12 ký tự của cấu hình công ty (canary: so ticket trước–sau một lần đổi).
+
+    Băm đường dẫn + nội dung theo thứ tự tên; quy CRLF về LF để cùng nội dung trên Windows và
+    trong container cho cùng một giá trị.
+    """
+    root = Path(root)
+    files: list[Path] = []
+    for part in FINGERPRINT_PARTS:
+        path = root / part
+        if path.is_file():
+            files.append(path)
+        elif path.is_dir():
+            files.extend(p for p in path.rglob("*") if p.is_file())
+    digest = hashlib.sha256()
+    for path in sorted(files, key=lambda p: p.relative_to(root).as_posix()):
+        digest.update(path.relative_to(root).as_posix().encode("utf-8") + b"\0")
+        digest.update(path.read_bytes().replace(b"\r\n", b"\n") + b"\0")
+    return digest.hexdigest()[:12]
 
 
 class RegistryError(Exception):
@@ -31,6 +57,8 @@ class Company:
     roles: Mapping[str, RoleSpec]
     sops: Mapping[str, SopSpec]
     policy: PolicySpec
+    # Dấu vân tay nội dung company/ lúc nạp (company_fingerprint); rỗng khi dựng tay trong test.
+    sha: str = ""
 
     def role(self, role_id: str) -> RoleSpec:
         try:
@@ -159,4 +187,11 @@ def load_company(root: str | Path) -> Company:
         _cross_check(root, org, roles, sops, policy, problems)
     if problems or org is None or policy is None:
         raise RegistryError(problems)
-    return Company(root=root, org=org, roles=roles, sops=sops, policy=policy)
+    return Company(
+        root=root,
+        org=org,
+        roles=roles,
+        sops=sops,
+        policy=policy,
+        sha=company_fingerprint(root),
+    )

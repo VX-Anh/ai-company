@@ -74,6 +74,9 @@ class Settings:
     eval_instance: bool = False
     # Biến thể mà instance eval đang mount (AICO_COMPANY_DIR): chỉ nhận ticket của biến thể đó.
     eval_variant: str | None = None
+    # Mốc của bản đang chạy (vd git sha lúc deploy), ghi kèm dấu vân tay company/ vào event job
+    # (`company_sha`) để canary tách ticket trước–sau một lần deploy; thiếu thì chỉ có dấu vân tay.
+    deploy_sha: str | None = None
     # Kho tri thức Phòng R&D: librarian dựng chỉ mục từ main mỗi knowledge_watch_seconds; agent
     # có tool knowledge.search/get và khối <knowledge> trong prompt. Rỗng là tắt.
     knowledge_project: str | None = "VX-Anh/aico-knowledge"
@@ -137,6 +140,7 @@ class Settings:
             rnd_scan_interval_days=int(env.get("AICO_RND_SCAN_INTERVAL_DAYS", "0") or 0),
             eval_instance=env.get("AICO_EVAL_INSTANCE", "") == "1",
             eval_variant=env.get("AICO_EVAL_VARIANT") or None,
+            deploy_sha=env.get("AICO_COMPANY_SHA", "").strip() or None,
             knowledge_project=env.get("AICO_KNOWLEDGE_PROJECT", cls.knowledge_project or "")
             or None,
             knowledge_watch_seconds=float(

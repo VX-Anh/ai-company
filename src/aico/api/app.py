@@ -235,6 +235,30 @@ def create_api_app(deps: ApiDeps) -> FastAPI:
 
         return await report(deps.tickets, now=utcnow(), days=days)
 
+    @app.get("/rnd/canary", dependencies=user)
+    async def rnd_canary(
+        sha: Annotated[str | None, Query(min_length=7, max_length=64)] = None,
+        n: Annotated[int, Query(ge=1, le=100)] = 10,
+        days: Annotated[int, Query(ge=1, le=365)] = 90,
+        first_pass_drop: Annotated[float, Query(gt=0, le=100)] = 15.0,
+        review_increase: Annotated[float, Query(gt=0, le=10)] = 0.5,
+        code_only: bool = True,
+    ) -> dict[str, Any]:
+        """Canary (Phòng R&D): n ticket đầu chạy cấu hình `sha` (company_sha của job đầu tiên; bỏ
+        trống = cấu hình mới nhất) so với n ticket ngay trước. Chỉ đọc, không revert."""
+        from aico.rnd.canary import canary_report
+
+        return await canary_report(
+            deps.tickets,
+            now=utcnow(),
+            sha=sha,
+            n=n,
+            days=days,
+            first_pass_drop=first_pass_drop,
+            review_increase=review_increase,
+            code_only=code_only,
+        )
+
     @app.get("/rnd/bench", dependencies=user)
     async def rnd_bench(days: Annotated[int, Query(ge=1, le=365)] = 90) -> list[dict[str, Any]]:
         """Ticket code đã merge, đủ mốc commit để chạy lại (ứng viên bộ ticket chuẩn). Chỉ đọc."""

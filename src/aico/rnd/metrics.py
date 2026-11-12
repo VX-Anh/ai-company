@@ -11,6 +11,7 @@ Các chỉ số chính và lý do:
 - escalations theo lớp lý do: biết lỗi nào lặp lại để thành giả thuyết thí nghiệm.
 - jobs theo vai trò / phòng / prompt_sha: tỷ lệ lỗi, hết hạn mức, token, thời gian; so trước–sau
   khi đổi prompt (prompt_sha đổi).
+- company_sha của job đầu tiên: ticket chạy bằng cấu hình nào (canary, xem rnd/canary.py).
 """
 
 from __future__ import annotations
@@ -80,6 +81,7 @@ def ticket_metrics(ticket: Ticket, events: list[Event]) -> dict[str, Any]:
     escalation = ""
     waiting = None  # trạng thái chờ người gần nhất: biết quyết định thuộc bước nào
     reached_merge_at: datetime | None = None
+    first_job_at: datetime | None = None
     jobs: list[dict[str, Any]] = []
     for e in events:
         data = e.data or {}
@@ -105,6 +107,8 @@ def ticket_metrics(ticket: Ticket, events: list[Event]) -> dict[str, Any]:
             elif waiting is S.AWAITING_PLAN_APPROVAL:
                 plan_reviews += 1
         elif e.kind == "job":
+            if first_job_at is None:
+                first_job_at = e.at
             jobs.append(dict(data))
     minutes_to_merge = (
         round((reached_merge_at - ticket.created_at).total_seconds() / 60, 1)
@@ -125,6 +129,9 @@ def ticket_metrics(ticket: Ticket, events: list[Event]) -> dict[str, Any]:
         "escalation": escalation,
         "escalation_class": classify_escalation(escalation) if escalation else None,
         "minutes_to_merge_approval": minutes_to_merge,
+        # Canary: ticket thuộc cấu hình nào tính theo job đầu tiên (event cũ thiếu trường = None).
+        "company_sha": jobs[0].get("company_sha") if jobs else None,
+        "started_at": first_job_at.isoformat() if first_job_at is not None else None,
         "jobs": jobs,
     }
 

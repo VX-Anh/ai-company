@@ -47,6 +47,17 @@ def prompt_sha(text: str) -> str:
     return hashlib.sha256(text.encode("utf-8")).hexdigest()[:12]
 
 
+def company_sha(content_sha: str, deploy_sha: str | None = None) -> str | None:
+    """Mốc cấu hình đang chạy ghi vào event `job`: "<mốc deploy>-<dấu vân tay company/>".
+
+    Mốc deploy (AICO_COMPANY_SHA, vd git sha) tách cả lần deploy chỉ đổi code; thiếu thì chỉ còn
+    dấu vân tay nội dung. Cả hai đều thiếu (Company dựng tay) thì None.
+    """
+    deploy = "".join(ch for ch in (deploy_sha or "") if ch.isalnum())[:12]
+    parts = [p for p in (deploy, content_sha) if p]
+    return "-".join(parts) or None
+
+
 def job_record(
     *,
     role_id: str,
@@ -55,6 +66,7 @@ def job_record(
     system_prompt: str,
     outcome: Mapping[str, Any],
     critical: bool,
+    company_sha: str | None = None,
 ) -> dict[str, Any]:
     """Dữ liệu của event `job`: đủ để tính chỉ số theo vai trò, phòng, phiên bản prompt."""
     tokens = outcome.get("tokens")
@@ -69,6 +81,7 @@ def job_record(
         "mode": mode,
         "room": room,
         "prompt_sha": prompt_sha(system_prompt),
+        "company_sha": company_sha,
         "ok": ok,
         "critical": critical,
         "tokens_in": tokens_in,
@@ -102,6 +115,8 @@ class CliSettings:
     # các vai trò trong knowledge_roles. Trả None khi không có thẻ nào đủ liên quan.
     knowledge: Callable[[Ticket, str], Awaitable[str | None]] | None = None
     knowledge_roles: tuple[str, ...] = ()
+    # Mốc deploy (AICO_COMPANY_SHA) ghi kèm dấu vân tay company/ vào event job; xem company_sha.
+    deploy_sha: str | None = None
 
 
 class CliAgentRunner:
@@ -117,6 +132,7 @@ class CliAgentRunner:
         self._tokens = tokens
         self._settings = settings
         self._on_job = on_job
+        self._company_sha = company_sha(company.sha, settings.deploy_sha)
         self._client = settings.http_client or httpx.AsyncClient()
         self._ranks: tuple[float, dict[str, int]] = (float("-inf"), {})
 
@@ -216,6 +232,7 @@ class CliAgentRunner:
             system_prompt=str(job.get("system_prompt") or ""),
             outcome=outcome,
             critical=critical,
+            company_sha=self._company_sha,
         )
         data["knowledge"] = knowledge
         try:

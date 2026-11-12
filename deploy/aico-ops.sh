@@ -121,6 +121,23 @@ print("theo nhãn:")
 for k, v in d["by_label"].items():
     print("  {}: {tickets} ticket, đạt ngay {first_pass_rate}, review TB {avg_review_rounds}, escalate {escalated}".format(k, **v))
 ' ;;
+    canary)  # canary [sha] [n]: n ticket đầu của cấu hình sha (bỏ trống: mới nhất) so với n ticket trước; chỉ đọc
+        api GET "/rnd/canary?n=${3:-10}${2:+&sha=$2}" | python3 -c '
+import sys, json
+d = json.load(sys.stdin)
+if "after" not in d:
+    sys.exit("lỗi: " + json.dumps(d, ensure_ascii=False))
+print("canary {} (n={}, {} ngày)".format(d["sha"], d["n"], d["days"]))
+for name, key in (("sau  ", "after"), ("trước", "before")):
+    g = d[key]
+    print("  {}: {tickets} ticket (xong {done}, escalate {escalated}, lỗi {failed}), đạt vòng đầu {first_pass_rate}, vòng review TB {avg_review_rounds}, người trả lại {owner_return_rate}, token TB {avg_tokens}".format(name, **g))
+    print("         ticket:", " ".join(g["ids"]) or "-", "| cấu hình:", g["company_shas"])
+verdict = {True: "XẤU ĐI: xem lại thay đổi, cân nhắc revert (không tự revert)", False: "không xấu đi quá ngưỡng", None: "chưa kết luận"}[d["regressed"]]
+print("kết quả:", verdict)
+for r in d["reasons"]:
+    print("  -", r)
+print("ghi chú:", d["note"])
+' ;;
     bench)  # bench [số ngày]: ứng viên bộ ticket chuẩn (JSON), chọn 10–15 lưu vào eval/tickets/
         api GET "/rnd/bench?days=${2:-90}" | python3 -m json.tool --no-ensure-ascii ;;
     scan)  # scan [số ngày]: tạo ticket research dò công nghệ theo company/rnd/watchlist.yaml
@@ -141,7 +158,7 @@ for k, v in d["by_label"].items():
             "$(python3 -c 'import json,sys; print(json.dumps({"action": sys.argv[1], "actor": "owner", "comment": sys.argv[2]}))' "$3" "${4:-}")" \
             | python3 -c "$summary" ;;
     *)
-        echo "lệnh: safe | deploy [--force] | tickets [n] | ticket <id> | workers | logs [service] [since] | metrics [ngày] | bench [ngày] | scan [ngày]"
+        echo "lệnh: safe | deploy [--force] | tickets [n] | ticket <id> | workers | logs [service] [since] | metrics [ngày] | canary [sha] [n] | bench [ngày] | scan [ngày]"
         echo "      eval-start <biến thể> [lần] < suite.json | eval-report <biến thể> [--close] (cần: docker compose --profile eval up -d aico-eval)"
         echo "      create <file.json> | decide <id> <approved|revise|changes_requested|rejected> [ghi chú] | escalate <id> <action> [ghi chú]"
         echo "      remote-image (dựng image Node + Chromium trên máy build, chạy lại khi sửa node-playwright.Dockerfile)"
