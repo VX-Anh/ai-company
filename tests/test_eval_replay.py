@@ -1,4 +1,4 @@
-"""Ticket chạy lại (Phòng R&D, R1): nhánh eval/* từ commit gốc, MR vào eval/base/*, chỉ instance
+"""Ticket chạy lại (Phòng R&D, R1): nhánh ai/<id> từ commit gốc, MR vào base/<id>, chỉ instance
 eval nhận, không qua duyệt kế hoạch, không bao giờ merge vào main."""
 
 from __future__ import annotations
@@ -28,7 +28,8 @@ def test_ticket_refs_for_normal_and_eval_tickets() -> None:
     assert ticket_refs(normal) == ticket_refs(normal.model_copy(update={"labels": []}))
     assert ticket_refs(normal).work == "ai/T-9" and ticket_refs(normal).target == "main"
     refs = ticket_refs(eval_ticket(base="a" * 40))
-    assert (refs.work, refs.base, refs.target) == ("eval/T-1", "a" * 40, "eval/base/T-1")
+    # Tên trung tính: agent thấy ai/<id> như ticket thường, đích base/<id>.
+    assert (refs.work, refs.base, refs.target) == ("ai/T-1", "a" * 40, "base/T-1")
     assert refs.eval_variant == "thu-prompt" and eval_spec(eval_ticket()) == ("thu-prompt", "main")
 
 
@@ -50,11 +51,10 @@ async def test_eval_ticket_runs_only_on_eval_instance_and_never_targets_main(
     statuses = [ev.to_status for ev in await e.tickets.events("T-1") if ev.kind == "status"]
     assert S.AWAITING_PLAN_APPROVAL not in statuses
     files = e.gitlab.project(PROJECT).files
-    assert "eval/T-1" in files and "eval/base/T-1" in files and "ai/T-1" not in files
+    assert "ai/T-1" in files and "base/T-1" in files
+    assert not any("eval" in name for name in files)
     mrs = e.gitlab.project(PROJECT).mrs
-    assert [(m["source_branch"], m["target_branch"]) for m in mrs] == [
-        ("eval/T-1", "eval/base/T-1")
-    ]
+    assert [(m["source_branch"], m["target_branch"]) for m in mrs] == [("ai/T-1", "base/T-1")]
     # Ticket chạy lại không lẫn vào chỉ số của hệ thật.
     from datetime import timedelta
 
@@ -103,7 +103,12 @@ async def test_eval_start_is_idempotent_and_report_groups_runs(company: Company)
     again = await evalrun.start(h.tickets, SUITE, "thu-prompt", repeat=2)
     assert [new for _, new in again] == [False, False]
     t = await h.tickets.get(created[0][0])
-    assert t.labels == ["ui", "eval"] and t.title.startswith("[eval thu-prompt]")
+    # Tiêu đề giữ nguyên, nhãn eval chỉ để lọc: prompt không cho agent biết mình bị chấm.
+    assert t.labels == ["ui", "eval"] and t.title == SUITE[0]["title"]
+    from aico.agents.llm_agent import ticket_block
+
+    block = ticket_block(t)
+    assert "eval" not in block.lower() and "nhãn: ui" in block
     assert eval_spec(t) == ("thu-prompt", "main")
     with pytest.raises(evalrun.EvalError):
         evalrun.eval_tickets(SUITE, "Tên Sai")

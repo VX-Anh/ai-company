@@ -6,9 +6,9 @@ Biến môi trường:
   Với GitHub, project là "owner/repo", MR là pull request; token đọc từ GITLAB_TOKEN_FILE.
 - GITLAB_URL, GITLAB_TOKEN_FILE (token của bot Developer), GITLAB_MERGE_TOKEN_FILE (merge bot)
 - GITLAB_ALLOWED_PROJECTS (phân tách bằng dấu phẩy), GITLAB_BRANCH_PATTERN (mặc định ai/*;
-  nhiều mẫu phân tách bằng dấu phẩy, vd ai/*,eval/*)
-- GITLAB_ALLOWED_TARGETS (mặc định main; tên hoặc mẫu, vd main,eval/base/*): đích được mở MR
-- GITLAB_MERGE_TARGETS (mặc định main): đích được merge (eval/base/* không bao giờ merge)
+  nhiều mẫu phân tách bằng dấu phẩy, vd ai/*,base/*)
+- GITLAB_ALLOWED_TARGETS (mặc định main; tên hoặc mẫu, vd main,base/*): đích được mở MR
+- GITLAB_MERGE_TARGETS (mặc định main): đích được merge (base/* không bao giờ merge)
 - APPROVAL_VERIFY_URL, APPROVAL_VERIFY_TOKEN_FILE: endpoint của aico xác nhận bản ghi duyệt
 - MCP_HOST (mặc định 127.0.0.1), MCP_PORT (mặc định 8101)
 """

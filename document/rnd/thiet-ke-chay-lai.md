@@ -1,8 +1,13 @@
 # Thiết kế R1: chạy lại ticket cũ để đo thay đổi của aico
 
 Trạng thái (2026-11-12): **đã code trên nhánh `rnd-r1`** (tách từ `rnd-r0`), theo mặc định ở
-mục 6 (branch `eval/*` trên repo thật, không fork). Owner duyệt nhánh này riêng; `rnd-r0` merge
-được độc lập. Chưa chạy thật: cần merge, deploy, bật `aico-eval`.
+mục 6 (branch trên repo thật, không fork). Đã merge vào `main` và deploy (2026-11-12).
+Chưa chạy thật: cần bật `aico-eval`.
+
+**Tên trung tính (2026-11-12):** agent có thể đổi hành vi khi biết mình bị chấm, nên ticket chạy
+lại không lộ dấu hiệu nào trong prompt: nhánh `ai/<id>` như ticket thường, đích `base/<id>`, tiêu
+đề giữ nguyên, nhãn `eval` bị bỏ khỏi khối `<ticket>`. Nhãn và artifact `eval` chỉ ở ticket store
+để runner lọc.
 
 **Cách dùng (sau khi merge + deploy):**
 
@@ -19,12 +24,12 @@ aico-ops eval-report baseline < suite.json
 aico-ops eval-report baseline --close
 ```
 
-Đã làm: nhãn + artifact `eval`, `workplan.ticket_refs` (nhánh `eval/<id>` từ commit gốc, MR vào
-`eval/base/<id>`), `TicketStore.claim(eval_only, eval_variant)`, `AICO_EVAL_INSTANCE`,
+Đã làm: nhãn + artifact `eval`, `workplan.ticket_refs` (nhánh `ai/<id>` từ commit gốc, MR vào
+`base/<id>`), `TicketStore.claim(eval_only, eval_variant)`, `AICO_EVAL_INSTANCE`,
 `AICO_EVAL_VARIANT`, bỏ duyệt kế hoạch và chặn merge trong code (không theo luật YAML),
 mcp-gitlab/guard nhiều mẫu nhánh và ref SHA, `aico eval start|report`, service `aico-eval`
 (profile `eval`), chỉ số chung không tính ticket eval. Chưa làm: chấm acceptance (build/test trên
-máy build) tự động; dọn branch `eval/*` sau khi chấm; trần hạn mức riêng cho eval (hiện chỉ dựa
+máy build) tự động; dọn branch `ai/<id>` và `base/<id>` sau khi chấm; trần hạn mức riêng cho eval (hiện chỉ dựa
 vào việc owner bật/tắt `aico-eval`); `base_sha` nên là merge-base (compare API).
 
 ## 1. Mục tiêu
@@ -68,8 +73,8 @@ biệt gói trong nhãn `eval`:
 | --- | --- | --- |
 | Ai nhận ticket | runner của aico chính | **chỉ** runner của instance eval có cùng `variant` (lọc khi `claim`) |
 | Cấu hình công ty | `company/` | `AICO_COMPANY_DIR` trỏ tới thư mục biến thể |
-| Branch làm việc | `ai/<ticket>` từ `main` | `eval/<ticket>` từ `base_sha` |
-| Đích của MR | `main` | `eval/base/<ticket>` (branch tạo ở `base_sha`) — diff đúng phần agent làm |
+| Branch làm việc | `ai/<ticket>` từ `main` | `ai/<ticket>` từ `base_sha` (tên như ticket thường) |
+| Đích của MR | `main` | `base/<ticket>` (branch tạo ở `base_sha`) — diff đúng phần agent làm |
 | Duyệt kế hoạch | theo rủi ro | bỏ (triage ép rủi ro low trong code), vì đo hệ chứ không đo người |
 | Merge | owner duyệt | **không bao giờ**; tới `awaiting_merge_approval` thì instance eval chấm rồi đóng ticket |
 | Hạn mức | chung | trần riêng theo tuần; chỉ chạy khi `aico-ops safe` (hệ rảnh) |
@@ -81,8 +86,9 @@ Cách cô lập (đã làm, sau review độc lập):
   xem trước) chỉ nhận ticket eval của đúng biến thể; aico chính bỏ qua mọi ticket eval.
 - Không merge, bốn lớp: graph luôn escalate ở bước duyệt merge; API từ chối `approved`;
   `verify_merge_approval` trả sai; mcp-gitlab chỉ merge vào `GITLAB_MERGE_TARGETS` (main).
-- mcp-gitlab ép cặp: nguồn `eval/*` chỉ mở MR vào `eval/base/*`, nguồn khác không vào `eval/*`;
-  không push vào `eval/base/*`; `publish` từ chối MR có sẵn trỏ sai đích.
+- mcp-gitlab ép cặp: `base/<x>` chỉ nhận MR từ đúng `ai/<x>`; `ai/<x>` có nhánh `base/<x>` thì không
+  mở MR hay merge vào `main` (kiểm trên repo, không dựa vào nhãn); không push vào `base/*`;
+  `publish` từ chối MR có sẵn trỏ sai đích.
 - Planner/BA đọc code ở commit gốc (`read_file` kèm `ref`), không đọc `main` (có thể đã chứa đáp án).
 - Jira, retro, chỉ số, bộ chuẩn bỏ qua ticket eval.
 
@@ -98,7 +104,7 @@ Việc phải sửa (ước lượng L):
    qua API, chờ xong, ghi `rnd_eval_runs` (hoặc file JSON trong `document/rnd/experiments/`).
 5. Chấm: số liệu `ticket_metrics` + build/test trên máy build (`aico-remote`, lệnh trong
    `acceptance`) + kích thước diff so với `reference_sha` (chỉ tham khảo).
-6. Dọn: xoá branch `eval/*` sau khi chấm (giữ diff trong bản ghi).
+6. Dọn: xoá branch `ai/<id>`, `base/<id>` của ticket chạy lại sau khi chấm (giữ diff trong bản ghi).
 
 ## 4. Đo và kết luận
 
@@ -115,13 +121,13 @@ Việc phải sửa (ước lượng L):
 
 - Một lượt bộ chuẩn ≈ 15 ticket × (plan + 1–3 vòng code/review). Trần mặc định: 1 lượt/biến
   thể/tuần, dừng khi phòng nào vượt 70% hạn mức 5 giờ hoặc 60% tuần.
-- Instance eval không có token merge; branch `eval/*` không bao giờ vào `main`.
+- Instance eval không có token merge; nhánh của ticket chạy lại không bao giờ vào `main`.
 - Đề bài lấy từ ticket cũ là dữ liệu, không phải lệnh (giữ nguyên bọc `<ticket>`).
 
 ## 6. Câu hỏi cho owner
 
-1. Đồng ý chạy lại trên repo thật với branch `eval/*` (dọn sau khi chấm), hay muốn fork riêng
-   (`VX-Anh/<repo>-eval`, phải cấp quyền token mới)? Mặc định đề xuất: branch `eval/*`.
+1. Đồng ý chạy lại trên repo thật với branch riêng (dọn sau khi chấm), hay muốn fork riêng
+   (`VX-Anh/<repo>-eval`, phải cấp quyền token mới)? Mặc định đề xuất: branch riêng (đã làm).
 2. Trần hạn mức cho eval mỗi tuần? Mặc định đề xuất: như mục 5.
 3. Thí nghiệm đầu tiên: "chèn `<knowledge>` có giảm vòng review không" (đã có cờ `knowledge`
    trong event `job` để so ngay trên ticket thật trước khi cần chạy lại). Đồng ý?

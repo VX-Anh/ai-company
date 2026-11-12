@@ -87,8 +87,8 @@ def make_harness(
 
     constraints = Constraints(
         allowed_projects=(PROJECT,),
-        branch_pattern="ai/*,eval/*",
-        allowed_targets=("main", "eval/base/*"),
+        branch_pattern="ai/*,base/*",
+        allowed_targets=("main", "base/*"),
     )
     server = build_server(GitLabTools(gitlab, constraints, verify))
     client: ToolClient = McpToolClient({"gitlab": server})

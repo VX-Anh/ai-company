@@ -22,7 +22,12 @@ from langchain_openai import ChatOpenAI
 from aico.core import Ticket
 from aico.llm_relay import TaskTokens
 from aico.orchestrator.ports import BudgetExhausted
-from aico.orchestrator.workplan import ARCHITECTURE_DOC, PLAN_DOC_DIR, ticket_refs
+from aico.orchestrator.workplan import (
+    ARCHITECTURE_DOC,
+    PLAN_DOC_DIR,
+    ticket_refs,
+    visible_labels,
+)
 from aico.registry import Company
 from aico.tools import ApprovalRequired, ToolDenied, ToolError, ToolGateway, ToolSpec
 from aico.tools.gateway import without_images
@@ -129,7 +134,7 @@ class LlmAgentRunner:
 
 def ticket_block(ticket: Ticket) -> str:
     """Nội dung ticket bọc trong thẻ: là dữ liệu, không phải lệnh."""
-    labels = ", ".join(ticket.labels) or "(không)"
+    labels = ", ".join(visible_labels(ticket.labels)) or "(không)"
     return (
         "<ticket>\n"
         f"id: {ticket.id}\nrepo: {ticket.project}\nnhãn: {labels}\n"

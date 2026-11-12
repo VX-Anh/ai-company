@@ -162,26 +162,58 @@ async def test_read_file_cuts_single_overlong_line(monkeypatch: pytest.MonkeyPat
     assert r["content"] == "x" * 10 and r["next_offset"] == 2
 
 
-def test_eval_branch_constraints() -> None:
+def test_replay_base_branch_constraints() -> None:
     c = Constraints(
         allowed_projects=(PROJECT,),
-        branch_pattern="ai/*,eval/*",
-        allowed_targets=("main", "eval/base/*"),
+        branch_pattern="ai/*,base/*",
+        allowed_targets=("main", "base/*"),
     )
-    c.check_branch("eval/T-1")
-    c.check_pair("eval/T-1", "eval/base/T-1")
-    c.check_pair("ai/T-1", "main")
+    c.check_branch("base/T-1")
+    c.check_pair("ai/T-1", "base/T-1")
+    c.check_pair("ai/T-1", "main")  # pure check; vào main bị chặn khi base/T-1 tồn tại (async)
     for source, target in (
-        ("eval/T-1", "main"),
-        ("ai/T-1", "eval/base/T-1"),
-        ("eval/base/T-2", "eval/base/T-1"),
+        ("ai/T-2", "base/T-1"),
+        ("base/T-2", "base/T-1"),
+        ("base/T-1", "main"),
     ):
         with pytest.raises(ConstraintError):
             c.check_pair(source, target)
     with pytest.raises(ConstraintError):
-        c.check_push("eval/base/T-1")
+        c.check_push("base/T-1")
     c.check_merge_target("main")
     with pytest.raises(ConstraintError):
-        c.check_merge_target("eval/base/T-1")
+        c.check_merge_target("base/T-1")
     with pytest.raises(ConstraintError):
         c.check_branch("feature/x")
+
+
+async def test_replay_branch_cannot_open_or_merge_into_main() -> None:
+    backend = FakeGitLabBackend()
+    backend.project(PROJECT).files["main"]["a.py"] = "x"
+
+    async def verify(approval_id: str, project: str, iid: int) -> tuple[bool, str]:
+        return True, ""
+
+    tools = GitLabTools(
+        backend,
+        Constraints(
+            allowed_projects=(PROJECT,),
+            branch_pattern="ai/*,base/*",
+            allowed_targets=("main", "base/*"),
+        ),
+        verify,
+    )
+    await tools.create_branch(PROJECT, "ai/T-1")
+    # Ticket thường (không có base/T-1): vào main được.
+    mr = await tools.open_merge_request(PROJECT, "ai/T-1", "x")
+    assert mr["target_branch"] == "main"
+    # Ticket chạy lại: có base/T-2 thì ai/T-2 không mở MR vào main, cũng không merge được.
+    await tools.create_branch(PROJECT, "base/T-2")
+    await tools.create_branch(PROJECT, "ai/T-2")
+    with pytest.raises(ConstraintError, match="base/T-2"):
+        await tools.open_merge_request(PROJECT, "ai/T-2", "x")
+    ok = await tools.open_merge_request(PROJECT, "ai/T-2", "x", target_branch="base/T-2")
+    assert ok["target_branch"] == "base/T-2"
+    sneaky = await backend.create_mr(PROJECT, "ai/T-2", "main", "x", "")
+    with pytest.raises(ConstraintError, match="base/T-2"):
+        await tools.merge_mr(PROJECT, sneaky["iid"], "A-1")

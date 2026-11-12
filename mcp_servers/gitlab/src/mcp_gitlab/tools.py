@@ -25,14 +25,23 @@ class ConstraintError(PermissionError):
     pass
 
 
+# Nhánh gốc của ticket chạy lại (Phòng R&D): ai/<x> có base/<x> thì chỉ được vào base/<x>.
+BASE_PREFIX = "base/"
+
+
+def base_of(source: str) -> str | None:
+    """ai/<x> -> base/<x>; nhánh khác không có nhánh gốc."""
+    return BASE_PREFIX + source[3:] if source.startswith("ai/") and len(source) > 3 else None
+
+
 @dataclass(frozen=True)
 class Constraints:
     allowed_projects: tuple[str, ...]
-    # Nhiều mẫu phân tách bằng dấu phẩy, vd "ai/*,eval/*" (eval/*: ticket chạy lại của R&D).
+    # Nhiều mẫu phân tách bằng dấu phẩy, vd "ai/*,base/*" (base/*: nhánh gốc của ticket chạy lại).
     branch_pattern: str = "ai/*"
-    # Tên nhánh hoặc mẫu fnmatch, vd ("main", "eval/base/*").
+    # Tên nhánh hoặc mẫu fnmatch, vd ("main", "base/*").
     allowed_targets: tuple[str, ...] = ("main",)
-    # Đích được MERGE (hẹp hơn đích được mở MR): eval/base/* chỉ để xem diff, không bao giờ merge.
+    # Đích được MERGE (hẹp hơn đích được mở MR): base/* chỉ để xem diff, không bao giờ merge.
     merge_targets: tuple[str, ...] = ("main",)
 
     def check_project(self, project: str) -> None:
@@ -46,17 +55,16 @@ class Constraints:
             raise ConstraintError(f"branch '{branch}' không khớp '{self.branch_pattern}'")
 
     def check_pair(self, source: str, target: str) -> None:
-        """Ticket chạy lại (eval/*) chỉ mở MR vào eval/base/*; nhánh khác không vào eval/*."""
-        if source.startswith("eval/"):
-            if source.startswith("eval/base/") or not target.startswith("eval/base/"):
-                raise ConstraintError(f"nhánh '{source}' chỉ được mở MR vào eval/base/*")
-        elif target.startswith("eval/"):
+        """base/<x> (nhánh gốc của ticket chạy lại) chỉ nhận MR từ đúng ai/<x>, không làm nguồn."""
+        if source.startswith(BASE_PREFIX):
+            raise ConstraintError(f"nhánh gốc '{source}' không được mở MR")
+        if target.startswith(BASE_PREFIX) and target != base_of(source):
             raise ConstraintError(f"nhánh '{source}' không được mở MR vào '{target}'")
 
     def check_push(self, branch: str) -> None:
         self.check_branch(branch)
-        if branch.startswith("eval/base/"):
-            raise ConstraintError("không push vào eval/base/* (nhánh gốc của lượt chạy lại)")
+        if branch.startswith(BASE_PREFIX):
+            raise ConstraintError("không push vào base/* (nhánh gốc của lượt chạy lại)")
 
     def check_merge_target(self, branch: str) -> None:
         if not any(fnmatchcase(branch, t) for t in self.merge_targets):
@@ -222,6 +230,7 @@ class GitLabTools:
         self._c.check_branch(source_branch)
         self._c.check_target(target_branch)
         self._c.check_pair(source_branch, target_branch)
+        await self._refuse_replay_outside_base(project, source_branch, target_branch)
         existing = await self._backend.find_open_mr(project, source_branch)
         if existing is not None:
             if existing.get("target_branch") not in (None, target_branch):
@@ -233,6 +242,13 @@ class GitLabTools:
             project, source_branch, target_branch, title, description
         )
         return {**_mr_view(mr), "created": True}
+
+    async def _refuse_replay_outside_base(self, project: str, source: str, target: str) -> None:
+        """Nhánh có base/<x> là ticket chạy lại (dựng từ commit cũ): chỉ vào base/<x>, không vào
+        main dù tên giống ticket thường. Lớp chặn này không dựa vào ticket hay nhãn."""
+        base = base_of(source)
+        if base and target != base and await self._backend.branch_exists(project, base):
+            raise ConstraintError(f"nhánh '{source}' có nhánh gốc '{base}', chỉ được vào đó")
 
     async def get_merge_request(self, project: str, mr_iid: int) -> dict[str, Any]:
         self._c.check_project(project)
@@ -251,6 +267,7 @@ class GitLabTools:
         self._c.check_branch(mr["source_branch"])
         self._c.check_target(mr["target_branch"])
         self._c.check_merge_target(mr["target_branch"])
+        await self._refuse_replay_outside_base(project, mr["source_branch"], mr["target_branch"])
         merged = await self._backend.merge_mr(project, mr_iid)
         return {**_mr_view(merged), "merged_now": True}
 
