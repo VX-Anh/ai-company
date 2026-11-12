@@ -34,7 +34,7 @@ from aico.orchestrator.ports import (
 )
 from aico.orchestrator.workplan import ARCHITECTURE_DOC, WorkItem, plan_doc_path, ticket_refs
 from aico.registry import Company
-from aico.tools import ToolError, ToolGateway
+from aico.tools import ToolDenied, ToolError, ToolGateway
 
 log = logging.getLogger(__name__)
 
@@ -775,6 +775,56 @@ class CliReviewer:
         except ToolError as exc:
             raise AgentUnavailable(f"không tải được {ref}: {exc}") from exc
 
+    async def _read_sha(self, ticket: Ticket, tool: str, args: dict[str, Any]) -> str | None:
+        """SHA từ một tool đọc của gitlab; None khi tool lỗi hoặc vai trò không được cấp."""
+        try:
+            out = await self._gateway.call(self._role, "gitlab", tool, args, ticket_id=ticket.id)
+        except (ToolError, ToolDenied) as exc:
+            log.warning("ticket %s: %s lỗi (%s)", ticket.id, tool, exc)
+            return None
+        sha = out.get("sha") if isinstance(out, dict) else None
+        return str(sha) if sha else None
+
+    async def _diff_base(
+        self, ticket: Ticket, project: str, mr: dict[str, Any]
+    ) -> tuple[dict[str, Any], str, str]:
+        """(mã nguồn làm gốc diff, nguồn gốc ghi vào event, ghi chú cho người chấm).
+
+        Gốc là commit chung của nhánh đích và nhánh nguồn. So với đầu nhánh đích thì mọi commit
+        vào đích sau khi nhánh tách hiện trong diff như bị nhánh xoá hoặc hoàn tác, và người chấm
+        bắt sửa oan (linh-hoa-vien!27: báo xoá src/core/alchemy/ dù nhánh không đụng tới). Không
+        lấy được commit chung thì so với đầu nhánh đích như trước và nói rõ giới hạn đó.
+        """
+        source, target = mr["source_branch"], mr["target_branch"]
+        fork = await self._read_sha(
+            ticket, "merge_base", {"project": project, "base": target, "head": source}
+        )
+        if fork is not None:
+            try:
+                base = await self._archive(ticket, project, fork)
+            except AgentUnavailable as exc:
+                log.warning("ticket %s: %s", ticket.id, exc)
+            else:
+                tip = await self._read_sha(
+                    ticket, "branch_head", {"project": project, "ref": target}
+                )
+                note = ""
+                if tip is not None and tip != fork:
+                    note = (
+                        f"Nhánh đích {target} đã có commit mới sau khi nhánh này tách ra; diff "
+                        "dưới đây chỉ gồm thay đổi của nhánh (so với commit chung "
+                        f"{fork[:12]}). Thư mục hiện tại chưa có các commit mới đó: file chỉ "
+                        "có ở nhánh đích không phải do nhánh này xoá."
+                    )
+                return base, "merge_base", note
+        base = await self._archive(ticket, project, target)
+        note = (
+            f"Không xác định được commit chung của hai nhánh, nên diff dưới đây so với đầu nhánh "
+            f"{target} hiện tại. Nếu nhánh đích có commit mới sau khi nhánh này tách ra, các "
+            "thay đổi đó hiện trong diff như bị xoá hoặc hoàn tác dù nhánh không đụng tới."
+        )
+        return base, "target_head", note
+
     async def review(
         self, ticket: Ticket, mr: dict[str, Any], plan: str = "", requirements: str = ""
     ) -> ReviewResult:
@@ -782,7 +832,7 @@ class CliReviewer:
         if not project:
             raise AgentUnavailable("ticket không có repo")
         head = await self._archive(ticket, project, mr["source_branch"])
-        base = await self._archive(ticket, project, mr["target_branch"])
+        base, base_source, base_note = await self._diff_base(ticket, project, mr)
         diffs = file_diffs(base["data"], head["data"])
         diff = join_diff(diffs)
         brief = next(
@@ -809,6 +859,7 @@ class CliReviewer:
             ticket_block(ticket),
             *([f"<requirements>\n{requirements}\n</requirements>"] if requirements else []),
             *([f"<plan>\n{plan}\n</plan>"] if plan else []),
+            *([base_note] if base_note else []),
             f"<diff>\n{diff or '(không có thay đổi)'}\n</diff>",
         ]
         workspace = {"format": head["format"], "data": head["data"], "ref": mr["source_branch"]}
@@ -819,7 +870,7 @@ class CliReviewer:
             mode="review",
             workspace=workspace,
             critical=True,
-            extra=diff_size(diffs),
+            extra={**diff_size(diffs), "diff_base": base_source},
         )
         shots = body.get("shots")
         if self._shot_sink is not None and isinstance(shots, list) and shots:
