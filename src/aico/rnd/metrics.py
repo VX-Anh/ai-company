@@ -94,6 +94,8 @@ def ticket_metrics(ticket: Ticket, events: list[Event]) -> dict[str, Any]:
     gate_stale = 0
     gate_skipped = 0
     gate_would_block: Counter[str] = Counter()
+    ci_runs = ci_failed = ci_skipped = 0
+    ci_seconds = 0.0
     gate_violations: Counter[str] = Counter()
     for e in events:
         data = e.data or {}
@@ -129,6 +131,13 @@ def ticket_metrics(ticket: Ticket, events: list[Event]) -> dict[str, Any]:
             gate_stale += 1 if data.get("stale_base") else 0
             gate_skipped += 1 if data.get("diff_skipped") else 0
             gate_would_block.update(str(c) for c in data.get("would_block") or [])
+            # Kiểm tra checks: mỗi lần chạy build/test của repo trên máy build.
+            ci_skipped += 1 if data.get("checks_skipped") else 0
+            ci = data.get("checks")
+            if isinstance(ci, dict):
+                ci_runs += 1
+                ci_failed += 1 if ci.get("passed") is False else 0
+                ci_seconds += float(ci.get("duration_seconds") or 0)
             if not data.get("passed"):
                 gate_blocks += 1
                 for v in data.get("violations") or []:
@@ -160,6 +169,10 @@ def ticket_metrics(ticket: Ticket, events: list[Event]) -> dict[str, Any]:
         "gate_skipped": gate_skipped,
         "gate_violations": dict(gate_violations),
         "gate_would_block": dict(gate_would_block),
+        "gate_ci_runs": ci_runs,
+        "gate_ci_failed": ci_failed,
+        "gate_ci_skipped": ci_skipped,
+        "gate_ci_seconds": round(ci_seconds, 1),
         # Canary: ticket thuộc cấu hình nào tính theo job đầu tiên (event cũ thiếu trường = None).
         "company_sha": jobs[0].get("company_sha") if jobs else None,
         # Mọi cấu hình ticket đã chạy qua, theo thứ tự gặp (None = job thiếu trường). Hơn một giá
@@ -211,6 +224,18 @@ def _group(jobs: list[Mapping[str, Any]], key: str) -> dict[str, dict[str, Any]]
     return {k: _job_stats(v) for k, v in sorted(by.items())}
 
 
+def _ci_stats(rows: list[dict[str, Any]]) -> dict[str, Any]:
+    runs = sum(r.get("gate_ci_runs", 0) for r in rows)
+    seconds = sum(r.get("gate_ci_seconds", 0) for r in rows)
+    return {
+        "runs": runs,
+        "failed": sum(r.get("gate_ci_failed", 0) for r in rows),
+        "skipped": sum(r.get("gate_ci_skipped", 0) for r in rows),
+        "seconds_total": round(seconds, 1),
+        "seconds_avg": round(seconds / runs, 1) if runs else None,
+    }
+
+
 def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
     """Gộp số liệu nhiều ticket. Ticket chưa kết thúc chỉ tính vào số job, không vào tỷ lệ."""
     finished = [r for r in rows if r["status"] in ("done", "failed", "escalated")]
@@ -256,6 +281,10 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
                 ).most_common()
             ),
             "tickets_would_block": sum(1 for r in rows if r.get("gate_would_block")),
+            # Kiểm tra checks (build/test của repo trên máy build): số lần chạy, số lần đỏ, số
+            # lần bỏ vì máy build lỗi/bận/hết giờ, tổng và trung bình thời gian một lần chạy.
+            # Số lần chặn / lẽ ra chặn nằm ở violations["checks"] / would_block["checks"].
+            "ci": _ci_stats(rows),
         },
         "jobs": _job_stats(jobs),
         "jobs_by_role": _group(jobs, "role"),

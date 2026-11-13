@@ -131,6 +131,38 @@ class Reviewer(Protocol):
         ...
 
 
+class StepRunError(RuntimeError):
+    """Máy build không chạy được lệnh (lỗi hạ tầng, hết slot, không phản hồi): không phải kết quả
+    của bài làm."""
+
+
+class StepRun(Protocol):
+    """Kết quả một lần chạy các bước trên máy build."""
+
+    @property
+    def sha(self) -> str: ...
+
+    # tên bước -> {exit_code, output, duration_seconds}; bước chưa chạy không có mặt.
+    @property
+    def steps(self) -> dict[str, dict[str, Any]]: ...
+
+
+class StepRunner(Protocol):
+    """Chạy các lệnh nối tiếp trên mã nguồn của một ref ở máy build (vd RemoteExec); lỗi hạ tầng
+    ném StepRunError."""
+
+    async def run(
+        self,
+        ticket_id: str | None,
+        project: str,
+        ref: str,
+        commands: Mapping[str, str],
+        *,
+        image: str | None = None,
+        timeout_seconds: float | None = None,
+    ) -> StepRun: ...
+
+
 class Previewer(Protocol):
     """Dựng bản xem trước của branch MR (chạy nền, lỗi không ảnh hưởng luồng)."""
 

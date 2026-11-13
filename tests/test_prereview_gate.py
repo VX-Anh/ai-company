@@ -267,6 +267,7 @@ async def test_gate_escalates_after_max_rounds(company: Company) -> None:
         "violations": {OUTSIDE_OWNS: 3},
         "would_block": {},
         "tickets_would_block": 0,
+        "ci": {"runs": 0, "failed": 0, "skipped": 0, "seconds_total": 0, "seconds_avg": None},
     }
 
 
@@ -419,7 +420,8 @@ def test_default_gate_config(company: Company) -> None:
     assert cfg.enabled is True
     assert (cfg.deletions, cfg.outside_owns, cfg.unfinished_items) == ("warn",) * 3
     assert cfg.stale_base == "warn" and cfg.max_rounds == 2 and cfg.skip_labels == ()
-    assert PrereviewGateSpec() == cfg  # SOP thiếu khoá prereview_gate thì hành xử như file mẫu
+    # SOP thiếu khoá prereview_gate thì hành xử như file mẫu (trừ lệnh kiểm theo repo).
+    assert PrereviewGateSpec() == cfg.model_copy(update={"check_projects": {}})
 
 
 def test_mentioned_matches_whole_paths_and_named_directories() -> None:

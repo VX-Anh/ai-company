@@ -95,6 +95,34 @@ class SopLimits(_Spec):
 GateMode = Literal["off", "warn", "block"]
 
 
+class CheckStepSpec(_Spec):
+    """Một bước build/test/typecheck của repo, chạy bằng sh trên máy build."""
+
+    name: str = Field(pattern=r"^[a-z][a-z0-9_-]{0,31}$")  # nằm trong dòng đánh dấu của log
+    run: str = Field(min_length=1)
+
+
+class ProjectChecksSpec(_Spec):
+    """Lệnh kiểm của một repo cho kiểm tra `checks` của cổng trước review.
+
+    Các bước chạy nối tiếp trong một container của máy build, dừng ở bước đầu tiên hỏng.
+    Dependency đã được máy build cài theo lockfile ở pha chuẩn bị (có mạng); các bước chạy không
+    có mạng nên không ghi `npm ci`/`pnpm install` ở đây.
+    """
+
+    steps: tuple[CheckStepSpec, ...] = Field(min_length=1)
+    image: str | None = None  # tên image của máy build (REMOTE_IMAGES); bỏ trống = mặc định
+    timeout: float | None = Field(default=None, gt=0)  # giây cho cả lần chạy; bỏ trống = chung
+
+    @field_validator("steps")
+    @classmethod
+    def _unique_names(cls, steps: tuple[CheckStepSpec, ...]) -> tuple[CheckStepSpec, ...]:
+        names = [s.name for s in steps]
+        if len(set(names)) != len(names):
+            raise ValueError("tên bước bị trùng")
+        return steps
+
+
 class PrereviewGateSpec(_Spec):
     """Cổng trước review (kiểm tất định giữa bước code và review).
 
@@ -108,10 +136,19 @@ class PrereviewGateSpec(_Spec):
     outside_owns: GateMode = "warn"  # sửa/thêm file ngoài owns của kế hoạch
     unfinished_items: GateMode = "warn"  # còn đầu việc lỗi/bỏ qua
     stale_base: Literal["off", "warn"] = "warn"  # nhánh không chứa đầu nhánh đích: chỉ ghi chú
+    # Chạy build/test/typecheck của repo trên đầu nhánh qua máy build (một lần mỗi lượt qua cổng).
+    checks: GateMode = "warn"
+    checks_timeout: float = Field(default=900, gt=0)  # giây, khi repo không đặt timeout riêng
+    # Ticket mang nhãn này không chạy `checks` (không phải ticket code).
+    checks_skip_labels: tuple[str, ...] = ("research", "docs", "retro")
+    # repo -> lệnh kiểm; repo không có ở đây thì bỏ kiểm tra `checks`.
+    check_projects: dict[str, ProjectChecksSpec] = {}
     max_rounds: int = Field(default=2, ge=0)  # số lần trả về bước code liên tiếp trước khi escalate
     skip_labels: tuple[str, ...] = ()  # ticket mang nhãn này không qua cổng
 
-    @field_validator("deletions", "outside_owns", "unfinished_items", "stale_base", mode="before")
+    @field_validator(
+        "deletions", "outside_owns", "unfinished_items", "stale_base", "checks", mode="before"
+    )
     @classmethod
     def _yaml_bool(cls, value: object) -> object:
         # YAML đọc `off`/`on` trần thành bool: `off` phải tắt thật, `on` thì bắt viết rõ mức.

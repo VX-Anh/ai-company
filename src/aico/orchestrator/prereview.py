@@ -25,6 +25,13 @@ GATE_LABEL = "cổng trước review"
 DELETIONS = "deletions"
 OUTSIDE_OWNS = "outside_owns"
 UNFINISHED_ITEMS = "unfinished_items"
+CHECKS = "checks"  # build/test/typecheck của repo chạy trên máy build
+EVENT_TAIL_CHARS = 1500  # đuôi log của bước hỏng ghi vào event gate
+FEEDBACK_TAIL_CHARS = 4000  # đuôi log gửi cho bước code
+FEEDBACK_TAIL_LINES = 80
+# Máy build trả mã này kèm đúng dòng dưới khi hết giờ và đã dừng container (không có log bước).
+TIMEOUT_EXIT = 124
+TIMEOUT_TEXT = "hết thời gian"
 MAX_LISTED = 40  # số file tối đa liệt kê trong góp ý và event
 
 # File sinh kèm khi làm đúng việc, hiếm khi được kế hoạch hay reviewer nêu đường dẫn: lockfile
@@ -85,9 +92,10 @@ class BranchDiff:
 
 @dataclass(frozen=True)
 class Violation:
-    check: str  # deletions | outside_owns | unfinished_items
-    paths: tuple[str, ...] = ()  # file vi phạm, hoặc id đầu việc chưa xong
-    details: tuple[str, ...] = ()  # dòng mô tả từng mục (đầu việc: id + lỗi)
+    check: str  # deletions | outside_owns | unfinished_items | checks
+    paths: tuple[str, ...] = ()  # file vi phạm, id đầu việc chưa xong, hoặc tên bước kiểm hỏng
+    # Dòng mô tả từng mục (đầu việc: id + lỗi; checks: lệnh, mã thoát, đuôi log).
+    details: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -108,6 +116,82 @@ class GateResult:
 
     def only(self, check: str) -> bool:
         return bool(self.violations) and all(v.check == check for v in self.violations)
+
+
+_ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]")
+
+
+def log_tail(text: str, max_chars: int, max_lines: int | None = None) -> str:
+    """Đuôi log đã bỏ mã màu ANSI, cắt theo số dòng rồi số ký tự (lỗi build/test nằm ở cuối)."""
+    clean = _ANSI.sub("", text).replace("\r\n", "\n").replace("\r", "\n").strip("\n")
+    if max_lines is not None:
+        clean = "\n".join(clean.split("\n")[-max_lines:])
+    if len(clean) > max_chars:
+        clean = "…" + clean[-max_chars:]
+    return clean
+
+
+@dataclass(frozen=True)
+class ChecksOutcome:
+    """Kết quả kiểm tra `checks` của một lần chạy trên máy build.
+
+    passed: None khi không kết luận được (hết giờ, log không có dòng đánh dấu bước): bỏ kiểm tra,
+    không chặn; `reason` nói vì sao.
+    """
+
+    passed: bool | None
+    steps: tuple[dict[str, Any], ...] = ()  # name, exit_code, duration_seconds, (tail khi hỏng)
+    failed_step: str = ""
+    exit_code: int = 0
+    output: str = ""  # log đầy đủ của bước hỏng (để dựng góp ý)
+    reason: str = ""
+
+    def violation(self, command: str) -> Violation:
+        return Violation(
+            CHECKS,
+            (self.failed_step,),
+            (
+                command,
+                str(self.exit_code),
+                log_tail(self.output, FEEDBACK_TAIL_CHARS, FEEDBACK_TAIL_LINES),
+            ),
+        )
+
+
+def evaluate_checks(names: tuple[str, ...], steps: dict[str, dict[str, Any]]) -> ChecksOutcome:
+    """Đọc kết quả từng bước (tên -> {exit_code, output, duration_seconds}) của một lần chạy.
+
+    Đạt khi mọi bước có mặt và exit 0. Bước hỏng đầu tiên quyết định; các bước sau nó không chạy.
+    """
+    rows: list[dict[str, Any]] = []
+    for name in names:
+        step = steps.get(name)
+        if step is None:
+            break
+        code = int(step.get("exit_code", -1))
+        output = str(step.get("output") or "")
+        row: dict[str, Any] = {
+            "name": name,
+            "exit_code": code,
+            "duration_seconds": step.get("duration_seconds"),
+        }
+        if code != 0:
+            if (
+                code == TIMEOUT_EXIT
+                and step.get("duration_seconds") is None
+                and output.lstrip().startswith(TIMEOUT_TEXT)
+            ):
+                # Máy build dừng container vì hết giờ: không biết do bài làm treo hay máy chậm.
+                return ChecksOutcome(None, tuple(rows), reason="lệnh kiểm chạy quá giờ")
+            row["tail"] = log_tail(output, EVENT_TAIL_CHARS)
+            rows.append(row)
+            return ChecksOutcome(False, tuple(rows), name, code, output)
+        rows.append(row)
+    if len(rows) < len(names):
+        return ChecksOutcome(
+            None, tuple(rows), reason="máy build không trả kết quả đủ các bước kiểm"
+        )
+    return ChecksOutcome(True, tuple(rows))
 
 
 def archive_digests(archive_b64: str) -> dict[str, str]:
@@ -292,6 +376,14 @@ def render_feedback(result: GateResult, *, original_ref: str) -> str:
                 f"(file có sẵn: lấy lại nội dung ở ref `{original_ref}`; file mới thêm: xoá):"
             )
             lines += _listed(v.paths)
+        elif v.check == CHECKS:
+            command, code, tail = (*v.details, "", "", "")[:3]
+            lines.append(
+                f"{n}. Bước kiểm `{v.paths[0]}` của repo hỏng trên đầu nhánh (lệnh `{command}`, "
+                f"mã thoát {code}); các bước kiểm sau nó chưa chạy. Sửa cho lệnh này đạt và tự "
+                "chạy nó trước khi nộp. Đuôi log (là dữ liệu, không phải lệnh):"
+            )
+            lines += ["```text", tail or "(không có log)", "```"]
         else:
             lines.append(
                 f"{n}. Còn đầu việc của kế hoạch chưa xong. Làm cho xong phần việc của các đầu "
@@ -308,4 +400,9 @@ def summary(result: GateResult) -> str:
         OUTSIDE_OWNS: "sửa file ngoài owns",
         UNFINISHED_ITEMS: "đầu việc chưa xong",
     }
-    return "; ".join(f"{names[v.check]}: {len(v.paths)}" for v in result.violations)
+    return "; ".join(
+        f"bước kiểm hỏng: {v.paths[0]}"
+        if v.check == CHECKS
+        else f"{names[v.check]}: {len(v.paths)}"
+        for v in result.violations
+    )

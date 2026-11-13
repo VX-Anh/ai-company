@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import binascii
 import tarfile
+import time
 from dataclasses import dataclass, field, replace
 from typing import Any, cast
 
@@ -32,6 +33,8 @@ from aico.orchestrator.ports import (
     Planner,
     Previewer,
     Reviewer,
+    StepRunError,
+    StepRunner,
     Triage,
     TriageResult,
 )
@@ -96,6 +99,9 @@ class Deps:
     # Ticket mang nhãn này chỉ được sửa file trong các thư mục này, ở mọi vòng (vd `research`:
     # chỉ `cards/`). Vòng sửa mặc định cho sửa mọi file nên phải chặn ở đây.
     label_scopes: dict[str, tuple[str, ...]] = field(default_factory=dict)
+    # Máy build chạy build/test của repo cho kiểm tra `checks` của cổng trước review; None thì
+    # không chạy kiểm tra đó.
+    step_runner: StepRunner | None = None
 
     def role(self, step: str) -> str:
         return self.sop.steps[step]
@@ -520,6 +526,7 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             prereview.DELETIONS: cfg.deletions,
             prereview.OUTSIDE_OWNS: cfg.outside_owns,
             prereview.UNFINISHED_ITEMS: cfg.unfinished_items,
+            prereview.CHECKS: cfg.checks,
         }
         diff_checks = cfg.deletions != "off" or cfg.outside_owns != "off"
         project = ticket.project or deps.default_project
@@ -567,6 +574,48 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
                 f"nhánh {refs.work} dựng trên gốc cũ: '{refs.target}' đã có commit mới hơn "
                 "điểm tách nhánh (cần cập nhật nhánh trước khi merge)"
             )
+        # Build/test/typecheck của repo trên đầu nhánh: một lần chạy gộp ở máy build, không gọi
+        # model. Chỉ ticket code của repo có khai báo lệnh; lỗi máy build không chặn.
+        ci: dict[str, Any] | None = None
+        ci_violation: prereview.Violation | None = None
+        ci_skipped = False
+        ci_spec = cfg.check_projects.get(project)
+        labels = {label.lower() for label in ticket.labels}
+        code_ticket = (
+            deps.scope_for(ticket) is None
+            and not deps.skips_test(ticket)
+            and not labels & {label.lower() for label in cfg.checks_skip_labels}
+        )
+        if cfg.checks != "off" and deps.step_runner is not None and ci_spec and code_ticket:
+            commands = {step.name: step.run for step in ci_spec.steps}
+            started = time.monotonic()
+            try:
+                run = await deps.step_runner.run(
+                    tid,
+                    project,
+                    refs.work,
+                    commands,
+                    image=ci_spec.image,
+                    timeout_seconds=ci_spec.timeout or cfg.checks_timeout,
+                )
+            except (StepRunError, ToolError, ToolDenied) as exc:
+                ci_skipped = True
+                notes.append(f"không chạy được lệnh kiểm trên máy build, bỏ kiểm tra checks: {exc}")
+            else:
+                outcome = prereview.evaluate_checks(tuple(commands), run.steps)
+                ci = {
+                    "sha": run.sha,
+                    "passed": outcome.passed,
+                    "mode": cfg.checks,
+                    "duration_seconds": round(time.monotonic() - started, 1),
+                    "steps": list(outcome.steps),
+                }
+                if outcome.passed is None:
+                    ci_skipped = True
+                    notes.append(f"{outcome.reason}, bỏ kiểm tra checks")
+                elif not outcome.passed:
+                    ci["failed_step"] = outcome.failed_step
+                    ci_violation = outcome.violation(commands[outcome.failed_step])
         # Diff cộng dồn cả nhánh nên góp ý cũng phải cộng dồn: file reviewer yêu cầu sửa ở vòng
         # trước vẫn là có chủ đích ở các vòng sau.
         log = s.get("gate_feedback_log", "")
@@ -592,6 +641,8 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             unfinished_items=cfg.unfinished_items != "off",
         )
         notes += result.notes
+        if ci_violation is not None:
+            result = prereview.GateResult((*result.violations, ci_violation), result.notes)
         blocking = prereview.GateResult(
             tuple(v for v in result.violations if modes[v.check] == "block")
         )
@@ -602,11 +653,15 @@ def build_fix_ticket(deps: Deps) -> StateGraph[TicketState]:
             "round": rounds,
             "stale_base": stale,
             "diff_skipped": diff_skipped,
+            # Bỏ kiểm tra checks vì máy build lỗi/bận/hết giờ (không phải lỗi của bài làm).
+            "checks_skipped": ci_skipped,
             "violations": [{**v.to_dict(), "mode": modes[v.check]} for v in result.violations],
             # Kiểm tra ở mức warn có vi phạm: lẽ ra đã trả về nếu bật block.
             "would_block": [v.check for v in result.violations if modes[v.check] == "warn"],
             "notes": notes,
         }
+        if ci is not None:
+            data["checks"] = ci
         if blocking.passed:
             await deps.tickets.record(tid, "gate", actor="orchestrator", data=data)
             go["gate_feedback_log"] = log
