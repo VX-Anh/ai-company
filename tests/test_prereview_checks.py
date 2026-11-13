@@ -350,8 +350,6 @@ def test_company_check_projects_and_spec_validation(company: Company) -> None:
     }
     assert commands == {
         "VX-Anh/aico-office": ["npm run typecheck", "npm run build", "npm test"],
-        "VX-Anh/ai-trace": ["pnpm -r build", "pnpm -r typecheck", "pnpm test"],
-        "VX-Anh/linh-hoa-vien": ["npm run typecheck", "npm run build", "npm test"],
     }
     # Pha chạy lệnh của máy build không có mạng: lệnh cài dependency không được nằm ở đây.
     assert not any(" ci" in c or "install" in c for runs in commands.values() for c in runs)

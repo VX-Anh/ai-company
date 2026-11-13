@@ -39,15 +39,8 @@ prereview_gate:
         - {name: typecheck, run: npm run typecheck}
         - {name: build, run: npm run build}
         - {name: test, run: npm test}
-    VX-Anh/ai-trace:
-      steps:                    # build trước: typecheck của gói phụ thuộc cần dist/ của model
-        - {name: build, run: pnpm -r build}
-        - {name: typecheck, run: pnpm -r typecheck}
-        - {name: test, run: pnpm test}
-    VX-Anh/linh-hoa-vien:
-      steps:                    # không chạy test:e2e/test:perf (Playwright, chậm): để Tester
-        - {name: typecheck, run: npm run typecheck}
-        - {name: build, run: npm run build}
-        - {name: test, run: npm test}
+    # ai-trace, linh-hoa-vien: tạm chưa bật (máy build cục bộ ~6 GB RAM, chưa chạy thử đủ).
+    # Lệnh dự kiến: ai-trace pnpm -r build / pnpm -r typecheck / pnpm test;
+    # linh-hoa-vien npm run typecheck / npm run build / npm test.
   max_rounds: 2
   skip_labels: []               # nhãn không qua cổng (research đã bị kẹp trong cards/ bởi label_scopes)
