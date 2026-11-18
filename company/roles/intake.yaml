@@ -8,5 +8,5 @@ tools:
   - server: gitlab
     allow: [list_issues, read_file]
     constraints:
-      repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien, VX-Anh/ai-trace, VX-Anh/aico-knowledge]
+      repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien, VX-Anh/ai-trace, VX-Anh/aico-knowledge, VX-Anh/sieu-tien-tri]
 max_risk: L0

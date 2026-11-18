@@ -11,7 +11,7 @@ tools:
   - server: gitlab
     allow: [read_file]
     constraints:
-      repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien, VX-Anh/ai-trace, VX-Anh/aico-knowledge]
+      repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien, VX-Anh/ai-trace, VX-Anh/aico-knowledge, VX-Anh/sieu-tien-tri]
   # Tri thức đã duyệt của Phòng R&D (tìm, đọc thẻ); không có tool ghi.
   - server: knowledge
     allow: [search_knowledge, get_knowledge]

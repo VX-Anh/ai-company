@@ -10,6 +10,6 @@ tools:
   - server: gitlab
     allow: [branch_head, download_archive, create_branch, delete_branch_pair]
     constraints:                # MCP server kiểm tra lại: base/<id> chỉ tạo từ SHA khi chưa có
-      repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien, VX-Anh/ai-trace]   # ai/<id>; chỉ xoá cặp
+      repos: [VX-Anh/aico-office, VX-Anh/linh-hoa-vien, VX-Anh/ai-trace, VX-Anh/sieu-tien-tri]   # ai/<id>; chỉ xoá cặp
       branch_pattern: "ai/*,base/*"
 max_risk: L2
