@@ -39,6 +39,10 @@ prereview_gate:
         - {name: typecheck, run: npm run typecheck}
         - {name: build, run: npm run build}
         - {name: test, run: npm test}
+    VX-Anh/sieu-tien-tri:       # test chỉ là tsx (không cần mạng, không dựng Next); build Next làm lúc deploy
+      steps:
+        - {name: typecheck, run: npx tsc --noEmit}
+        - {name: test, run: npm test}
     # ai-trace, linh-hoa-vien: tạm chưa bật (máy build cục bộ ~6 GB RAM, chưa chạy thử đủ).
     # Lệnh dự kiến: ai-trace pnpm -r build / pnpm -r typecheck / pnpm test;
     # linh-hoa-vien npm run typecheck / npm run build / npm test.
